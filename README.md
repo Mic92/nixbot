@@ -21,6 +21,7 @@ frontend.
   - Login with GitHub to control builds
   - CI status notification in pull requests and on the default branch
 - All builds share the same nix store for speed
+- Tested with large flakes (50k flake outputs per evaluation)
 - The last attribute of a build is protected from garbage collection
 - Build matrix based on `.#checks` attributes
 - No arbitrary code runs outside of the Nix sandbox
