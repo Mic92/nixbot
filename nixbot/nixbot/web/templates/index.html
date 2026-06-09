@@ -82,11 +82,13 @@
                      title="{{ bar_title }}"></i>
                 {% endfor %}
               </div>
-              <div class="pipeline-metric">
+              <div class="pipeline-metric"
+                   title="median duration of the last 30 successful builds">
                 <b>{{ p.median_secs | duration_secs }}</b>
-                <span class="muted">speed</span>
+                <span class="muted">median duration</span>
               </div>
-              <div class="pipeline-metric">
+              <div class="pipeline-metric"
+                   title="succeeded share of the last 30 finished builds (cancelled excluded)">
                 <b>
                   {% if p.pass_rate is not none %}
                     {{ (100 * p.pass_rate) | round | int }}%
@@ -94,7 +96,7 @@
                     —
                   {% endif %}
                 </b>
-                <span class="muted">reliability</span>
+                <span class="muted">pass rate</span>
               </div>
             </a>
             {% if toggleable is none or p.id in toggleable %}{{ toggle_form(p, q, "disable") }}{% endif %}

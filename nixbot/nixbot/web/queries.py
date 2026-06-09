@@ -112,7 +112,7 @@ class WebQueries:
     ) -> list[dict[str, Any]]:
         """Homepage pipeline rows: each project with its latest build,
         the last ten builds (status + duration) for the bar chart, and
-        speed/reliability over the last thirty builds."""
+        median duration/pass rate over the last thirty builds."""
         rows = await self.pool.fetch(
             """
             SELECT p.*,
@@ -146,7 +146,7 @@ class WebQueries:
                            ORDER BY EXTRACT(EPOCH FROM (t.finished_at - t.started_at))
                        ) FILTER (WHERE t.status = 'succeeded') AS median_secs,
                        -- Cancelled builds say nothing about the code:
-                       -- they must not drag reliability toward zero.
+                       -- they must not drag the pass rate toward zero.
                        count(*) FILTER (WHERE t.status = 'succeeded')::float
                            / NULLIF(
                                count(*) FILTER (
