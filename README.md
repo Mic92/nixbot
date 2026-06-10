@@ -13,6 +13,9 @@ handles forge webhooks, nix-eval-jobs evaluation, builds through the local nix
 daemon (offloaded via remote builders), commit statuses, and its own web
 frontend.
 
+Chat with us on Matrix:
+[#nixbot:thalheim.io](https://matrix.to/#/#nixbot:thalheim.io)
+
 ## Features
 
 - Fast, Parallel evaluation using
