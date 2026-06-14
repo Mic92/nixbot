@@ -96,8 +96,8 @@ We have the following two roles:
 ##### GitHub Integration
 
 Nixbot uses GitHub App authentication to integrate with GitHub repositories.
-This enables automatic webhook setup, commit status updates, and secure
-authentication.
+This enables automatic webhook setup, check-run reporting (with a working Re-run
+button), and secure authentication.
 
 See the [GitHub documentation](./docs/GITHUB.md) for setup instructions.
 

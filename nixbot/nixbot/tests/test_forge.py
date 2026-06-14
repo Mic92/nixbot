@@ -39,9 +39,10 @@ from nixbot.reconcile import (
 from nixbot.repos import RepoStore
 from nixbot.status import (
     GiteaStatusPoster,
-    GitHubStatusPoster,
+    GitHubCheckRunPoster,
     StatusState,
 )
+from nixbot.tests.test_status import _MemoryCheckRunIds
 
 from .support import (
     FakeGitea,
@@ -110,7 +111,7 @@ def test_filter_repos(filters: RepoFilters, expected_indices: list[int]) -> None
 
 def github_transport(
     hook_url: str = "https://buildbot.example.com/webhooks/github",
-    events: tuple[str, ...] = ("push", "pull_request"),
+    events: tuple[str, ...] = ("push", "pull_request", "check_run", "check_suite"),
 ) -> httpx.MockTransport:
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -179,6 +180,7 @@ async def test_github_webhook_check_misconfigured(
     problems = await github_client.check_app_webhook("https://buildbot.example.com")
     assert any("webhook URL" in p for p in problems)
     assert any("pull_request" in p for p in problems)
+    assert any("check_run" in p for p in problems)
 
 
 @pytest.mark.skipif(shutil.which("openssl") is None, reason="openssl required")
@@ -820,14 +822,17 @@ async def test_reconcile_watermark_store(pool: asyncpg.Pool) -> None:
 
 
 @pytest.mark.skipif(shutil.which("openssl") is None, reason="openssl required")
-async def test_github_status_post(github_client: GitHubAppClient) -> None:
+async def test_github_check_run_post(github_client: GitHubAppClient) -> None:
+    """End-to-end through the real App client (JWT, installation
+    token, repo lookup); the upsert/PATCH details are covered in
+    test_status."""
     posted: list[dict] = []
     fallback = github_transport()
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/repos/acme/repo11/statuses/sha1":
+        if request.url.path == "/repos/acme/repo11/check-runs":
             posted.append(json.loads(request.content))
-            return httpx.Response(201, json={})
+            return httpx.Response(201, json={"id": 1})
         return fallback.handler(request)  # type: ignore[attr-defined,return-value]
 
     github_client.http = httpx.AsyncClient(
@@ -835,7 +840,7 @@ async def test_github_status_post(github_client: GitHubAppClient) -> None:
     )
 
     await github_client.discover_repos()
-    poster = GitHubStatusPoster(github_client)
+    poster = GitHubCheckRunPoster(github_client, _MemoryCheckRunIds())
     await poster.post(
         "acme",
         "repo11",
@@ -844,13 +849,18 @@ async def test_github_status_post(github_client: GitHubAppClient) -> None:
         StatusState.success,
         "evaluation succeeded",
         "https://ci.test/repos/acme/repo11/builds/1",
+        project_id=1,
+        build_id=1,
     )
     assert posted == [
         {
-            "state": "success",
-            "context": "nixbot/nix-eval",
-            "description": "evaluation succeeded",
-            "target_url": "https://ci.test/repos/acme/repo11/builds/1",
+            "name": "nixbot/nix-eval",
+            "head_sha": "sha1",
+            "status": "completed",
+            "conclusion": "success",
+            "external_id": "1",
+            "details_url": "https://ci.test/repos/acme/repo11/builds/1",
+            "output": {"title": "nixbot/nix-eval", "summary": "evaluation succeeded"},
         }
     ]
 

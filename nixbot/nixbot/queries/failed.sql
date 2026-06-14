@@ -30,3 +30,25 @@ WHERE to_timestamp(timestamp) < now() - make_interval(days => sqlc.arg(retention
 -- name: PruneOldFailedBuilds :exec
 DELETE FROM failed_builds
 WHERE to_timestamp(timestamp) < now() - make_interval(days => sqlc.arg(retention_days)::int);
+
+-- name: GetCheckRunId :one
+SELECT external_id FROM check_runs
+WHERE project_id = $1 AND sha = $2 AND name = $3;
+
+-- name: CheckRunAttr :one
+-- Unwrap ('', attr): :one returns NULL for both "no row" and a NULL
+-- attr, but the rerequested handler must distinguish a summary run
+-- (row with NULL attr -> full restart) from an unknown name (no row).
+SELECT '' AS found, attr FROM check_runs
+WHERE project_id = $1 AND sha = $2 AND name = $3;
+
+-- name: UpsertCheckRun :exec
+INSERT INTO check_runs (project_id, sha, name, attr, external_id, timestamp)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (project_id, sha, name)
+DO UPDATE SET attr = EXCLUDED.attr, external_id = EXCLUDED.external_id,
+              timestamp = EXCLUDED.timestamp;
+
+-- name: LatestBuildForSha :one
+SELECT id FROM builds WHERE project_id = $1 AND commit_sha = $2
+ORDER BY id DESC LIMIT 1;

@@ -1,4 +1,9 @@
-"""Commit status reporting.
+"""Commit status / check-run reporting.
+
+GitHub uses the Check Runs API (create + PATCH by stored id);
+Gitea/GitLab keep posting commit statuses. Check-run *names* and
+commit-status *contexts* share the required-checks namespace, so
+branch protection rules are unaffected.
 
 Combined per-phase contexts are `nixbot/nix-eval` (warning count
 appended to the description) and `nixbot/nix-build`; the prefix is
@@ -46,6 +51,9 @@ if TYPE_CHECKING:
     from .forge import GiteaClient, GitHubAppClient, GitlabClient
     from .scheduler import AttributeResult
 
+# GitHub caps output.text at 65535 chars.
+CHECK_RUN_TEXT_LIMIT = 60_000
+
 logger = logging.getLogger(__name__)
 
 # Cap on remembered (build id -> posted generation) entries; one entry
@@ -71,6 +79,11 @@ class StatusPostError(Exception):
     def __init__(self, message: str, retry_after: float | None = None) -> None:
         super().__init__(message)
         self.retry_after = retry_after
+
+
+class CheckPermissionError(ForgeError):
+    """The GitHub App lacks Checks: write; latched so we stop
+    hammering the API until the operator fixes the permission."""
 
 
 def _retry_after_seconds(response: httpx.Response) -> float | None:
@@ -110,12 +123,85 @@ class CommitStatusPoster(Protocol):
         state: StatusState,
         description: str,
         target_url: str,
+        *,
+        project_id: int = 0,
+        build_id: int = 0,
+        attr: str | None = None,
+        text: str | None = None,
     ) -> None: ...
 
 
-class GitHubStatusPoster:
-    def __init__(self, client: GitHubAppClient) -> None:
+class CheckRunIds(Protocol):
+    async def get(self, project_id: int, sha: str, name: str) -> int | None: ...
+
+    async def set(
+        self, project_id: int, sha: str, name: str, attr: str | None, external_id: int
+    ) -> None: ...
+
+
+class CheckRunStore:
+    """(project, sha, name) → GitHub check-run id; lets the poster
+    PATCH the existing run instead of stacking duplicates on a SHA."""
+
+    def __init__(self, pool: asyncpg.Pool) -> None:
+        self.pool = pool
+
+    async def get(self, project_id: int, sha: str, name: str) -> int | None:
+        return await q.get_check_run_id(
+            self.pool, project_id=project_id, sha=sha, name=name
+        )
+
+    async def set(
+        self, project_id: int, sha: str, name: str, attr: str | None, external_id: int
+    ) -> None:
+        await q.upsert_check_run(
+            self.pool,
+            project_id=project_id,
+            sha=sha,
+            name=name,
+            attr=attr,
+            external_id=external_id,
+            timestamp=datetime.now(tz=UTC).timestamp(),
+        )
+
+
+# StatusState → (status, conclusion). "error" becomes cancelled so
+# dashboards separate infra problems from CI verdicts.
+_CHECK_RUN_FIELDS: dict[StatusState, tuple[str, str | None]] = {
+    StatusState.pending: ("in_progress", None),
+    StatusState.success: ("completed", "success"),
+    StatusState.failure: ("completed", "failure"),
+    StatusState.error: ("completed", "cancelled"),
+}
+
+
+def _check_run_output(context: str, summary: str, text: str | None) -> dict[str, str]:
+    # The full context repeats the repo path; keep the title short.
+    output = {"title": context.split(" ", 1)[0], "summary": summary}
+    if text:
+        if len(text) > CHECK_RUN_TEXT_LIMIT:
+            text = text[:CHECK_RUN_TEXT_LIMIT] + "\n… (truncated)"
+        output["text"] = text
+    return output
+
+
+def _raise_for_check_run(response: httpx.Response, repo: str) -> None:
+    if response.status_code == httpx.codes.FORBIDDEN:
+        msg = (
+            f"GitHub check-run post for {repo} returned 403; grant the "
+            "GitHub App the 'Checks: read & write' permission"
+        )
+        raise CheckPermissionError(msg)
+    _raise_for_status(response, repo)
+
+
+class GitHubCheckRunPoster:
+    """Upserts GitHub check runs. external_id is set to our build id
+    so a check_run rerequested webhook hands it straight back."""
+
+    def __init__(self, client: GitHubAppClient, store: CheckRunIds) -> None:
         self.client = client
+        self.store = store
 
     async def post(  # noqa: PLR0913
         self,
@@ -126,23 +212,49 @@ class GitHubStatusPoster:
         state: StatusState,
         description: str,
         target_url: str,
+        *,
+        project_id: int = 0,
+        build_id: int = 0,
+        attr: str | None = None,
+        text: str | None = None,
     ) -> None:
         installation_id = await self.client.installation_for_repo(f"{owner}/{repo}")
         if installation_id is None:
             # installation_for_repo already logged the failed lookup.
             return
         token = await self.client.installation_token(installation_id)
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+        }
+        status, conclusion = _CHECK_RUN_FIELDS[state]
+        body: dict[str, object] = {
+            "name": context,
+            "status": status,
+            "external_id": str(build_id),
+            "details_url": target_url,
+            "output": _check_run_output(context, description, text),
+        }
+        if conclusion is not None:
+            body["conclusion"] = conclusion
+
+        base = f"{self.client.api_url}/repos/{owner}/{repo}/check-runs"
+        run_id = await self.store.get(project_id, sha, context)
+        if run_id is not None:
+            response = await self.client.http.patch(
+                f"{base}/{run_id}", headers=headers, json=body
+            )
+            # The DB row can outlive the GitHub run; recreate instead
+            # of retrying the terminal summary forever.
+            if response.status_code not in (httpx.codes.NOT_FOUND, httpx.codes.GONE):
+                _raise_for_check_run(response, f"{owner}/{repo}")
+                await self.store.set(project_id, sha, context, attr, run_id)
+                return
         response = await self.client.http.post(
-            f"{self.client.api_url}/repos/{owner}/{repo}/statuses/{sha}",
-            headers={"Authorization": f"Bearer {token}"},
-            json={
-                "state": state.value,
-                "context": context,
-                "description": description[:140],
-                "target_url": target_url,
-            },
+            base, headers=headers, json=body | {"head_sha": sha}
         )
-        _raise_for_status(response, f"{owner}/{repo}")
+        _raise_for_check_run(response, f"{owner}/{repo}")
+        await self.store.set(project_id, sha, context, attr, int(response.json()["id"]))
 
 
 class GiteaStatusPoster:
@@ -158,6 +270,7 @@ class GiteaStatusPoster:
         state: StatusState,
         description: str,
         target_url: str,
+        **_: object,
     ) -> None:
         response = await self.client.http.post(
             f"{self.client.instance_url}/api/v1/repos/{owner}/{repo}/statuses/{sha}",
@@ -193,6 +306,7 @@ class GitlabStatusPoster:
         state: StatusState,
         description: str,
         target_url: str,
+        **_: object,
     ) -> None:
         response = await self.client.http.post(
             f"{self.client.project_api_url(owner, repo)}/statuses/{sha}",
@@ -281,6 +395,10 @@ class ForgeStatusReporter:
         self.base_url = base_url.rstrip("/")
         self.failed_build_report_limit = failed_build_report_limit
         self.context_prefix = context_prefix
+        # Forges whose poster is latched off after a permission error;
+        # without the latch a missing Checks grant would fill the
+        # report queue and hammer the API on every build.
+        self._disabled: set[str] = set()
         # build id -> highest generation posted (drop stale posts).
         # Bounded LRU: stale-post races only matter around a build's
         # final re-aggregation, so old entries are safe to evict.
@@ -297,10 +415,12 @@ class ForgeStatusReporter:
         state: StatusState,
         description: str,
         *,
+        attr: str | None = None,
+        text: str | None = None,
         propagate: bool = False,
     ) -> None:
         poster = self.posters.get(event.repo.forge)
-        if poster is None:
+        if poster is None or event.repo.forge in self._disabled:
             return
         try:
             await poster.post(
@@ -313,7 +433,17 @@ class ForgeStatusReporter:
                 # colors (kept for the web UI); forges show them verbatim.
                 strip_ansi(description),
                 self.build_url(event, build),
+                project_id=event.repo.id,
+                build_id=build.id,
+                attr=attr,
+                text=text,
             )
+        except CheckPermissionError:
+            logger.exception(
+                "disabling status posting until restart",
+                extra={"forge": event.repo.forge},
+            )
+            self._disabled.add(event.repo.forge)
         except (httpx.HTTPError, ForgeError, StatusPostError):
             # Transient failures must not propagate into the
             # orchestrator task and leave builds stuck — except the
@@ -348,6 +478,7 @@ class ForgeStatusReporter:
             f"{self.context_prefix}/nix-eval",
             StatusState.success if success else StatusState.failure,
             eval_description(success, warnings),
+            text=_fence("\n".join(warnings)) if warnings else None,
         )
         if success:
             await self._post(
@@ -393,13 +524,14 @@ class ForgeStatusReporter:
             self._posted_generations.popitem(last=False)
 
         counts = await self._post_attribute_statuses(event, build, results, attr_prefix)
+        table = _failure_table(results, attr_statuses)
         if attr_statuses is not None:
             # Reruns pass only the re-run subset as `results`: the
             # summary description must still cover the whole build.
             counts = {"failed": 0, "succeeded": 0, "cancelled": 0}
             for attr_status in attr_statuses.values():
                 counts[_count_key(attr_status)] += 1
-        await self._post_summary(event, build, status, counts)
+        await self._post_summary(event, build, status, counts, table)
 
     async def _post_attribute_statuses(
         self,
@@ -435,7 +567,13 @@ class ForgeStatusReporter:
                 await self.failed_statuses.mark_failed(revision, context)
                 description = result.error or result.status.value
                 await self._post(
-                    event, build, context, StatusState.failure, description
+                    event,
+                    build,
+                    context,
+                    StatusState.failure,
+                    description,
+                    attr=result.attr,
+                    text=_fence(result.error) if result.error else None,
                 )
             else:
                 counts["succeeded"] += 1
@@ -443,7 +581,12 @@ class ForgeStatusReporter:
                     # Success-flip for a previously failed status.
                     await self.failed_statuses.clear(revision, context)
                     await self._post(
-                        event, build, context, StatusState.success, "succeeded"
+                        event,
+                        build,
+                        context,
+                        StatusState.success,
+                        "succeeded",
+                        attr=result.attr,
                     )
         return counts
 
@@ -453,6 +596,7 @@ class ForgeStatusReporter:
         build: BuildRecord,
         status: str,
         counts: dict[str, int],
+        table: str | None,
     ) -> None:
         if status == "succeeded":
             state = StatusState.success
@@ -481,5 +625,47 @@ class ForgeStatusReporter:
             f"{self.context_prefix}/nix-build",
             state,
             description or "failed",
+            text=table,
             propagate=True,
         )
+
+
+def _fence(text: str) -> str:
+    return f"```\n{strip_ansi(text)}\n```"
+
+
+def _failure_table(
+    results: list[AttributeResult], attr_statuses: dict[str, str] | None
+) -> str | None:
+    """Markdown failure table for the nix-build check run; one place
+    to see every failure even when per-attr runs hit the report cap.
+    Reruns pass attr_statuses (full build) plus a results subset; the
+    table must match the summary count, so attr_statuses wins (no
+    error column available there)."""
+    errors = {r.attr: r.error for r in results}
+    items = (
+        sorted(attr_statuses.items())
+        if attr_statuses is not None
+        else ((r.attr, r.status.value) for r in results)
+    )
+    rows = [
+        (
+            attr,
+            status,
+            strip_ansi(errors.get(attr) or "")
+            .split("\n", 1)[0][:200]
+            .replace("|", "\\|"),
+        )
+        for attr, status in items
+        if status in FAILED_STATUS_STATES
+    ]
+    if not rows:
+        return None
+    lines = ["| attr | status | error |", "| --- | --- | --- |"]
+    for attr, status, err in rows:
+        line = f"| `{attr}` | {status} | {err} |"
+        if sum(map(len, lines)) + len(line) > CHECK_RUN_TEXT_LIMIT:
+            lines.append(f"| … | | {len(rows) - (len(lines) - 2)} more |")
+            break
+        lines.append(line)
+    return "\n".join(lines)

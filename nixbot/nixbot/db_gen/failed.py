@@ -5,13 +5,18 @@
 from __future__ import annotations
 
 __all__: collections.abc.Sequence[str] = (
+    "CheckRunAttrRow",
     "FailedBuildByDrvRow",
     "QueryResults",
+    "check_run_attr",
     "clear_failed_status",
     "failed_build_by_drv",
     "failed_status_names",
+    "get_check_run_id",
+    "latest_build_for_sha",
     "prune_old_failed_builds",
     "prune_old_failed_statuses",
+    "upsert_check_run",
     "upsert_failed_build",
     "upsert_failed_status",
 )
@@ -34,11 +39,22 @@ from nixbot.db_gen import models
 
 
 @dataclasses.dataclass()
+class CheckRunAttrRow:
+    found: str
+    attr: str | None
+
+
+@dataclasses.dataclass()
 class FailedBuildByDrvRow:
     derivation: str
     timestamp: float
     url: str
 
+
+CHECK_RUN_ATTR: typing.Final[str] = """-- name: CheckRunAttr :one
+SELECT '' AS found, attr FROM check_runs
+WHERE project_id = $1 AND sha = $2 AND name = $3
+"""
 
 CLEAR_FAILED_STATUS: typing.Final[str] = """-- name: ClearFailedStatus :exec
 DELETE FROM failed_statuses WHERE revision = $1 AND status_name = $2
@@ -54,6 +70,16 @@ FAILED_STATUS_NAMES: typing.Final[str] = """-- name: FailedStatusNames :many
 SELECT status_name FROM failed_statuses WHERE revision = $1
 """
 
+GET_CHECK_RUN_ID: typing.Final[str] = """-- name: GetCheckRunId :one
+SELECT external_id FROM check_runs
+WHERE project_id = $1 AND sha = $2 AND name = $3
+"""
+
+LATEST_BUILD_FOR_SHA: typing.Final[str] = """-- name: LatestBuildForSha :one
+SELECT id FROM builds WHERE project_id = $1 AND commit_sha = $2
+ORDER BY id DESC LIMIT 1
+"""
+
 PRUNE_OLD_FAILED_BUILDS: typing.Final[str] = """-- name: PruneOldFailedBuilds :exec
 DELETE FROM failed_builds
 WHERE to_timestamp(timestamp) < now() - make_interval(days => $1::int)
@@ -62,6 +88,14 @@ WHERE to_timestamp(timestamp) < now() - make_interval(days => $1::int)
 PRUNE_OLD_FAILED_STATUSES: typing.Final[str] = """-- name: PruneOldFailedStatuses :exec
 DELETE FROM failed_statuses
 WHERE to_timestamp(timestamp) < now() - make_interval(days => $1::int)
+"""
+
+UPSERT_CHECK_RUN: typing.Final[str] = """-- name: UpsertCheckRun :exec
+INSERT INTO check_runs (project_id, sha, name, attr, external_id, timestamp)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (project_id, sha, name)
+DO UPDATE SET attr = EXCLUDED.attr, external_id = EXCLUDED.external_id,
+              timestamp = EXCLUDED.timestamp
 """
 
 UPSERT_FAILED_BUILD: typing.Final[str] = """-- name: UpsertFailedBuild :exec
@@ -123,6 +157,13 @@ class QueryResults(typing.Generic[T]):
         return self._decode_hook(record)
 
 
+async def check_run_attr(conn: ConnectionLike, *, project_id: int, sha: str, name: str) -> CheckRunAttrRow | None:
+    row = await conn.fetchrow(CHECK_RUN_ATTR, project_id, sha, name)
+    if row is None:
+        return None
+    return CheckRunAttrRow(found=row[0], attr=row[1])
+
+
 async def clear_failed_status(conn: ConnectionLike, *, revision: str, status_name: str) -> None:
     await conn.execute(CLEAR_FAILED_STATUS, revision, status_name)
 
@@ -138,12 +179,30 @@ def failed_status_names(conn: ConnectionLike, *, revision: str) -> QueryResults[
     return QueryResults[str](conn, FAILED_STATUS_NAMES, operator.itemgetter(0), revision)
 
 
+async def get_check_run_id(conn: ConnectionLike, *, project_id: int, sha: str, name: str) -> int | None:
+    row = await conn.fetchrow(GET_CHECK_RUN_ID, project_id, sha, name)
+    if row is None:
+        return None
+    return row[0]
+
+
+async def latest_build_for_sha(conn: ConnectionLike, *, project_id: int, commit_sha: str) -> int | None:
+    row = await conn.fetchrow(LATEST_BUILD_FOR_SHA, project_id, commit_sha)
+    if row is None:
+        return None
+    return row[0]
+
+
 async def prune_old_failed_builds(conn: ConnectionLike, *, retention_days: int) -> None:
     await conn.execute(PRUNE_OLD_FAILED_BUILDS, retention_days)
 
 
 async def prune_old_failed_statuses(conn: ConnectionLike, *, retention_days: int) -> None:
     await conn.execute(PRUNE_OLD_FAILED_STATUSES, retention_days)
+
+
+async def upsert_check_run(conn: ConnectionLike, *, project_id: int, sha: str, name: str, attr: str | None, external_id: int, timestamp: float) -> None:
+    await conn.execute(UPSERT_CHECK_RUN, project_id, sha, name, attr, external_id, timestamp)
 
 
 async def upsert_failed_build(conn: ConnectionLike, *, project_id: int, derivation: str, timestamp: float, url: str) -> None:

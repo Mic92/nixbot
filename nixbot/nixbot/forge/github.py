@@ -190,7 +190,7 @@ class GitHubAppClient:
         problems.extend(
             f"GitHub App is not subscribed to the {required!r} event; "
             "enable it under the app's 'Permissions & events' settings"
-            for required in ("push", "pull_request")
+            for required in ("push", "pull_request", "check_run", "check_suite")
             if required not in events
         )
         return problems

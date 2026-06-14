@@ -18,6 +18,7 @@ from . import db, discovery, restarts, scheduled_runs
 from .config import ScheduleWhen
 from .db import BuildStatus
 from .db_gen import builds as builds_q
+from .db_gen import failed as failed_q
 from .db_gen import maintenance as q
 from .events import ChangeEvent, StatusReporter
 from .gitrepo import (
@@ -36,6 +37,7 @@ from .repos import repo_info
 from .scheduled import DueEffect
 from .webhooks import (
     ChangeRequest,
+    CheckRerequested,
     PrClosed,
     WebhookEvent,
     should_build_branch,
@@ -213,7 +215,39 @@ class CIService:
                 pr_number=event.pr_number,
             )
             return
+        if isinstance(event, CheckRerequested):
+            await self._submit_rerequest(event)
+            return
         await self._submit_change(event)
+
+    async def _submit_rerequest(self, event: CheckRerequested) -> None:
+        """GitHub "Re-run" button → existing restart paths. Per-attr
+        runs restart that attr only; summary runs and check_suite
+        restart the whole build."""
+        project = await self.repo_store.by_forge_id(event.forge, event.forge_repo_id)
+        if project is None:
+            return
+        build_id = event.build_id
+        if build_id is not None:
+            build = await builds_q.get_build(self.pool, id_=build_id)
+            # external_id is attacker-influenced (set by whichever app
+            # created the run); never restart another project's build.
+            if build is None or build.project_id != project.id:
+                build_id = None
+        if build_id is None:
+            build_id = await failed_q.latest_build_for_sha(
+                self.pool, project_id=project.id, commit_sha=event.head_sha
+            )
+        if build_id is None:
+            return
+        if event.name is not None:
+            row = await failed_q.check_run_attr(
+                self.pool, project_id=project.id, sha=event.head_sha, name=event.name
+            )
+            if row is not None and row.attr is not None:
+                await self.restart_attribute(build_id, row.attr)
+                return
+        await self.restart_build(build_id)
 
     async def _submit_change(self, change: ChangeRequest) -> None:
         """Enqueue only; the dispatcher runs _process_change. The key

@@ -36,7 +36,7 @@ in
           import re
           from http.server import BaseHTTPRequestHandler, HTTPServer
 
-          STATUS_LOG = "/var/lib/fake-github/statuses.jsonl"
+          CHECK_RUNS_LOG = "/var/lib/fake-github/check_runs.jsonl"
 
           REPO = {
               "id": 1,
@@ -70,18 +70,33 @@ in
                   else:
                       self._json({"message": "not found"}, 404)
 
+              def do_PATCH(self):
+                  length = int(self.headers.get("Content-Length") or 0)
+                  body = self.rfile.read(length)
+                  path = self.path.split("?")[0]
+                  if re.fullmatch(r"/repos/acme/test-flake/check-runs/[0-9]+", path):
+                      entry = json.loads(body)
+                      with open(CHECK_RUNS_LOG, "a") as f:
+                          f.write(json.dumps(entry) + "\n")
+                      self._json({"id": int(path.rsplit("/", 1)[1])}, 200)
+                  else:
+                      self._json({"message": "not found"}, 404)
+
               def do_POST(self):
                   length = int(self.headers.get("Content-Length") or 0)
                   body = self.rfile.read(length)
                   path = self.path.split("?")[0]
                   if re.fullmatch(r"/app/installations/1/access_tokens", path):
                       self._json({"token": "fake-token"}, 201)
-                  elif re.fullmatch(r"/repos/acme/test-flake/statuses/[0-9a-f]+", path):
+                  elif path == "/repos/acme/test-flake/check-runs":
                       entry = json.loads(body)
-                      entry["sha"] = path.rsplit("/", 1)[1]
-                      with open(STATUS_LOG, "a") as f:
+                      # The poster stores this id to PATCH the run on
+                      # completion; key it by name so each check keeps a
+                      # distinct id like the real API.
+                      check_run_id = abs(hash(entry["name"])) % 1_000_000
+                      with open(CHECK_RUNS_LOG, "a") as f:
                           f.write(json.dumps(entry) + "\n")
-                      self._json({}, 201)
+                      self._json({"id": check_run_id}, 201)
                   else:
                       self._json({"message": "not found"}, 404)
 
@@ -311,21 +326,21 @@ in
             f"-d {shlex.quote(body.decode())}"
         )
 
-        def github_statuses_posted(_ignore):
-            out = github.execute("cat /var/lib/fake-github/statuses.jsonl")[1]
-            statuses = [json.loads(line) for line in out.splitlines() if line]
-            print(statuses)
+        def github_checks_posted(_ignore):
+            out = github.execute("cat /var/lib/fake-github/check_runs.jsonl")[1]
+            check_runs = [json.loads(line) for line in out.splitlines() if line]
+            print(check_runs)
             done = {
-                s["context"]: s["state"]
-                for s in statuses
-                if s["state"] in ("success", "failure", "error")
+                cr["name"]: cr.get("conclusion")
+                for cr in check_runs
+                if cr.get("status") == "completed"
             }
             return (
                 done.get("nixbot/nix-eval") == "success"
                 and done.get("nixbot/nix-build") == "success"
             )
 
-        retry(github_statuses_posted, timeout_seconds=300)
+        retry(github_checks_posted, timeout_seconds=300)
 
     with subtest("gitea: nixbot becomes healthy"):
         gitea.wait_for_unit("nixbot.service")

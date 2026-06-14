@@ -132,7 +132,21 @@ class PrClosed:
     pr_number: int
 
 
-WebhookEvent = ChangeRequest | PrClosed
+@dataclass(frozen=True)
+class CheckRerequested:
+    """GitHub "Re-run" button. build_id round-trips via the check
+    run's external_id (set by GitHubCheckRunPoster); name resolves the
+    per-attr restart. check_suite carries neither — head_sha is the
+    fallback."""
+
+    forge: str
+    forge_repo_id: str
+    head_sha: str
+    build_id: int | None = None
+    name: str | None = None
+
+
+WebhookEvent = ChangeRequest | PrClosed | CheckRerequested
 
 
 def _pr_action_builds(action: str, payload: dict[str, Any], sync_action: str) -> bool:
@@ -181,7 +195,9 @@ def _parse_pr_event(
     )
 
 
-def parse_github_event(event_type: str, payload: dict[str, Any]) -> WebhookEvent | None:
+def parse_github_event(  # noqa: PLR0911
+    event_type: str, payload: dict[str, Any]
+) -> WebhookEvent | None:
     repo = payload.get("repository") or {}
     repo_id = str(repo.get("id", ""))
     if not repo_id:
@@ -203,7 +219,34 @@ def parse_github_event(event_type: str, payload: dict[str, Any]) -> WebhookEvent
         )
     if event_type == "pull_request":
         return _parse_pr_event("github", repo_id, payload, "synchronize")
+    if event_type in ("check_run", "check_suite"):
+        return _parse_github_check_event(event_type, repo_id, payload)
     return None
+
+
+def _parse_github_check_event(
+    event_type: str, repo_id: str, payload: dict[str, Any]
+) -> CheckRerequested | None:
+    # "requested" fires on every push (push hook already covers that)
+    # and "created"/"completed" are echoes of our own posts; only the
+    # explicit Re-run button matters.
+    if payload.get("action") != "rerequested":
+        return None
+    obj = payload.get(event_type) or {}
+    if event_type == "check_suite":
+        return CheckRerequested(
+            forge="github", forge_repo_id=repo_id, head_sha=obj.get("head_sha", "")
+        )
+    external = obj.get("external_id") or ""
+    return CheckRerequested(
+        forge="github",
+        forge_repo_id=repo_id,
+        head_sha=obj.get("head_sha", ""),
+        # Runs from other apps carry no (or a non-integer) external id;
+        # fall back to the head_sha lookup.
+        build_id=int(external) if external.isdigit() else None,
+        name=obj.get("name"),
+    )
 
 
 def parse_gitea_event(event_type: str, payload: dict[str, Any]) -> WebhookEvent | None:

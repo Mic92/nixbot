@@ -18,7 +18,7 @@ from nixbot.failed_builds import PostgresFailedBuildCache
 from nixbot.migrations import apply_migrations, load_migrations
 from nixbot.models import CacheStatus
 from nixbot.scheduler import AttributeResult, AttributeStatus
-from nixbot.status import FailedStatusStore
+from nixbot.status import CheckRunStore, FailedStatusStore
 
 from .support import attribute_statuses, db_pool, insert_build, insert_project, mk_job
 
@@ -141,6 +141,17 @@ async def test_schema_constraints(postgres_dsn: str) -> None:
         assert await conn.fetchval("SELECT count(*) FROM logs") == 0
     finally:
         await conn.close()
+
+
+async def test_check_run_store_round_trip(pool: asyncpg.Pool) -> None:
+    project_id = await insert_project(pool, forge_repo_id="check-run-store")
+    store = CheckRunStore(pool)
+    assert await store.get(project_id, "sha", "ctx") is None
+    await store.set(project_id, "sha", "ctx", "flaky", 555)
+    assert await store.get(project_id, "sha", "ctx") == 555
+    # Upsert overwrites (later build on the same sha takes over).
+    await store.set(project_id, "sha", "ctx", None, 777)
+    assert await store.get(project_id, "sha", "ctx") == 777
 
 
 async def test_failed_status_store_component(pool: asyncpg.Pool) -> None:

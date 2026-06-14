@@ -24,7 +24,8 @@ from nixbot.events import NullStatusReporter
 from nixbot.forge import DiscoveredRepo
 from nixbot.scheduled import DueEffect, ScheduleWhen
 from nixbot.scheduled_runs import scheduled_worktree_id
-from nixbot.webhooks import ChangeRequest, PrClosed
+from nixbot.status import CheckRunStore
+from nixbot.webhooks import ChangeRequest, CheckRerequested, PrClosed
 from nixbot.work_queue import WorkQueue
 
 from .support import FakeGitlab, git, insert_build, insert_project, make_config
@@ -524,6 +525,46 @@ async def test_cancel_not_running_posts_forge_status(service: CIService) -> None
     # Cancelling again is a no-op: no duplicate forge status.
     await service.cancel_build(build_id)
     assert len(reporter.finished) == 1
+
+
+async def test_check_rerequested_dispatch(service: CIService) -> None:
+    """GitHub Re-run button: per-attr name -> attribute restart,
+    summary / suite -> full restart, foreign external_id falls back
+    to the head_sha lookup."""
+    pool = service.pool
+    project_id = await seed_project(pool, "http://example/repo")
+    forge_repo_id = await pool.fetchval(
+        "SELECT forge_repo_id FROM projects WHERE id = $1", project_id
+    )
+    build_id = await insert_build(pool, project_id, commit_sha="deadbeef")
+    store = CheckRunStore(pool)
+    await store.set(project_id, "deadbeef", "nixbot/nix-build", None, 1)
+    await store.set(project_id, "deadbeef", "nixbot/nix-build a", "flaky", 2)
+
+    enqueued: list[tuple[str, dict]] = []
+
+    async def fake_enqueue(kind: str, key: str, payload: dict) -> None:
+        enqueued.append((kind, payload))
+
+    service.enqueue_work = fake_enqueue  # type: ignore[method-assign,assignment]
+
+    base = {"forge": "github", "forge_repo_id": forge_repo_id, "head_sha": "deadbeef"}
+    await service.submit(
+        CheckRerequested(**base, build_id=build_id, name="nixbot/nix-build a")
+    )
+    await service.submit(
+        CheckRerequested(**base, build_id=build_id, name="nixbot/nix-build")
+    )
+    # check_suite: no build_id, no name; resolved via LatestBuildForSha.
+    await service.submit(CheckRerequested(**base))
+    # external_id from another project's app must not be honoured.
+    await service.submit(CheckRerequested(**base, build_id=99999999))
+    assert enqueued == [
+        ("restart", {"build_id": build_id, "attr": "flaky"}),
+        ("restart", {"build_id": build_id}),
+        ("restart", {"build_id": build_id}),
+        ("restart", {"build_id": build_id}),
+    ]
 
 
 async def test_cancel_not_running_settles_attribute_rows(service: CIService) -> None:

@@ -21,6 +21,7 @@ from nixbot.config import BranchConfig, BranchConfigDict
 from nixbot.gitrepo import RepoManager
 from nixbot.webhooks import (
     ChangeRequest,
+    CheckRerequested,
     DeliveryDeduper,
     PrClosed,
     WebhookEvent,
@@ -176,6 +177,58 @@ def test_parse_github_pr() -> None:
 
     payload["action"] = "labeled"
     assert parse_github_event("pull_request", payload) is None
+
+
+def test_parse_github_check_rerequested() -> None:
+    run = {"head_sha": "abc", "name": "nixbot/nix-build", "external_id": "42"}
+    event = parse_github_event(
+        "check_run",
+        {"action": "rerequested", "repository": {"id": 7}, "check_run": run},
+    )
+    assert event == CheckRerequested(
+        forge="github",
+        forge_repo_id="7",
+        head_sha="abc",
+        build_id=42,
+        name="nixbot/nix-build",
+    )
+    # Our own created/completed echoes are ignored.
+    assert (
+        parse_github_event(
+            "check_run",
+            {"action": "completed", "repository": {"id": 7}, "check_run": run},
+        )
+        is None
+    )
+    # Runs from other apps carry no integer external_id.
+    run2 = {"head_sha": "abc", "name": "other/ci", "external_id": ""}
+    event = parse_github_event(
+        "check_run",
+        {"action": "rerequested", "repository": {"id": 7}, "check_run": run2},
+    )
+    assert isinstance(event, CheckRerequested)
+    assert event.build_id is None
+
+
+def test_parse_github_check_suite_rerequested() -> None:
+    suite = {"head_sha": "abc"}
+    event = parse_github_event(
+        "check_suite",
+        {"action": "rerequested", "repository": {"id": 7}, "check_suite": suite},
+    )
+    assert event == CheckRerequested(
+        forge="github",
+        forge_repo_id="7",
+        head_sha="abc",
+    )
+    # "requested" fires on every push and would double-trigger.
+    assert (
+        parse_github_event(
+            "check_suite",
+            {"action": "requested", "repository": {"id": 7}, "check_suite": suite},
+        )
+        is None
+    )
 
 
 def test_parse_github_pr_retarget() -> None:

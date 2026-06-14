@@ -44,11 +44,15 @@ OAuth callback URLs change: update your GitHub App / Gitea application to
 `https://<domain>/auth/<provider>/callback` (buildbot used `/auth/login`), e.g.
 `https://buildbot.example.com/auth/github/callback`.
 
-**Commit statuses.** Context names default to the `nixbot/` prefix
-(`nixbot/nix-eval`, `nixbot/nix-build ...`). Set
+**Commit statuses / check runs.** GitHub now receives Check Runs instead of
+commit statuses; Gitea/GitLab keep commit statuses. Names default to the
+`nixbot/` prefix (`nixbot/nix-eval`, `nixbot/nix-build ...`). Set
 `services.nixbot.statusContextPrefix = "buildbot"` to keep the buildbot-era
-names so existing branch protection rules keep working; otherwise update the
-required status checks on every repository. Statuses link to the new web UI.
+names so existing branch protection rules keep working (GitHub matches check-run
+names and commit-status contexts in the same required-checks namespace);
+otherwise update the required status checks on every repository. Grant the
+GitHub App the **Checks: read & write** permission and subscribe it to the
+**Check run** / **Check suite** events.
 
 **Webhooks.** The old GitHub endpoint (`/change_hook/github`) still works as an
 alias. `/change_hook/gitea` is gone: legacy Gitea hooks carry old buildbot
@@ -57,12 +61,12 @@ the service re-registers Gitea hooks against `/webhooks/gitea` automatically.
 However, per-repository GitHub webhooks are no longer created: events arrive
 through the App-level webhook. Enable the webhook on your GitHub App (Active,
 URL `https://<domain>/webhooks/github`, secret matching `webhookSecretFile`,
-events `push` and `pull_request`); see [docs/GITHUB.md](./docs/GITHUB.md).
-Subscribing to the `pull_request` event requires the "Pull requests: Read-only"
-repository permission. Adding a permission must be accepted on every
-installation of the app (your user account and each organization) under Settings
-→ GitHub Apps → Configure. The service logs a warning at startup if the app is
-misconfigured.
+events `push`, `pull_request`, `check_run`, `check_suite`); see
+[docs/GITHUB.md](./docs/GITHUB.md). Subscribing to the `pull_request` event
+requires the "Pull requests: Read-only" repository permission. Adding a
+permission must be accepted on every installation of the app (your user account
+and each organization) under Settings → GitHub Apps → Configure. The service
+logs a warning at startup if the app is misconfigured.
 
 Gitea webhooks now register at `https://<domain>/webhooks/gitea` with an
 auto-generated per-repository secret stored in the database —

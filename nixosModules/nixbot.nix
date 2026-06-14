@@ -501,11 +501,11 @@ in
       default = "nixbot";
       example = "buildbot";
       description = ''
-        Prefix of commit status contexts ("<prefix>/nix-eval",
-        "<prefix>/nix-build"). Set to "buildbot" when migrating from
-        buildbot-nix to keep existing branch protection rules working;
-        changing the prefix requires updating required status checks on
-        every repository.
+        Prefix of check-run names / commit-status contexts
+        ("<prefix>/nix-eval", "<prefix>/nix-build"). Set to "buildbot"
+        when migrating from buildbot-nix to keep existing branch
+        protection rules working; changing the prefix requires updating
+        required status checks on every repository.
       '';
     };
 
@@ -513,9 +513,9 @@ in
       type = lib.types.ints.unsigned;
       default = 47;
       description = ''
-        Maximum number of failed builds reported individually per evaluation
-        (3 of the typical 50 commit-status slots stay reserved for the
-        eval/build/effects summary statuses).
+        Maximum number of failed builds reported as individual check
+        runs / commit statuses per evaluation (3 of the typical 50
+        slots stay reserved for the eval/build/effects summaries).
       '';
     };
 

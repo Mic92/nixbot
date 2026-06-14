@@ -126,6 +126,10 @@ WITH del_builds AS (
     DELETE FROM failed_builds
     WHERE to_timestamp(timestamp)
         < now() - make_interval(days => $1::int)
+), pruned_check_runs AS (
+    DELETE FROM check_runs
+    WHERE to_timestamp(timestamp)
+        < now() - make_interval(days => $1::int)
 )
 SELECT 'build' AS kind, del_builds.id FROM del_builds
 UNION ALL
