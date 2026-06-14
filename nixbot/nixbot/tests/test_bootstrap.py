@@ -7,6 +7,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import shutil
+import tempfile
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -19,7 +22,6 @@ from .support import make_config
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
-    from pathlib import Path
 
     import pytest
 
@@ -132,7 +134,10 @@ async def test_lifespan_runs_once_with_two_listeners(tmp_path: Path) -> None:
             stops.append("x")
 
     app = FastAPI(lifespan=lifespan)
-    sock = tmp_path / "web.sock"
+    # AF_UNIX paths cap at ~107 bytes; xdist's nested tmp_path easily
+    # exceeds that, so bind under a short tempdir.
+    sock_dir = Path(tempfile.mkdtemp(prefix="nb-"))
+    sock = sock_dir / "web.sock"
     config = make_config(
         "postgresql://x", tmp_path, http_unix_socket=sock, http_listen=True
     )
@@ -145,5 +150,6 @@ async def test_lifespan_runs_once_with_two_listeners(tmp_path: Path) -> None:
     task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await task
+    shutil.rmtree(sock_dir, ignore_errors=True)
     assert starts == ["x"]
     assert stops == ["x"]
