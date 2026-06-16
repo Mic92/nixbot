@@ -422,6 +422,7 @@ LEFT JOIN LATERAL (
     FROM (
         SELECT number, status, started_at, finished_at FROM builds b
         WHERE b.project_id = p.id
+          AND b.pr_number IS NULL AND b.branch = p.default_branch
         ORDER BY number DESC LIMIT 10
     ) t
 ) h ON true
@@ -441,6 +442,7 @@ LEFT JOIN LATERAL (
     FROM (
         SELECT status, started_at, finished_at FROM builds b
         WHERE b.project_id = p.id
+          AND b.pr_number IS NULL AND b.branch = p.default_branch
           AND b.status IN ('succeeded', 'failed', 'cancelled')
         ORDER BY b.number DESC LIMIT 30
     ) t

@@ -267,6 +267,55 @@ def test_attribute_history(client: WebHarness) -> None:
         assert f"/builds/{number}" in response.text
 
 
+def test_overview_pass_rate_ignores_pr_branches(client: WebHarness) -> None:
+    """Failing PR branches must not drag down the homepage pass rate or
+    history sparkline: only the default branch counts."""
+
+    async def setup() -> int:
+        pool = client.ctx.queries.pool
+        project_id = await insert_project(
+            pool, name="mailserver", forge_repo_id="web-pr"
+        )
+        await insert_build(
+            pool,
+            project_id,
+            number=1,
+            branch="main",
+            status="succeeded",
+            started=True,
+        )
+        # Many failing PR branches that cannot merge.
+        for n in range(2, 6):
+            await insert_build(
+                pool,
+                project_id,
+                number=n,
+                branch=f"feature-{n}",
+                status="failed",
+                pr_number=n,
+                started=True,
+            )
+        return project_id
+
+    project_id = client.run(setup())
+    try:
+        rows = client.run(client.ctx.queries.repo_overview(project_ids=[project_id]))
+        assert len(rows) == 1
+        row = rows[0]
+        # Only the succeeded main build counts: pass rate is 1.0.
+        assert row["pass_rate"] == 1.0
+        # Sparkline history excludes PR builds.
+        assert [h["number"] for h in row["history"]] == [1]
+    finally:
+        # Shared module DB: drop the project so global build counts in
+        # the activity-page tests stay correct.
+        client.run(
+            client.ctx.queries.pool.execute(
+                "DELETE FROM projects WHERE id = $1", project_id
+            )
+        )
+
+
 def test_project_filter_escapes_like_wildcards(client: WebHarness) -> None:
     # `%` and `_` must match literally, not as ILIKE wildcards.
     assert "acme/widget" in client.get("/?q=widg").text
