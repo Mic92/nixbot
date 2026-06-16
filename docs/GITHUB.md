@@ -31,9 +31,15 @@ secure authentication.
      - Members: Read-only (to verify organization membership for access control)
    - **Subscribe to events**: Push, Pull request, Check run, Check suite
 
-   Note: when adding permissions to an existing app, every installation (your
-   user account and each organization) must accept the new permissions under
-   Settings → GitHub Apps → Configure before events are delivered.
+   Note: event subscriptions (**Subscribe to events**) are app-level settings
+   edited on the app's **Permissions & events** page; they take effect on save
+   and are not subject to per-installation acceptance.
+
+   Permission changes are different: when adding permissions to an existing app,
+   every installation (your user account and each organization) must accept the
+   new permissions under Settings → GitHub Apps → Configure before they take
+   effect. Accepting an installation does not enable event subscriptions — those
+   must be ticked separately on the app's Permissions & events page.
 
 4. After creating the app:
    - Note the **App ID**
