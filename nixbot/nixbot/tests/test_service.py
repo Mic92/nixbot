@@ -20,7 +20,7 @@ from nixbot.config import (
     PullBasedRepository,
     resolve_credential_path,
 )
-from nixbot.events import NullStatusReporter
+from nixbot.events import BuildResult, NullStatusReporter
 from nixbot.forge import DiscoveredRepo
 from nixbot.schedule_runner import scheduled_worktree_id
 from nixbot.schedules import DueEffect, ScheduleWhen
@@ -519,16 +519,8 @@ class RecordingReporter(NullStatusReporter):
     def __init__(self) -> None:
         self.finished: list[tuple[int, str, int]] = []
 
-    async def build_finished(
-        self,
-        event: Any,
-        build: Any,
-        status: str,
-        generation: int,
-        results: list,
-        **kwargs: Any,
-    ) -> None:
-        self.finished.append((build.id, status, generation))
+    async def build_finished(self, event: Any, build: Any, result: BuildResult) -> None:
+        self.finished.append((build.id, result.status, result.generation))
 
 
 async def test_cancel_not_running_posts_forge_status(service: CIService) -> None:

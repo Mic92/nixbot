@@ -18,7 +18,7 @@ import pytest
 
 from nixbot.build_scheduler import AttributeResult, AttributeStatus
 from nixbot.db_gen.models import Build as BuildRecord
-from nixbot.events import ChangeEvent, RepoInfo
+from nixbot.events import BuildResult, ChangeEvent, RepoInfo
 from nixbot.forge import GitlabClient
 from nixbot.models import NixEvalJobError
 from nixbot.status import (
@@ -145,7 +145,7 @@ async def test_posted_generations_bounded() -> None:
     reporter, _poster, _store = make_reporter()
     for build_id in range(POSTED_GENERATIONS_MAX + 100):
         build = replace(BUILD, id=build_id)
-        await reporter.build_finished(EVENT, build, "succeeded", 1, [])
+        await reporter.build_finished(EVENT, build, BuildResult("succeeded", 1, []))
     assert len(reporter._posted_generations) <= POSTED_GENERATIONS_MAX  # noqa: SLF001
     assert (POSTED_GENERATIONS_MAX + 99) in reporter._posted_generations  # noqa: SLF001
 
@@ -178,7 +178,7 @@ async def test_context_prefix_configurable() -> None:
     # both must honor the prefix. The phase ordering itself is covered
     # by test_phase_statuses_and_target_url.
     await reporter.build_started(EVENT, BUILD)
-    await reporter.build_finished(EVENT, BUILD, "succeeded", 1, [])
+    await reporter.build_finished(EVENT, BUILD, BuildResult("succeeded", 1, []))
     assert {p.context for p in poster.posts} == {
         "buildbot/nix-eval",
         "buildbot/nix-build",
@@ -196,7 +196,7 @@ async def test_phase_statuses_and_target_url() -> None:
 
     await reporter.build_started(EVENT, BUILD)
     await reporter.eval_finished(EVENT, BUILD, success=True, warnings=["w"])
-    await reporter.build_finished(EVENT, BUILD, "succeeded", 1, [])
+    await reporter.build_finished(EVENT, BUILD, BuildResult("succeeded", 1, []))
     contexts = [(p.context, p.state) for p in poster.posts]
     assert contexts == [
         ("nixbot/nix-eval", StatusState.pending),
@@ -244,13 +244,15 @@ async def test_build_finished_table_sorts_failures_first() -> None:
     await reporter.build_finished(
         EVENT,
         BUILD,
-        "failed",
-        1,
-        [
-            attr_result("a", AttributeStatus.succeeded),
-            attr_result("z", AttributeStatus.failed),
-        ],
-        attr_statuses={"a": "succeeded", "z": "failed"},
+        BuildResult(
+            "failed",
+            1,
+            [
+                attr_result("a", AttributeStatus.succeeded),
+                attr_result("z", AttributeStatus.failed),
+            ],
+            attr_statuses={"a": "succeeded", "z": "failed"},
+        ),
     )
     summary_idx = next(
         i for i, p in enumerate(poster.posts) if p.context == "nixbot/nix-build"
@@ -270,7 +272,7 @@ async def test_per_attribute_failure_statuses_capped() -> None:
         for i in range(4)
     ]
 
-    await reporter.build_finished(EVENT, BUILD, "failed", 1, results)
+    await reporter.build_finished(EVENT, BUILD, BuildResult("failed", 1, results))
     failure_posts = [
         p for p in poster.posts if p.context.startswith("nixbot/nix-build ")
     ]
@@ -287,16 +289,16 @@ async def test_success_flip_on_rebuild() -> None:
 
     # First build: flaky fails.
     await reporter.build_finished(
-        EVENT, BUILD, "failed", 1, [attr_result("flaky", AttributeStatus.failed)]
+        EVENT,
+        BUILD,
+        BuildResult("failed", 1, [attr_result("flaky", AttributeStatus.failed)]),
     )
     assert context in await store.get_failed("sha1")
     # Rebuild succeeds: status flipped, record cleared.
     await reporter.build_finished(
         EVENT,
         BUILD,
-        "succeeded",
-        2,
-        [attr_result("flaky", AttributeStatus.succeeded)],
+        BuildResult("succeeded", 2, [attr_result("flaky", AttributeStatus.succeeded)]),
     )
     assert context not in await store.get_failed("sha1")
     flip = [p for p in poster.posts if p.context == context]
@@ -306,10 +308,10 @@ async def test_success_flip_on_rebuild() -> None:
 async def test_stale_generation_dropped() -> None:
     reporter, poster, _ = make_reporter()
 
-    await reporter.build_finished(EVENT, BUILD, "succeeded", 5, [])
+    await reporter.build_finished(EVENT, BUILD, BuildResult("succeeded", 5, []))
     posts_before = len(poster.posts)
     # Stale post with lower generation: dropped entirely.
-    await reporter.build_finished(EVENT, BUILD, "failed", 3, [])
+    await reporter.build_finished(EVENT, BUILD, BuildResult("failed", 3, []))
     assert len(poster.posts) == posts_before
 
 
@@ -318,9 +320,7 @@ async def test_cancelled_attributes_recorded_as_failed_statuses() -> None:
     await reporter.build_finished(
         EVENT,
         BUILD,
-        "cancelled",
-        1,
-        [attr_result("a", AttributeStatus.cancelled)],
+        BuildResult("cancelled", 1, [attr_result("a", AttributeStatus.cancelled)]),
     )
     context = attr_status_context("github", "acme/widget", "a")
     assert context in await store.get_failed("sha1")
@@ -335,13 +335,15 @@ async def test_attribute_cancel_summary_is_not_superseded() -> None:
     await reporter.build_finished(
         EVENT,
         BUILD,
-        "cancelled",
-        1,
-        [
-            attr_result("a", AttributeStatus.cancelled),
-            attr_result("b", AttributeStatus.succeeded),
-            attr_result("c", AttributeStatus.succeeded),
-        ],
+        BuildResult(
+            "cancelled",
+            1,
+            [
+                attr_result("a", AttributeStatus.cancelled),
+                attr_result("b", AttributeStatus.succeeded),
+                attr_result("c", AttributeStatus.succeeded),
+            ],
+        ),
     )
     combined = next(p for p in poster.posts if p.context == "nixbot/nix-build")
     assert combined.state == StatusState.error
@@ -351,7 +353,7 @@ async def test_attribute_cancel_summary_is_not_superseded() -> None:
 
 async def test_build_level_cancel_keeps_supersede_wording() -> None:
     reporter, poster, _ = make_reporter()
-    await reporter.build_finished(EVENT, BUILD, "cancelled", 1, [])
+    await reporter.build_finished(EVENT, BUILD, BuildResult("cancelled", 1, []))
     combined = next(p for p in poster.posts if p.context == "nixbot/nix-build")
     assert combined.description == "build cancelled (superseded)"
 
@@ -363,9 +365,15 @@ async def test_attribute_descriptions_are_ansi_stripped() -> None:
     await reporter.build_finished(
         EVENT,
         BUILD,
-        "failed",
-        1,
-        [attr_result("a", AttributeStatus.failed, error="\x1b[31merror: boom\x1b[0m")],
+        BuildResult(
+            "failed",
+            1,
+            [
+                attr_result(
+                    "a", AttributeStatus.failed, error="\x1b[31merror: boom\x1b[0m"
+                )
+            ],
+        ),
     )
     attr_post = next(
         p for p in poster.posts if p.context.startswith("nixbot/nix-build ")
@@ -382,18 +390,22 @@ async def test_previously_failed_reposts_do_not_consume_budget() -> None:
     await reporter.build_finished(
         EVENT,
         BUILD,
-        "failed",
-        1,
-        [attr_result(f"a{i}", AttributeStatus.failed) for i in range(2)],
+        BuildResult(
+            "failed",
+            1,
+            [attr_result(f"a{i}", AttributeStatus.failed) for i in range(2)],
+        ),
     )
     poster.posts.clear()
     # Rebuild: same two still fail, plus one new failure.
     await reporter.build_finished(
         EVENT,
         BUILD,
-        "failed",
-        2,
-        [attr_result(f"a{i}", AttributeStatus.failed) for i in range(3)],
+        BuildResult(
+            "failed",
+            2,
+            [attr_result(f"a{i}", AttributeStatus.failed) for i in range(3)],
+        ),
     )
     failure_posts = {
         p.context for p in poster.posts if p.context.startswith("nixbot/nix-build ")
@@ -410,10 +422,12 @@ async def test_summary_counts_use_all_attribute_statuses() -> None:
     await reporter.build_finished(
         EVENT,
         BUILD,
-        "succeeded",
-        1,
-        [attr_result("flaky", AttributeStatus.succeeded)],
-        attr_statuses=all_statuses,
+        BuildResult(
+            "succeeded",
+            1,
+            [attr_result("flaky", AttributeStatus.succeeded)],
+            attr_statuses=all_statuses,
+        ),
     )
     combined = next(p for p in poster.posts if p.context == "nixbot/nix-build")
     assert combined.description == "100 attributes built"
@@ -426,10 +440,12 @@ async def test_attr_prefix_follows_repo_configuration() -> None:
     await reporter.build_finished(
         EVENT,
         BUILD,
-        "failed",
-        1,
-        [attr_result("foo", AttributeStatus.failed)],
-        attr_prefix="hydraJobs",
+        BuildResult(
+            "failed",
+            1,
+            [attr_result("foo", AttributeStatus.failed)],
+            attr_prefix="hydraJobs",
+        ),
     )
     assert any(
         p.context == "nixbot/nix-build github:acme/widget#hydraJobs.foo"
@@ -452,7 +468,7 @@ async def test_poster_network_errors_do_not_propagate() -> None:
 
     await reporter.build_started(EVENT, BUILD)  # must not raise
     with pytest.raises(httpx.ConnectError):
-        await reporter.build_finished(EVENT, BUILD, "succeeded", 1, [])
+        await reporter.build_finished(EVENT, BUILD, BuildResult("succeeded", 1, []))
 
 
 async def test_reporter_forwards_attr_and_text() -> None:
@@ -472,9 +488,11 @@ async def test_reporter_forwards_attr_and_text() -> None:
     await reporter.build_finished(
         EVENT,
         BUILD,
-        "failed",
-        1,
-        [attr_result("flaky", AttributeStatus.failed, error="log line 1\nline 2")],
+        BuildResult(
+            "failed",
+            1,
+            [attr_result("flaky", AttributeStatus.failed, error="log line 1\nline 2")],
+        ),
     )
     attr_idx = next(
         i
@@ -501,7 +519,7 @@ async def test_check_permission_error_does_not_disable_forge() -> None:
         {"github": ForbiddenPoster()}, MemoryFailedStatuses(), "https://ci"
     )
     await reporter.build_started(EVENT, BUILD)
-    await reporter.build_finished(EVENT, BUILD, "succeeded", 1, [])
+    await reporter.build_finished(EVENT, BUILD, BuildResult("succeeded", 1, []))
     # Both phases still attempt to post; the forge is never latched off.
     assert calls == 2
 

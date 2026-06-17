@@ -35,7 +35,13 @@ from .canceller import (
 )
 from .db import BuildStatus
 from .effects_state import TaskTokens
-from .events import ChangeEvent, NullStatusReporter, RepoInfo, StatusReporter
+from .events import (
+    BuildResult,
+    ChangeEvent,
+    NullStatusReporter,
+    RepoInfo,
+    StatusReporter,
+)
 from .executor import LogWriter
 from .gitrepo import MergeConflictError, pr_refspec
 from .web.logs import LogRegistry
@@ -48,7 +54,7 @@ if TYPE_CHECKING:
 
     import asyncpg
 
-    from .build_scheduler import AttributeResult, BuildOutcome, FailedBuildCache
+    from .build_scheduler import BuildOutcome, FailedBuildCache
     from .config import Config
     from .db import BuildRecord
     from .gitrepo import FetchCredentials, RepoManager
@@ -174,7 +180,9 @@ class Orchestrator:
                 pr_author=event.pr_author,
             )
             await self.reporter.eval_finished(event, build, success=False, warnings=[])
-            await self.reporter.build_finished(event, build, BuildStatus.FAILED, 0, [])
+            await self.reporter.build_finished(
+                event, build, BuildResult(BuildStatus.FAILED, 0, [])
+            )
             return build
 
         try:
@@ -267,7 +275,9 @@ class Orchestrator:
             if created:
                 await db.set_build_status(self.pool, build.id, BuildStatus.CANCELLED)
                 await self.reporter.build_finished(
-                    event, build, BuildStatus.CANCELLED, build.status_generation, []
+                    event,
+                    build,
+                    BuildResult(BuildStatus.CANCELLED, build.status_generation, []),
                 )
             return
         if not rebuild:
@@ -377,17 +387,13 @@ class Orchestrator:
     async def finish_linked(
         self,
         build: BuildRecord,
-        status: str,
-        generation: int,
-        results: list[AttributeResult],
+        result: BuildResult,
         *,
         eval_success: bool | None = None,
     ) -> None:
         """Final status fan-out for second contexts attached to this
         build; eval_success is None when no eval result exists."""
-        await build_reuse.finish_linked(
-            self, build, status, generation, results, eval_success=eval_success
-        )
+        await build_reuse.finish_linked(self, build, result, eval_success=eval_success)
 
     async def post_process_skipped(
         self, event: ChangeEvent, skipped: list[tuple[str, str]]

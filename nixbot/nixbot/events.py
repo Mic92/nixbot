@@ -46,6 +46,17 @@ class ChangeEvent:
     commit_message: str = ""
 
 
+@dataclass(frozen=True)
+class BuildResult:
+    """The final outcome of a build, as reported to a forge."""
+
+    status: str
+    generation: int
+    results: list[AttributeResult]
+    attr_statuses: dict[str, str] | None = None
+    attr_prefix: str = "checks"
+
+
 class StatusReporter(Protocol):
     """Receives lifecycle events; forge integration implements this."""
 
@@ -63,16 +74,8 @@ class StatusReporter(Protocol):
 
     async def eval_cancelled(self, event: ChangeEvent, build: BuildRecord) -> None: ...
 
-    async def build_finished(  # noqa: PLR0913
-        self,
-        event: ChangeEvent,
-        build: BuildRecord,
-        status: str,
-        generation: int,
-        results: list[AttributeResult],
-        *,
-        attr_statuses: dict[str, str] | None = None,
-        attr_prefix: str = "checks",
+    async def build_finished(
+        self, event: ChangeEvent, build: BuildRecord, result: BuildResult
     ) -> None: ...
 
 
@@ -94,15 +97,7 @@ class NullStatusReporter:
     async def eval_cancelled(self, event: ChangeEvent, build: BuildRecord) -> None:
         pass
 
-    async def build_finished(  # noqa: PLR0913
-        self,
-        event: ChangeEvent,
-        build: BuildRecord,
-        status: str,
-        generation: int,
-        results: list[AttributeResult],
-        *,
-        attr_statuses: dict[str, str] | None = None,
-        attr_prefix: str = "checks",
+    async def build_finished(
+        self, event: ChangeEvent, build: BuildRecord, result: BuildResult
     ) -> None:
         pass

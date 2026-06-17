@@ -24,7 +24,7 @@ from nixbot.build_scheduler import (
 from nixbot.config import Config
 from nixbot.db import BuildStatus
 from nixbot.db_gen import builds as builds_q
-from nixbot.events import ChangeEvent, RepoInfo
+from nixbot.events import BuildResult, ChangeEvent, RepoInfo
 from nixbot.gitrepo import FetchCredentials, RepoManager
 from nixbot.memory import EvalWorkerConfig
 from nixbot.models import CacheStatus
@@ -140,18 +140,10 @@ class RecordingReporter:
     async def eval_cancelled(self, event: ChangeEvent, build: BuildRecord) -> None:
         self.events.append(("eval-cancelled", build.id))
 
-    async def build_finished(  # noqa: PLR0913
-        self,
-        event: ChangeEvent,
-        build: BuildRecord,
-        status: str,
-        generation: int,
-        results: list[AttributeResult],
-        *,
-        attr_statuses: dict[str, str] | None = None,
-        attr_prefix: str = "checks",
+    async def build_finished(
+        self, event: ChangeEvent, build: BuildRecord, result: BuildResult
     ) -> None:
-        self.events.append(("finished", build.id, status, generation))
+        self.events.append(("finished", build.id, result.status, result.generation))
 
 
 # --- helpers --------------------------------------------------------------------

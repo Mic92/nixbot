@@ -18,12 +18,12 @@ from .canceller import RegisterOutcome
 from .db import BuildStatus
 from .db_gen import builds as builds_q
 from .db_gen import maintenance as q
+from .events import BuildResult
 from .gitrepo import GitError, run_git
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from .build_scheduler import AttributeResult
     from .db import BuildRecord
     from .events import ChangeEvent
     from .gitrepo import FetchCredentials
@@ -65,16 +65,14 @@ async def replay_terminal_status(
         )
         await o.reporter.eval_finished(event, build, success=eval_success, warnings=[])
     await o.reporter.build_finished(
-        event, build, build.status, build.status_generation, []
+        event, build, BuildResult(build.status, build.status_generation, [])
     )
 
 
-async def finish_linked(  # noqa: PLR0913
+async def finish_linked(
     o: Orchestrator,
     build: BuildRecord,
-    status: str,
-    generation: int,
-    results: list[AttributeResult],
+    result: BuildResult,
     *,
     eval_success: bool | None = None,
 ) -> None:
@@ -85,11 +83,11 @@ async def finish_linked(  # noqa: PLR0913
             await o.reporter.eval_finished(
                 linked, build, success=eval_success, warnings=[]
             )
-        elif status == BuildStatus.CANCELLED:
+        elif result.status == BuildStatus.CANCELLED:
             # Cancel during eval: the linked contexts' nix-eval
             # status would otherwise stay pending forever.
             await o.reporter.eval_cancelled(linked, build)
-        await o.reporter.build_finished(linked, build, status, generation, results)
+        await o.reporter.build_finished(linked, build, result)
 
 
 async def is_ancestor(

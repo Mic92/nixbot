@@ -25,6 +25,7 @@ from .build_scheduler import (
 )
 from .db import BuildStatus
 from .db_gen import builds as q
+from .events import BuildResult
 from .executor import failure_excerpt
 from .live_warnings import LiveWarningAggregator
 from .memory import calculate_eval_workers
@@ -191,12 +192,12 @@ async def _settle_aborted(
         await o.reporter.eval_cancelled(event, build)
     else:
         await o.reporter.eval_finished(event, build, success=False, warnings=[])
-    await o.reporter.build_finished(event, build, status, build.status_generation, [])
+    await o.reporter.build_finished(
+        event, build, BuildResult(status, build.status_generation, [])
+    )
     await o.finish_linked(
         build,
-        status,
-        build.status_generation,
-        [],
+        BuildResult(status, build.status_generation, []),
         eval_success=None if status == BuildStatus.CANCELLED else False,
     )
 
@@ -459,17 +460,21 @@ async def build_attributes(  # noqa: PLR0913
     await o.reporter.build_finished(
         event,
         build,
-        status,
-        generation,
-        schedule_result.results,
-        attr_statuses={
-            r.attr: r.status
-            for r in await q.attribute_statuses(o.pool, build_id=build.id)
-        },
-        attr_prefix=BranchConfig.load(worktree_path).attribute,
+        BuildResult(
+            status,
+            generation,
+            schedule_result.results,
+            attr_statuses={
+                r.attr: r.status
+                for r in await q.attribute_statuses(o.pool, build_id=build.id)
+            },
+            attr_prefix=BranchConfig.load(worktree_path).attribute,
+        ),
     )
     await o.finish_linked(
-        build, status, generation, schedule_result.results, eval_success=True
+        build,
+        BuildResult(status, generation, schedule_result.results),
+        eval_success=True,
     )
     o.cancel_events.pop(build.id, None)
 

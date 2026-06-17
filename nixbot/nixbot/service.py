@@ -20,7 +20,7 @@ from .db import BuildStatus
 from .db_gen import builds as builds_q
 from .db_gen import failed as failed_q
 from .db_gen import maintenance as q
-from .events import ChangeEvent, StatusReporter
+from .events import BuildResult, ChangeEvent, StatusReporter
 from .gitrepo import (
     CredentialsProvider,
     FetchCredentials,
@@ -49,7 +49,6 @@ if TYPE_CHECKING:
 
     import asyncpg
 
-    from .build_scheduler import AttributeResult
     from .config import Config
     from .db import BuildRecord
     from .forge import GiteaClient, GitHubAppClient, GitlabClient
@@ -133,27 +132,11 @@ class RetryingReporter:
     async def eval_cancelled(self, event: ChangeEvent, build: BuildRecord) -> None:
         await self.inner.eval_cancelled(event, build)
 
-    async def build_finished(  # noqa: PLR0913
-        self,
-        event: ChangeEvent,
-        build: BuildRecord,
-        status: str,
-        generation: int,
-        results: list[AttributeResult],
-        *,
-        attr_statuses: dict[str, str] | None = None,
-        attr_prefix: str = "checks",
+    async def build_finished(
+        self, event: ChangeEvent, build: BuildRecord, result: BuildResult
     ) -> None:
         try:
-            await self.inner.build_finished(
-                event,
-                build,
-                status,
-                generation,
-                results,
-                attr_statuses=attr_statuses,
-                attr_prefix=attr_prefix,
-            )
+            await self.inner.build_finished(event, build, result)
         except Exception as e:
             logger.exception(
                 "status post failed; queueing a retry", extra={"build_id": build.id}
@@ -431,10 +414,12 @@ class CIService:
             await reporter.build_finished(
                 event,
                 build,
-                build.status,
-                build.status_generation,
-                [],
-                attr_statuses={row.attr: row.status for row in rows},
+                BuildResult(
+                    build.status,
+                    build.status_generation,
+                    [],
+                    attr_statuses={row.attr: row.status for row in rows},
+                ),
             )
         except Exception as e:
             if attempt < MAX_REPORT_ATTEMPTS:
@@ -544,7 +529,7 @@ class CIService:
             pr_number=build.pr_number,
         )
         await self.orchestrator.reporter.build_finished(
-            change, build, status, generation, []
+            change, build, BuildResult(status, generation, [])
         )
 
     # -- background loops ---------------------------------------------------

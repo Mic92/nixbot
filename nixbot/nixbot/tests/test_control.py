@@ -19,7 +19,7 @@ from nixbot.auth import AuthzConfig, User
 from nixbot.bootstrap import build_service
 from nixbot.config import Config
 from nixbot.db_gen import builds as builds_q
-from nixbot.events import ChangeEvent, NullStatusReporter
+from nixbot.events import BuildResult, ChangeEvent, NullStatusReporter
 from nixbot.forge_tokens import ForgeTokenStore
 from nixbot.service import (
     MAX_REPORT_ATTEMPTS,
@@ -662,19 +662,11 @@ async def test_report_retry(
         fail = True
 
         class FakeReporter(NullStatusReporter):
-            async def build_finished(  # noqa: PLR0913
-                self,
-                event: ChangeEvent,
-                build: Any,
-                status: str,
-                generation: int,
-                results: Any,
-                *,
-                attr_statuses: dict[str, str] | None = None,
-                attr_prefix: str = "checks",
+            async def build_finished(
+                self, event: ChangeEvent, build: Any, result: BuildResult
             ) -> None:
-                del event, status, generation, results, attr_prefix
-                posts.append({"build": build.id, "attrs": attr_statuses})
+                del event
+                posts.append({"build": build.id, "attrs": result.attr_statuses})
                 if fail:
                     msg = "forge 502"
                     raise RuntimeError(msg)
@@ -688,7 +680,7 @@ async def test_report_retry(
         assert record is not None
         event = ChangeEvent(repo=repo_info(record), branch="main", commit_sha="c9")
         # Inline post fails: the wrapper swallows and queues.
-        await wrapper.build_finished(event, build, "succeeded", 0, [])
+        await wrapper.build_finished(event, build, BuildResult("succeeded", 0, []))
         fail = False
         await service.drain_work()
         assert [p["build"] for p in posts] == [build_id, build_id]
@@ -698,7 +690,7 @@ async def test_report_retry(
         # Permanent failure: attempts are bounded.
         posts.clear()
         fail = True
-        await wrapper.build_finished(event, build, "succeeded", 0, [])
+        await wrapper.build_finished(event, build, BuildResult("succeeded", 0, []))
         await service.drain_work()
         assert len(posts) == MAX_REPORT_ATTEMPTS + 1  # inline + retries
         failed = await pool.fetchval(

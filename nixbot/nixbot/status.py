@@ -51,7 +51,7 @@ if TYPE_CHECKING:
 
     from .build_scheduler import AttributeResult
     from .db import BuildRecord
-    from .events import ChangeEvent
+    from .events import BuildResult, ChangeEvent
     from .forge import GiteaClient, GitHubAppClient, GitlabClient
     from .models import NixEvalJobSuccess
 
@@ -505,17 +505,12 @@ class ForgeStatusReporter:
             "build cancelled",
         )
 
-    async def build_finished(  # noqa: PLR0913
-        self,
-        event: ChangeEvent,
-        build: BuildRecord,
-        status: str,
-        generation: int,
-        results: list[AttributeResult],
-        *,
-        attr_statuses: dict[str, str] | None = None,
-        attr_prefix: str = "checks",
+    async def build_finished(
+        self, event: ChangeEvent, build: BuildRecord, result: BuildResult
     ) -> None:
+        generation = result.generation
+        results = result.results
+        attr_statuses = result.attr_statuses
         # Monotonic generation: drop stale posts after re-aggregation.
         if generation < self._posted_generations.get(build.id, 0):
             logger.info(
@@ -528,7 +523,9 @@ class ForgeStatusReporter:
         while len(self._posted_generations) > POSTED_GENERATIONS_MAX:
             self._posted_generations.popitem(last=False)
 
-        counts = await self._post_attribute_statuses(event, build, results, attr_prefix)
+        counts = await self._post_attribute_statuses(
+            event, build, results, result.attr_prefix
+        )
         if attr_statuses is not None:
             # Reruns pass only the re-run subset as `results`: the
             # summary description must still cover the whole build.
@@ -536,7 +533,7 @@ class ForgeStatusReporter:
             for attr_status in attr_statuses.values():
                 counts[_count_key(attr_status)] += 1
         table_statuses = attr_statuses or {r.attr: r.status.value for r in results}
-        await self._post_summary(event, build, status, counts, table_statuses)
+        await self._post_summary(event, build, result.status, counts, table_statuses)
 
     async def _post_attribute_statuses(
         self,
