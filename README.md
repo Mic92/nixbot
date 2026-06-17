@@ -230,4 +230,4 @@ The following instances integrated with Gitea:
 ## Need commercial support or customization?
 
 For commercial support, please contact [Mic92](https://github.com/Mic92/) at
-joerg@thalheim.io or reach out to [Numtide](https://numtide.com/contact/).
+joerg@thalheim.io.
