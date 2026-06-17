@@ -204,18 +204,18 @@ See Nixbot in action in these deployments:
 - [**Mic92's dotfiles**](https://github.com/Mic92/dotfiles):
   [Configuration](https://github.com/Mic92/dotfiles/blob/main/machines/eve/modules/nixbot.nix)
   | [Instance](https://buildbot.thalheim.io/)
+- [**Nix-community infra**](https://nix-community.org/):
+  [Configuration](https://github.com/nix-community/infra/tree/master/modules/nixos)
+  | [Instance](https://nixbot.nix-community.org/)
+- [**Technical University Munich**](https://dse.in.tum.de/):
+  [Configuration](https://github.com/TUM-DSE/doctor-cluster-config/tree/master/modules/buildbot)
+  | [Instance](https://buildbot.dse.in.tum.de/)
 
 <!-- These instances still run the buildbot-nix ancestor; uncomment as they
 migrate to nixbot:
 
 The following instances run on GitHub:
 
-- [**Nix-community infra**](https://nix-community.org/):
-  [Configuration](https://github.com/nix-community/infra/tree/master/modules/nixos)
-  | [Instance](https://buildbot.nix-community.org/)
-- [**Technical University Munich**](https://dse.in.tum.de/):
-  [Configuration](https://github.com/TUM-DSE/doctor-cluster-config/tree/master/modules/buildbot)
-  | [Instance](https://buildbot.dse.in.tum.de/)
 - [**Numtide**](https://numtide.com/): [Instance](https://buildbot.numtide.com)
 - [**Ngi0**](https://www.ngi.eu/ngi-projects/ngi-zero/):
   [Instance](https://buildbot.ngi.nixos.org/#/projects)
