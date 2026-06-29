@@ -38,6 +38,9 @@ class Build:
     finished_at: datetime.datetime | None
     eval_warnings: str | None
     eval_completed: bool
+    effects_commit_sha: str | None
+    effects_branch: str | None
+    effects_pr_number: int | None
 
 
 @dataclasses.dataclass()

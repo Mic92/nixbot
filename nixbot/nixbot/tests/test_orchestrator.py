@@ -148,7 +148,7 @@ class RecordingReporter:
     async def effect_started(
         self, event: ChangeEvent, build: BuildRecord, name: str
     ) -> None:
-        self.events.append(("effect-started", build.id, name))
+        self.events.append(("effect-started", build.id, name, event.commit_sha))
 
     async def effect_finished(
         self,
@@ -164,7 +164,7 @@ class RecordingReporter:
     async def effects_started(
         self, event: ChangeEvent, build: BuildRecord, total: int
     ) -> None:
-        self.events.append(("effects-started", build.id, total))
+        self.events.append(("effects-started", build.id, total, event.commit_sha))
 
     async def effects_finished(
         self,
@@ -174,7 +174,9 @@ class RecordingReporter:
         failed: int,
         succeeded: int,
     ) -> None:
-        self.events.append(("effects-finished", build.id, failed, succeeded))
+        self.events.append(
+            ("effects-finished", build.id, failed, succeeded, event.commit_sha)
+        )
 
 
 # --- helpers --------------------------------------------------------------------
@@ -599,9 +601,19 @@ async def test_effects_started_flag(pool: asyncpg.Pool, tmp_path: Path) -> None:
     build, _ = await db.get_or_create_build(
         pool, project.id, "tree-flag", "sha", "main"
     )
-    assert await builds_q.mark_effects_started(pool, id_=build.id) is not None
+    assert (
+        await builds_q.mark_effects_started(
+            pool, id_=build.id, commit_sha="sha", branch="main", pr_number=None
+        )
+        is not None
+    )
     # Second attempt (e.g. crash recovery) must not re-run.
-    assert await builds_q.mark_effects_started(pool, id_=build.id) is None
+    assert (
+        await builds_q.mark_effects_started(
+            pool, id_=build.id, commit_sha="sha", branch="main", pr_number=None
+        )
+        is None
+    )
 
 
 async def test_aggregation_generation_monotonic(
@@ -1382,11 +1394,11 @@ async def test_failed_effect_reports_failure_status(
     await drain_effect_items(orchestrator, project, pool)
 
     effect_events = [e for e in reporter.events if e[0].startswith("effect")]
-    assert ("effect-started", build.id, "deploy") in effect_events
+    assert ("effect-started", build.id, "deploy", event.commit_sha) in effect_events
     assert ("effect-finished", build.id, "deploy", False) in effect_events
     # Aggregate summary mirrors the nix-build summary.
-    assert ("effects-started", build.id, 1) in effect_events
-    assert ("effects-finished", build.id, 1, 0) in effect_events
+    assert any(e[:3] == ("effects-started", build.id, 1) for e in effect_events)
+    assert any(e[:4] == ("effects-finished", build.id, 1, 0) for e in effect_events)
 
 
 async def test_post_process_error_does_not_wedge_build(
@@ -1533,30 +1545,42 @@ async def test_reuse_for_default_branch_push_runs_effects(
     upstream: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A main push reusing a succeeded PR build must still deploy:
-    the PR run never started effects."""
+    """A main push reusing a succeeded PR build must still deploy (the
+    PR run never started effects) and report the effects on the main
+    commit, not the build's stored PR-head commit."""
 
     ran = patch_effects(monkeypatch)
     add_commit(upstream, "reuse-deploy")
-    sha = git(upstream, "rev-parse", "HEAD")
-    orchestrator, _, project = await make_env(
+    pr_sha = git(upstream, "rev-parse", "HEAD")
+    orchestrator, reporter, project = await make_env(
         FakeEvalRunner([mk_job("a")]),
         FakeExecutor(),
         name="reuse-deploy",
     )
     pr_build = await orchestrator.handle_change_event(
-        ChangeEvent(repo=project, branch="main", commit_sha=sha, pr_number=9)
+        ChangeEvent(repo=project, branch="main", commit_sha=pr_sha, pr_number=9)
     )
     assert pr_build is not None
     await drain_effect_items(orchestrator, project, pool)
     assert ran == []
+
+    # Squash-merge: an identical tree under a new SHA reuses the build.
+    git(upstream, "commit", "--allow-empty", "-m", "reuse-deploy-merge")
+    main_sha = git(upstream, "rev-parse", "HEAD")
+    assert main_sha != pr_sha
+    reporter.events.clear()
     main_build = await orchestrator.handle_change_event(
-        ChangeEvent(repo=project, branch="main", commit_sha=sha)
+        ChangeEvent(repo=project, branch="main", commit_sha=main_sha)
     )
     assert main_build is not None
     assert main_build.id == pr_build.id
     await drain_effect_items(orchestrator, project, pool)
     assert ran == ["deploy"]
+    # Effects ran for the main merge, so their statuses belong on the
+    # main commit -- not the build's stored PR-head commit (pr_sha).
+    sha_events = ("effect-started", "effects-started", "effects-finished")
+    effect_shas = {e[-1] for e in reporter.events if e[0] in sha_events}
+    assert effect_shas == {main_sha}
 
 
 async def test_reuse_replays_effect_statuses_to_new_commit(
@@ -1597,7 +1621,7 @@ async def test_reuse_replays_effect_statuses_to_new_commit(
     assert reused.id == first.id
     replayed = [e for e in reporter.events if e[0].startswith("effect")]
     assert ("effect-finished", first.id, "deploy", False) in replayed
-    assert ("effects-finished", first.id, 1, 0) in replayed
+    assert any(e[:4] == ("effects-finished", first.id, 1, 0) for e in replayed)
 
 
 async def test_attach_to_already_terminal_build_replays_status(

@@ -111,6 +111,9 @@ BUILD = BuildRecord(
     finished_at=None,
     eval_warnings=None,
     eval_completed=False,
+    effects_commit_sha=None,
+    effects_branch=None,
+    effects_pr_number=None,
 )
 
 

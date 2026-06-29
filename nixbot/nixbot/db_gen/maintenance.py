@@ -172,7 +172,7 @@ WHERE status = 'running' AND started_at < $1
 """
 
 FIND_UNFINISHED_BUILDS: typing.Final[str] = """-- name: FindUnfinishedBuilds :many
-SELECT id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed FROM builds WHERE status = ANY($1::text[])
+SELECT id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number FROM builds WHERE status = ANY($1::text[])
 AND ($2::bigint IS NULL OR id = $2)
 ORDER BY id
 """
@@ -363,7 +363,7 @@ async def fail_interrupted_scheduled_runs(conn: ConnectionLike, *, started_befor
 
 def find_unfinished_builds(conn: ConnectionLike, *, statuses: collections.abc.Sequence[str], build_id: int | None) -> QueryResults[models.Build]:
     def _decode_hook(row: asyncpg.Record) -> models.Build:
-        return models.Build(id=row[0], project_id=row[1], number=row[2], tree_hash=row[3], commit_sha=row[4], branch=row[5], pr_number=row[6], pr_author=row[7], status=row[8], status_generation=row[9], effects_started=row[10], error=row[11], created_at=row[12], started_at=row[13], finished_at=row[14], eval_warnings=row[15], eval_completed=row[16])
+        return models.Build(id=row[0], project_id=row[1], number=row[2], tree_hash=row[3], commit_sha=row[4], branch=row[5], pr_number=row[6], pr_author=row[7], status=row[8], status_generation=row[9], effects_started=row[10], error=row[11], created_at=row[12], started_at=row[13], finished_at=row[14], eval_warnings=row[15], eval_completed=row[16], effects_commit_sha=row[17], effects_branch=row[18], effects_pr_number=row[19])
     return QueryResults[models.Build](conn, FIND_UNFINISHED_BUILDS, _decode_hook, statuses, build_id)
 
 

@@ -123,8 +123,14 @@ WHERE build_id = $1;
 SELECT * FROM builds WHERE id = $1;
 
 -- name: MarkEffectsStarted :one
-UPDATE builds SET effects_started = TRUE
-WHERE id = $1 AND effects_started = FALSE RETURNING id;
+-- Records the triggering ref alongside the flag so the effect items
+-- (which only carry build_id) report on the commit that ran them
+-- rather than the build's stored commit_sha.
+UPDATE builds SET effects_started = TRUE,
+    effects_commit_sha = sqlc.arg(commit_sha)::text,
+    effects_branch = sqlc.arg(branch)::text,
+    effects_pr_number = sqlc.narg(pr_number)::bigint
+WHERE id = sqlc.arg(id)::bigint AND effects_started = FALSE RETURNING id;
 
 -- name: SettleUnfinishedAttributes :exec
 UPDATE build_attributes

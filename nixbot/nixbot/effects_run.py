@@ -9,6 +9,7 @@ keeps the module dependency graph acyclic.
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from typing import TYPE_CHECKING
 from urllib.parse import quote
 
@@ -66,9 +67,20 @@ async def maybe_run_effects(
         is_pull_request=event.pr_number is not None,
     ):
         return
-    # The started-flag guards against auto-re-running effects on
-    # crash recovery (deploys are not idempotent).
-    if await builds_q.mark_effects_started(o.pool, id_=build.id) is None:
+    # The started-flag guards against auto-re-running effects on crash
+    # recovery (deploys are not idempotent). Record the triggering ref:
+    # effect items carry only build_id and must report on this commit,
+    # not the build's stored commit_sha (a reused PR head).
+    if (
+        await builds_q.mark_effects_started(
+            o.pool,
+            id_=build.id,
+            commit_sha=event.commit_sha,
+            branch=event.branch,
+            pr_number=event.pr_number,
+        )
+        is None
+    ):
         return
     task_token = o.task_tokens.issue(build.project_id)
     ctx = effects_context(
@@ -129,9 +141,14 @@ async def run_effect_item(
         # effects never auto-re-run (deploys are not idempotent).
         return
     async with o.rerun_worktree(info, build, "effect", credentials) as (
-        event,
+        worktree_event,
         worktree_path,
     ):
+        # rerun_worktree rebuilds the event from the build's stored
+        # commit (the right tree to check out), but effects report on
+        # the commit that triggered them (e.g. the default-branch merge
+        # that reused a PR build), recorded at mark_effects_started.
+        event = _effects_event(build, worktree_event)
         task_token = o.task_tokens.issue(build.project_id)
         try:
             ctx = effects_context(
@@ -147,6 +164,19 @@ async def run_effect_item(
             await _maybe_post_effects_summary(o, event, build)
         finally:
             o.task_tokens.revoke(task_token)
+
+
+def _effects_event(build: BuildRecord, fallback: ChangeEvent) -> ChangeEvent:
+    """The ref that triggered the effects run, recorded on the build;
+    pre-0018 builds have no record and fall back to the build commit."""
+    if build.effects_commit_sha is None:
+        return fallback
+    return replace(
+        fallback,
+        commit_sha=build.effects_commit_sha,
+        branch=build.effects_branch or fallback.branch,
+        pr_number=build.effects_pr_number,
+    )
 
 
 async def _maybe_post_effects_summary(
