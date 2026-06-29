@@ -1,8 +1,5 @@
 # Nixbot
 
-**Development Status:** beta (under active development: APIs and options may
-change without notice)
-
 Nixbot is a continuous integration (CI) service for the Nix ecosystem, shipped
 as a single NixOS service. It is a rewrite of
 [buildbot-nix](https://github.com/nix-community/buildbot-nix), its spiritual
