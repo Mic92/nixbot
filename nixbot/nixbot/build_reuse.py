@@ -18,6 +18,7 @@ from .canceller import RegisterOutcome
 from .db import BuildStatus
 from .db_gen import builds as builds_q
 from .db_gen import maintenance as q
+from .db_gen import web as web_q
 from .events import BuildResult
 from .gitrepo import GitError, run_git
 
@@ -67,6 +68,23 @@ async def replay_terminal_status(
     await o.reporter.build_finished(
         event, build, BuildResult(build.status, build.status_generation, [])
     )
+
+
+async def replay_effect_statuses(
+    o: Orchestrator, event: ChangeEvent, build: BuildRecord
+) -> None:
+    """Re-post each finished effect's status onto the reusing commit's
+    SHA, so a failed deploy does not look green there."""
+    for effect in await web_q.web_effects(o.pool, build_id=build.id):
+        if effect.status not in ("succeeded", "failed"):
+            continue
+        await o.reporter.effect_finished(
+            event,
+            build,
+            effect.name,
+            success=effect.status == "succeeded",
+            error=effect.error,
+        )
 
 
 async def finish_linked(
@@ -142,10 +160,14 @@ async def reuse_terminal_build(  # noqa: PLR0913
         # failure must not strand this context without a status.
         try:
             await _post_process_existing(o, event, build)
-            # A build that ran as a PR never started effects, so a
-            # default-branch push reusing it must still deploy; the
-            # effects_started flag prevents re-deploys.
-            await o.maybe_run_effects(event, build, worktree_path, credentials)
+            if build.effects_started:
+                # Effects already ran and will not re-run; replay their
+                # statuses so the reusing commit is not left blank.
+                await replay_effect_statuses(o, event, build)
+            else:
+                # A build that never started effects (e.g. a PR build)
+                # must still deploy when a default-branch push reuses it.
+                await o.maybe_run_effects(event, build, worktree_path, credentials)
             await o.refresh_schedules(event)
         except Exception:
             logger.exception(

@@ -1541,6 +1541,46 @@ async def test_reuse_for_default_branch_push_runs_effects(
     assert ran == ["deploy"]
 
 
+async def test_reuse_replays_effect_statuses_to_new_commit(
+    pool: asyncpg.Pool,
+    make_env: EnvFactory,
+    upstream: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A commit reusing a build whose effects already ran must get
+    those effect statuses replayed onto its SHA (Mic92/nixbot#30)."""
+
+    async def failing_run(ctx: object, name: str, log_write: object = None) -> bool:
+        return False
+
+    patch_effects(monkeypatch, run_effect=failing_run)
+    add_commit(upstream, "reuse-replay")
+    sha = git(upstream, "rev-parse", "HEAD")
+    orchestrator, reporter, project = await make_env(
+        FakeEvalRunner([mk_job("a")]),
+        FakeExecutor(),
+        name="reuse-replay",
+    )
+    first = await orchestrator.handle_change_event(
+        ChangeEvent(repo=project, branch="main", commit_sha=sha)
+    )
+    assert first is not None
+    await drain_effect_items(orchestrator, project, pool)
+
+    # A second commit with an identical tree reuses the build; its
+    # effects do not re-run, so the statuses must be replayed.
+    git(upstream, "commit", "--allow-empty", "-m", "reuse-replay-empty")
+    sha2 = git(upstream, "rev-parse", "HEAD")
+    reporter.events.clear()
+    reused = await orchestrator.handle_change_event(
+        ChangeEvent(repo=project, branch="main", commit_sha=sha2)
+    )
+    assert reused is not None
+    assert reused.id == first.id
+    replayed = [e for e in reporter.events if e[0] == "effect-finished"]
+    assert ("effect-finished", first.id, "deploy", False) in replayed
+
+
 async def test_attach_to_already_terminal_build_replays_status(
     pool: asyncpg.Pool, make_env: EnvFactory, tmp_path: Path, upstream: Path
 ) -> None:
