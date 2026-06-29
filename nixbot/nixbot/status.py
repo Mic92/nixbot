@@ -382,6 +382,17 @@ def effect_status_context(
     return f"{context_prefix}/effect {forge}:{project_name}#{name}"
 
 
+def effects_summary_context(context_prefix: str = "nixbot") -> str:
+    return f"{context_prefix}/effects"
+
+
+def effects_summary_description(failed: int, succeeded: int) -> str:
+    total = failed + succeeded
+    if failed:
+        return f"{failed} of {total} effects failed"
+    return f"{succeeded} effect{'s' if succeeded != 1 else ''} succeeded"
+
+
 def eval_description(success: bool, warnings: list[str]) -> str:
     base = "evaluation succeeded" if success else "evaluation failed"
     if warnings:
@@ -551,6 +562,33 @@ class ForgeStatusReporter:
             StatusState.success if success else StatusState.failure,
             "effect succeeded" if success else (error or "effect failed"),
             text=_fence(error) if error else None,
+        )
+
+    async def effects_started(
+        self, event: ChangeEvent, build: BuildRecord, total: int
+    ) -> None:
+        await self._post(
+            event,
+            build,
+            effects_summary_context(self.context_prefix),
+            StatusState.pending,
+            f"running {total} effect{'s' if total != 1 else ''}",
+        )
+
+    async def effects_finished(
+        self,
+        event: ChangeEvent,
+        build: BuildRecord,
+        *,
+        failed: int,
+        succeeded: int,
+    ) -> None:
+        await self._post(
+            event,
+            build,
+            effects_summary_context(self.context_prefix),
+            StatusState.failure if failed else StatusState.success,
+            effects_summary_description(failed, succeeded),
         )
 
     async def build_finished(

@@ -73,11 +73,16 @@ async def replay_terminal_status(
 async def replay_effect_statuses(
     o: Orchestrator, event: ChangeEvent, build: BuildRecord
 ) -> None:
-    """Re-post each finished effect's status onto the reusing commit's
-    SHA, so a failed deploy does not look green there."""
-    for effect in await web_q.web_effects(o.pool, build_id=build.id):
-        if effect.status not in ("succeeded", "failed"):
-            continue
+    """Re-post each finished effect's status and the aggregate summary
+    onto the reusing commit's SHA, so a failed deploy is not green."""
+    effects = [
+        e
+        for e in await web_q.web_effects(o.pool, build_id=build.id)
+        if e.status in ("succeeded", "failed")
+    ]
+    if not effects:
+        return
+    for effect in effects:
         await o.reporter.effect_finished(
             event,
             build,
@@ -85,6 +90,12 @@ async def replay_effect_statuses(
             success=effect.status == "succeeded",
             error=effect.error,
         )
+    await o.reporter.effects_finished(
+        event,
+        build,
+        failed=sum(1 for e in effects if e.status != "succeeded"),
+        succeeded=sum(1 for e in effects if e.status == "succeeded"),
+    )
 
 
 async def finish_linked(

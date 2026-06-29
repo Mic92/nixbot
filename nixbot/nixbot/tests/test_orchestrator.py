@@ -161,6 +161,21 @@ class RecordingReporter:
     ) -> None:
         self.events.append(("effect-finished", build.id, name, success))
 
+    async def effects_started(
+        self, event: ChangeEvent, build: BuildRecord, total: int
+    ) -> None:
+        self.events.append(("effects-started", build.id, total))
+
+    async def effects_finished(
+        self,
+        event: ChangeEvent,
+        build: BuildRecord,
+        *,
+        failed: int,
+        succeeded: int,
+    ) -> None:
+        self.events.append(("effects-finished", build.id, failed, succeeded))
+
 
 # --- helpers --------------------------------------------------------------------
 
@@ -1366,9 +1381,12 @@ async def test_failed_effect_reports_failure_status(
     assert build is not None
     await drain_effect_items(orchestrator, project, pool)
 
-    effect_events = [e for e in reporter.events if e[0].startswith("effect-")]
+    effect_events = [e for e in reporter.events if e[0].startswith("effect")]
     assert ("effect-started", build.id, "deploy") in effect_events
     assert ("effect-finished", build.id, "deploy", False) in effect_events
+    # Aggregate summary mirrors the nix-build summary.
+    assert ("effects-started", build.id, 1) in effect_events
+    assert ("effects-finished", build.id, 1, 0) in effect_events
 
 
 async def test_post_process_error_does_not_wedge_build(
@@ -1577,8 +1595,9 @@ async def test_reuse_replays_effect_statuses_to_new_commit(
     )
     assert reused is not None
     assert reused.id == first.id
-    replayed = [e for e in reporter.events if e[0] == "effect-finished"]
+    replayed = [e for e in reporter.events if e[0].startswith("effect")]
     assert ("effect-finished", first.id, "deploy", False) in replayed
+    assert ("effects-finished", first.id, 1, 0) in replayed
 
 
 async def test_attach_to_already_terminal_build_replays_status(

@@ -14,6 +14,7 @@ from urllib.parse import quote
 
 from .db_gen import builds as builds_q
 from .db_gen import maintenance as q
+from .db_gen import web as web_q
 from .db_gen import work_queue as wq
 from .effects import (
     EffectsContext,
@@ -91,11 +92,11 @@ async def maybe_run_effects(
     # Effects removed from the flake since the last run would
     # otherwise linger as stale pending rows.
     await q.drop_removed_effects(o.pool, build_id=build.id, names=names)
-    await _enqueue_effects(o, build, names)
+    await _enqueue_effects(o, event, build, names)
 
 
 async def _enqueue_effects(
-    o: Orchestrator, build: BuildRecord, names: list[str]
+    o: Orchestrator, event: ChangeEvent, build: BuildRecord, names: list[str]
 ) -> None:
     """One queue item per effect, on the build's dedup key."""
     # Effect names are repo-controlled; a duplicate inside one batch
@@ -105,6 +106,7 @@ async def _enqueue_effects(
     if not names:
         return
     await builds_q.start_pending_effects(o.pool, build_id=build.id, names=names)
+    await o.reporter.effects_started(event, build, len(names))
     await wq.enqueue_effect_items(
         o.pool,
         dedup_key=f"build-{build.id}",
@@ -142,8 +144,25 @@ async def run_effect_item(
                 task_token=task_token,
             )
             await _run_one_effect(o, event, ctx, build, name)
+            await _maybe_post_effects_summary(o, event, build)
         finally:
             o.task_tokens.revoke(task_token)
+
+
+async def _maybe_post_effects_summary(
+    o: Orchestrator, event: ChangeEvent, build: BuildRecord
+) -> None:
+    """Post the aggregate status once all effects settle; the items run
+    independently, so the last to finish reports it."""
+    statuses = [e.status for e in await web_q.web_effects(o.pool, build_id=build.id)]
+    if any(s in ("pending", "running") for s in statuses):
+        return
+    await o.reporter.effects_finished(
+        event,
+        build,
+        failed=sum(1 for s in statuses if s != "succeeded"),
+        succeeded=sum(1 for s in statuses if s == "succeeded"),
+    )
 
 
 async def _run_one_effect(

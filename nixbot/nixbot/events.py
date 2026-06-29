@@ -92,6 +92,19 @@ class StatusReporter(Protocol):
         error: str | None = None,
     ) -> None: ...
 
+    async def effects_started(
+        self, event: ChangeEvent, build: BuildRecord, total: int
+    ) -> None: ...
+
+    async def effects_finished(
+        self,
+        event: ChangeEvent,
+        build: BuildRecord,
+        *,
+        failed: int,
+        succeeded: int,
+    ) -> None: ...
+
 
 class NullStatusReporter:
     async def build_started(self, event: ChangeEvent, build: BuildRecord) -> None:
@@ -129,5 +142,20 @@ class NullStatusReporter:
         *,
         success: bool,
         error: str | None = None,
+    ) -> None:
+        pass
+
+    async def effects_started(
+        self, event: ChangeEvent, build: BuildRecord, total: int
+    ) -> None:
+        pass
+
+    async def effects_finished(
+        self,
+        event: ChangeEvent,
+        build: BuildRecord,
+        *,
+        failed: int,
+        succeeded: int,
     ) -> None:
         pass

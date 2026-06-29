@@ -453,6 +453,19 @@ async def test_failed_effect_posts_failure_status() -> None:
     assert poster.extras[1]["text"] == "```\nboom\nmore\n```"
 
 
+async def test_effects_summary_status() -> None:
+    """Effects get an aggregate status alongside the per-effect ones,
+    like nix-build's summary."""
+    reporter, poster, _ = make_reporter()
+    await reporter.effects_started(EVENT, BUILD, 3)
+    await reporter.effects_finished(EVENT, BUILD, failed=1, succeeded=2)
+    summary = [p for p in poster.posts if p.context == "nixbot/effects"]
+    assert [(p.state, p.description) for p in summary] == [
+        (StatusState.pending, "running 3 effects"),
+        (StatusState.failure, "1 of 3 effects failed"),
+    ]
+
+
 async def test_attr_prefix_follows_repo_configuration() -> None:
     """Repos with attribute = "hydraJobs" keep their old context names."""
     reporter, poster, store = make_reporter()

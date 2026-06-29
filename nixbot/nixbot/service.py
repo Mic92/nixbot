@@ -150,6 +150,23 @@ class RetryingReporter:
             event, build, name, success=success, error=error
         )
 
+    async def effects_started(
+        self, event: ChangeEvent, build: BuildRecord, total: int
+    ) -> None:
+        await self.inner.effects_started(event, build, total)
+
+    async def effects_finished(
+        self,
+        event: ChangeEvent,
+        build: BuildRecord,
+        *,
+        failed: int,
+        succeeded: int,
+    ) -> None:
+        await self.inner.effects_finished(
+            event, build, failed=failed, succeeded=succeeded
+        )
+
     async def build_finished(
         self, event: ChangeEvent, build: BuildRecord, result: BuildResult
     ) -> None:
