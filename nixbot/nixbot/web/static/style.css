@@ -83,6 +83,14 @@ header > a {
 	color: var(--muted);
 	font-size: 0.9rem;
 }
+.site-footer {
+	padding: 1.5rem 1.25rem;
+	text-align: center;
+	font-size: 0.85rem;
+}
+.site-footer a {
+	color: var(--muted);
+}
 main {
 	display: flex;
 	gap: 2rem;
