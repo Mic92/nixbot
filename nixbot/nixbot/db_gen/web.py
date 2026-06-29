@@ -19,7 +19,6 @@ __all__: collections.abc.Sequence[str] = (
     "WebQueueRow",
     "WebRecentBuildsRow",
     "WebRepoOverviewRow",
-    "WebStatusCountsRow",
     "attribute_log_path",
     "attribute_status",
     "effect_log_path",
@@ -42,9 +41,7 @@ __all__: collections.abc.Sequence[str] = (
     "web_recent_builds",
     "web_repo",
     "web_repo_candidates",
-    "web_repo_count",
     "web_repo_overview",
-    "web_status_counts",
 )
 
 import dataclasses
@@ -242,12 +239,6 @@ class WebRepoOverviewRow:
     pass_rate: int
 
 
-@dataclasses.dataclass()
-class WebStatusCountsRow:
-    status: str
-    n: int
-
-
 ATTRIBUTE_LOG_PATH: typing.Final[str] = """-- name: AttributeLogPath :one
 SELECT l.path FROM logs l
 JOIN build_attributes a ON a.id = l.attribute_id
@@ -401,11 +392,6 @@ SELECT id, forge, forge_repo_id, owner, name, default_branch, url, private, enab
 ORDER BY forge, id
 """
 
-WEB_REPO_COUNT: typing.Final[str] = """-- name: WebRepoCount :one
-SELECT count(*) AS count FROM projects
-WHERE enabled AND ($1::bigint[] IS NULL OR id = ANY($1))
-"""
-
 WEB_REPO_OVERVIEW: typing.Final[str] = """-- name: WebRepoOverview :many
 SELECT p.id, p.forge, p.forge_repo_id, p.owner, p.name, p.default_branch, p.url, p.private, p.enabled, p.next_build_number, p.created_at, p.updated_at, p.reconcile_watermark,
        lb.number AS last_number, lb.status AS last_status,
@@ -456,13 +442,6 @@ LEFT JOIN LATERAL (
 WHERE p.enabled AND ($1::bigint[] IS NULL OR p.id = ANY($1))
   AND ($2::text IS NULL OR p.owner || '/' || p.name ILIKE $2)
 ORDER BY p.owner, p.name
-"""
-
-WEB_STATUS_COUNTS: typing.Final[str] = """-- name: WebStatusCounts :many
-SELECT status, count(*) AS n FROM builds
-WHERE status IN ('pending', 'evaluating', 'building')
-  AND ($1::bigint[] IS NULL OR project_id = ANY($1))
-GROUP BY status
 """
 
 
@@ -652,20 +631,7 @@ def web_repo_candidates(conn: ConnectionLike, *, owner: str, name: str) -> Query
     return QueryResults[models.Project](conn, WEB_REPO_CANDIDATES, _decode_hook, owner, name)
 
 
-async def web_repo_count(conn: ConnectionLike, *, project_ids: collections.abc.Sequence[int] | None) -> int | None:
-    row = await conn.fetchrow(WEB_REPO_COUNT, project_ids)
-    if row is None:
-        return None
-    return row[0]
-
-
 def web_repo_overview(conn: ConnectionLike, *, project_ids: collections.abc.Sequence[int] | None, pattern: str | None) -> QueryResults[WebRepoOverviewRow]:
     def _decode_hook(row: asyncpg.Record) -> WebRepoOverviewRow:
         return WebRepoOverviewRow(id=row[0], forge=row[1], forge_repo_id=row[2], owner=row[3], name=row[4], default_branch=row[5], url=row[6], private=row[7], enabled=row[8], next_build_number=row[9], created_at=row[10], updated_at=row[11], reconcile_watermark=row[12], last_number=row[13], last_status=row[14], last_branch=row[15], last_created_at=row[16], started_at=row[17], finished_at=row[18], history=row[19], median_secs=row[20], pass_rate=row[21])
     return QueryResults[WebRepoOverviewRow](conn, WEB_REPO_OVERVIEW, _decode_hook, project_ids, pattern)
-
-
-def web_status_counts(conn: ConnectionLike, *, project_ids: collections.abc.Sequence[int] | None) -> QueryResults[WebStatusCountsRow]:
-    def _decode_hook(row: asyncpg.Record) -> WebStatusCountsRow:
-        return WebStatusCountsRow(status=row[0], n=row[1])
-    return QueryResults[WebStatusCountsRow](conn, WEB_STATUS_COUNTS, _decode_hook, project_ids)

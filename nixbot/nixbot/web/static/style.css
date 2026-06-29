@@ -134,7 +134,6 @@ th {
    dots and pill labels. Shared by attribute and build tables. */
 table.attrs,
 table.builds,
-.summary-strip,
 .webhook-panel,
 .pipeline {
 	background: var(--card);
@@ -275,9 +274,6 @@ h2 .status-icon {
 .status-icon.evaluating,
 .status-icon.running {
 	animation: ping 1.6s cubic-bezier(0, 0, 0.2, 1) infinite;
-}
-.status-icon.idle {
-	animation: none;
 }
 @media (prefers-reduced-motion: reduce) {
 	.status-icon.building,
@@ -711,18 +707,6 @@ pre.log {
 }
 
 /* Dashboard (homepage) */
-.summary-strip {
-	display: flex;
-	gap: 1.5rem;
-	align-items: center;
-	margin: 0.5rem 0 1.5rem;
-	padding: 0.75rem 1rem;
-}
-.summary-item {
-	display: inline-flex;
-	align-items: center;
-	font-size: 0.9rem;
-}
 .pipelines {
 	display: flex;
 	flex-direction: column;

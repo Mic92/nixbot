@@ -269,8 +269,6 @@ class _PageRoutes:
             q=q,
             toggleable=toggleable,
             projects=await ctx.queries.repo_overview(project_ids=visible, q=q or None),
-            counts=await ctx.queries.status_counts(project_ids=visible),
-            repo_count=await ctx.queries.repo_count(project_ids=visible),
             disabled_projects=disabled,
         )
 

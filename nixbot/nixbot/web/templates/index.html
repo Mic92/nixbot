@@ -12,20 +12,6 @@
         hx-swap="morph:outerHTML"
         hx-trigger="sse:message delay:300ms">
     <section class="content dashboard">
-      <div class="summary-strip">
-        {% set running = (counts.building | default(0)) + (counts.evaluating | default(0)) %}
-        <span class="summary-item">
-          {# Only pulse the icon while builds are actually running. #}
-          <span class="status-icon building{% if running == 0 %} idle{% endif %}"
-                aria-hidden="true"></span>
-          {{ running }} running
-        </span>
-        <span class="summary-item">
-          {{ status_icon("pending", labelled=false) }}
-          {{ counts.pending | default(0) }} queued
-        </span>
-        <span class="summary-item muted">{{ repo_count }} repositories</span>
-      </div>
       <h2 class="section">Repositories</h2>
       <p class="filters">
         <input type="search"

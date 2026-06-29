@@ -91,17 +91,6 @@ class WebQueries:
             row["history"] = json.loads(row["history"]) if row["history"] else []
         return overview
 
-    async def repo_count(self, project_ids: list[int] | None = None) -> int:
-        count = await gen.web_repo_count(self.pool, project_ids=project_ids)
-        return count or 0
-
-    async def status_counts(
-        self, project_ids: list[int] | None = None
-    ) -> dict[str, int]:
-        """Running/queued counts for the homepage summary strip."""
-        rows = await gen.web_status_counts(self.pool, project_ids=project_ids)
-        return {r.status: r.n for r in rows}
-
     async def recent_builds(
         self,
         limit: int = 50,

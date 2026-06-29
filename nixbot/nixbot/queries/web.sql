@@ -66,16 +66,6 @@ WHERE p.enabled AND (sqlc.narg(project_ids)::bigint[] IS NULL OR p.id = ANY(sqlc
   AND (sqlc.narg(pattern)::text IS NULL OR p.owner || '/' || p.name ILIKE sqlc.narg(pattern))
 ORDER BY p.owner, p.name;
 
--- name: WebRepoCount :one
-SELECT count(*) AS count FROM projects
-WHERE enabled AND (sqlc.narg(project_ids)::bigint[] IS NULL OR id = ANY(sqlc.narg(project_ids)));
-
--- name: WebStatusCounts :many
-SELECT status, count(*) AS n FROM builds
-WHERE status IN ('pending', 'evaluating', 'building')
-  AND (sqlc.narg(project_ids)::bigint[] IS NULL OR project_id = ANY(sqlc.narg(project_ids)))
-GROUP BY status;
-
 -- name: WebRecentBuilds :many
 SELECT b.*, p.owner, p.name AS project_name, p.forge, p.url
 FROM builds b JOIN projects p ON p.id = b.project_id
