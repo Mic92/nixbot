@@ -9,6 +9,7 @@ keeps the module dependency graph acyclic.
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from typing import TYPE_CHECKING
 from urllib.parse import quote
 
@@ -106,7 +107,12 @@ async def _enqueue_effects(
     if not names:
         return
     await builds_q.start_pending_effects(o.pool, build_id=build.id, names=names)
-    await o.reporter.effects_started(event, build, len(names))
+    # Effect items report against build.commit_sha; match it here so a
+    # reuse with a different trigger commit does not strand the pending
+    # summary on the wrong SHA.
+    await o.reporter.effects_started(
+        replace(event, commit_sha=build.commit_sha), build, len(names)
+    )
     await wq.enqueue_effect_items(
         o.pool,
         dedup_key=f"build-{build.id}",
