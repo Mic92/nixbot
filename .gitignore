@@ -1,5 +1,6 @@
 result
 result-*
+.direnv/
 
 .nixbot-dev
 # legacy dev state dir from before the buildbot-nix -> nixbot rename
