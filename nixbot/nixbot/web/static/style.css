@@ -590,6 +590,7 @@ details.menu .menu-label {
 p.build-meta {
 	margin-top: 0;
 	color: var(--muted);
+	overflow-wrap: anywhere;
 }
 
 /* Headings */
