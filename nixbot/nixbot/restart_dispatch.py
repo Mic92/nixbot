@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from .db import BuildRecord
     from .events import RepoInfo
     from .gitrepo import FetchCredentials
+    from .models import NixEvalJobSuccess
     from .recovery import ResumableBuild
     from .service import CIService
 
@@ -69,31 +70,12 @@ async def rerun(s: CIService, build_id: int) -> bool:
     resumable = results[0] if results else None
     if resumable is None:
         return False
-    unfinished_count = await q.count_unfinished_attributes(s.pool, build_id=build_id)
-    if (
-        # A crash mid-eval leaves a partial attribute set; resuming
-        # it would report success for an incomplete build.
-        build.status != "evaluating"
-        and resumable.has_attributes
-        and len(resumable.pending_jobs) == unfinished_count
-    ):
-        # Stored drv paths may have been garbage-collected since
-        # the eval; rerunning them would fail with "path does not
-        # exist" instead of rebuilding.
-        drvs = [job.drv_path for job in resumable.pending_jobs]
-        valid = await check_store_paths(drvs)
-        if all(drv in valid for drv in drvs):
-            await s.orchestrator.rerun_pending_attributes(
-                info, build, resumable.pending_jobs, credentials
-            )
-            return False
-        logger.info(
-            "stored derivations missing from the store; re-evaluating",
-            extra={"build_id": build_id},
-        )
-    # No resumable eval results (no attribute rows, or unfinished
-    # rows without drv_path): an empty rerun would aggregate to
-    # "succeeded" without building anything; re-evaluate instead.
+    jobs = await _resumable_eval_jobs(s, build, resumable)
+    if jobs is not None:
+        await s.orchestrator.rerun_pending_attributes(info, build, jobs, credentials)
+        return False
+    # No usable stored eval: re-evaluate rather than rerun an empty set
+    # that would aggregate straight to "succeeded".
     try:
         await _reeval(s, info, build, credentials)
     except Exception:
@@ -106,6 +88,38 @@ async def rerun(s: CIService, build_id: int) -> bool:
         )
         await _report_interrupted(s, resumable)
     return False
+
+
+async def _resumable_eval_jobs(
+    s: CIService, build: BuildRecord, resumable: ResumableBuild
+) -> list[NixEvalJobSuccess] | None:
+    """Return the build's stored pending jobs if they form a complete,
+    runnable eval result, otherwise None so the caller re-evaluates.
+
+    This is the one place that decides whether a build can resume from
+    its stored rows. build_attributes holds both the live eval progress
+    and the cached result, and only eval_completed tells them apart.
+    """
+    if not build.eval_completed:
+        # A partial set (crash or cancellation mid-eval) would resume as
+        # an incomplete build reporting success.
+        return None
+    if not resumable.has_attributes:
+        return None
+    unfinished_count = await q.count_unfinished_attributes(s.pool, build_id=build.id)
+    if len(resumable.pending_jobs) != unfinished_count:
+        return None
+    # Stored drv paths may have been garbage-collected since the eval;
+    # rerunning them would fail with "path does not exist".
+    drvs = [job.drv_path for job in resumable.pending_jobs]
+    valid = await check_store_paths(drvs)
+    if not all(drv in valid for drv in drvs):
+        logger.info(
+            "stored derivations missing from the store; re-evaluating",
+            extra={"build_id": build.id},
+        )
+        return None
+    return resumable.pending_jobs
 
 
 async def _reeval(

@@ -332,15 +332,22 @@ async def insert_build(  # noqa: PLR0913
     effects_started: bool = False,
     error: str | None = None,
     started: bool = False,
+    eval_completed: bool | None = None,
 ) -> int:
-    """A builds row for the project."""
+    """A builds row for the project.
+
+    eval_completed defaults as in production: set once past
+    pending/evaluating. Pass it explicitly to model a mid-eval crash or
+    cancellation."""
+    if eval_completed is None:
+        eval_completed = status not in ("pending", "evaluating")
     return await pool.fetchval(
         """
         INSERT INTO builds (project_id, number, branch, commit_sha, tree_hash,
                             status, pr_number, pr_author, effects_started,
-                            error, started_at)
+                            error, started_at, eval_completed)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-                CASE WHEN $11 THEN now() END)
+                CASE WHEN $11 THEN now() END, $12)
         RETURNING id
         """,
         project_id,
@@ -354,6 +361,7 @@ async def insert_build(  # noqa: PLR0913
         effects_started,
         error,
         started,
+        eval_completed,
     )
 
 

@@ -457,6 +457,58 @@ async def test_restart_cancelled_build_reschedules_attributes(
     assert rescheduled == [["a", "b"]]
 
 
+async def test_restart_cancelled_mid_eval_reevaluates(
+    service: CIService, git_repo: tuple[Path, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A build cancelled mid-eval has a partial attribute set with
+    eval_completed unset. Restarting must re-evaluate, not resume the
+    partial set, even when its derivations are still in the store."""
+    repo, sha = git_repo
+
+    async def all_valid(paths: list[str]) -> set[str]:
+        return set(paths)
+
+    monkeypatch.setattr("nixbot.restart_dispatch.check_store_paths", all_valid)
+
+    pool = service.pool
+    project_id = await seed_project(pool, str(repo))
+    # Post-reset state: status and attrs back to pending, but a mid-eval
+    # cancellation never set eval_completed.
+    build_id = await insert_build(
+        pool,
+        project_id,
+        commit_sha=sha,
+        status="pending",
+        eval_completed=False,
+    )
+    await pool.execute(
+        "INSERT INTO build_attributes (build_id, attr, system, status, "
+        "drv_path) VALUES ($1, 'partial', 'x86_64-linux', 'pending', "
+        "'/nix/store/p.drv')",
+        build_id,
+    )
+
+    reevals: list[int] = []
+    resumes: list[int] = []
+
+    async def fake_run_build(
+        event: Any, build: Any, worktree_path: Path, credentials: Any = None
+    ) -> None:
+        reevals.append(build.id)
+
+    async def fake_resume(
+        info: Any, build: Any, jobs: Any, credentials: Any = None
+    ) -> None:
+        resumes.append(build.id)
+
+    service.orchestrator.run_build = fake_run_build  # type: ignore[method-assign]
+    service.orchestrator.rerun_pending_attributes = fake_resume  # type: ignore[method-assign, assignment]
+    await restart_dispatch.rerun(service, build_id)
+
+    assert resumes == []
+    assert reevals == [build_id]
+
+
 async def test_restart_while_unwinding_waits_then_runs(
     service: CIService,
     git_repo: tuple[Path, str],
