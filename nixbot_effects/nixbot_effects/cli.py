@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from . import (
+    NixbotEffectsError,
     instantiate_effects,
     instantiate_scheduled_effect,
     list_effects,
@@ -354,7 +355,13 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    args.func(args)
+    try:
+        args.func(args)
+    except NixbotEffectsError as e:
+        # The underlying command already printed its own diagnostics; a
+        # Python traceback on top is just noise in the run log.
+        print(f"error: {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
