@@ -58,9 +58,12 @@ services.nixbot = {
     oauthSecretFile = "/path/to/oauth-secret";
 
     # Optional: request the write-capable "repo" OAuth scope at login so
-    # private repositories are visible to their members. GitHub has no
-    # read-only repo scope, so leave this off (the default) unless the
-    # instance builds private repositories.
+    # private repositories are visible to their members, and so the login
+    # token carries the push access that drives the per-repo restart
+    # button (see "OAuth scope and the restart button" below). GitHub has
+    # no read-only repo scope: "repo" grants write access and nixbot
+    # stores the token server-side for the session. Off by default; leave
+    # it off unless the instance builds private repositories.
     # oauthPrivateRepoScope = true;
 
     # A random secret used to verify incoming webhooks from GitHub
@@ -114,6 +117,23 @@ For each repository you want to build:
   - Repo writers: Users with write access to the repo can restart/cancel its
     builds
   - PR authors: Can restart/cancel the builds of their own pull request
+
+### OAuth scope and the restart button
+
+The "repo writers" role is decided from the `permissions.push` flag GitHub
+returns for each repository from `GET /user/repos`, matched against the login
+user's OAuth token. Adding a user as a collaborator is therefore not enough on
+its own: they must log in via the GitHub button so nixbot holds a token, and
+that token must actually surface their push access.
+
+`oauthPrivateRepoScope` controls the scope of that login token (`read:user` by
+default, `read:user repo` when enabled). GitHub classic OAuth has no read-only
+repo scope, so `repo` unavoidably grants write access and nixbot stores the
+token server-side for the session. Enable it only if you need private-repo
+visibility.
+
+Instance admins and PR authors can always restart their builds regardless of
+this setting.
 
 ## Troubleshooting
 
