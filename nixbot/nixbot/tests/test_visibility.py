@@ -70,6 +70,7 @@ async def seed(dsn: str) -> None:
         for repo_id, name, private in [
             ("pub-1", "public", False),
             ("priv-1", "secret", True),
+            ("pending-1", "pending", True),
         ]:
             project_id = await insert_project(
                 pool, name, forge_repo_id=repo_id, private=private
@@ -80,6 +81,11 @@ async def seed(dsn: str) -> None:
                 "VALUES ($1, 'a.x', 'x86_64-linux', 'succeeded')",
                 build_id,
             )
+        # A discovered-but-disabled repo: only admins should see it, and
+        # without needing a search query.
+        await pool.execute(
+            "UPDATE projects SET enabled = FALSE WHERE forge_repo_id = 'pending-1'"
+        )
 
 
 FETCHER = FakeFetcher({"github:carol:tok-carol": frozenset({"github:priv-1"})})
@@ -143,6 +149,19 @@ def test_authorized_user_sees_private(harness: WebHarness) -> None:
 
 def test_admin_sees_everything(harness: WebHarness) -> None:
     assert harness.get("/repos/github/acme/secret", ROOT).status_code == 200
+
+
+def test_admin_sees_disabled_repos_without_search(harness: WebHarness) -> None:
+    home = harness.get("/", ROOT).text
+    assert "Disabled" in home
+    assert "acme/pending" in home
+
+
+def test_non_admin_does_not_see_disabled_repos(harness: WebHarness) -> None:
+    # Anonymous and unauthorized users have an empty toggleable set, so
+    # the disabled list stays hidden.
+    assert "acme/pending" not in harness.get("/").text
+    assert "acme/pending" not in harness.get("/", MALLORY, "tok-mallory").text
 
 
 def test_admin_api_token_sees_private(harness: WebHarness) -> None:

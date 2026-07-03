@@ -90,8 +90,8 @@
         {% else %}
           {% if q %}
             <p class="muted">no matching repositories</p>
-          {% elif toggleable is none or toggleable %}
-            <p class="muted">no repositories enabled yet — search above to find yours</p>
+          {% elif disabled_projects %}
+            <p class="muted">no repositories enabled yet — enable one from the list below</p>
           {% else %}
             <p class="muted">no repositories enabled yet</p>
           {% endif %}

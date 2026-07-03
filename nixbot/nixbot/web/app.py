@@ -269,12 +269,14 @@ class _PageRoutes:
     async def index(self, request: Request, q: str = "") -> HTMLResponse:
         ctx = self.ctx
         visible = await ctx.visible_repo_ids(request)
-        # Discovery inserts repos disabled; admins enable them via
-        # search, which is the only place disabled projects appear.
+        # Discovery inserts repos disabled. Admins see the disabled repos
+        # they may toggle so a fresh instance is not a blank page; the
+        # search box filters the list. Non-admins have an empty
+        # toggleable set and see nothing here.
         toggleable = await ctx.toggleable_repo_ids(request)
         disabled = [
             p
-            for p in (await ctx.queries.projects(enabled=False, q=q) if q else [])
+            for p in await ctx.queries.projects(enabled=False, q=q)
             if toggleable is None or p["id"] in toggleable
         ]
         return await ctx.render(
