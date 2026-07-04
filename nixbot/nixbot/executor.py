@@ -35,7 +35,7 @@ from urllib.parse import quote
 
 import zstandard
 
-from .ansi import strip_ansi
+from .ansi import ANSI_TOKEN_RE, strip_ansi
 from .build_scheduler import BuildOutcome
 from .gcroots import safe_attr_filename
 from .proc import ProcessGroup
@@ -402,6 +402,30 @@ _EXCERPT_NOISE = re.compile(
 )
 
 
+_LINE_CHAR_LIMIT = 650
+
+
+def _limit_line(line: str, limit: int = _LINE_CHAR_LIMIT) -> str:
+    """Cap a line at `limit` visible characters, escapes not counted and
+    never severed; a dropped tail's SGR reset is re-appended so color
+    does not bleed into later lines."""
+    visible = 0
+    pos = 0
+    # ANSI_TOKEN_RE spans are escapes; the gaps between them are text.
+    for start, end in [(m.start(), m.end()) for m in ANSI_TOKEN_RE.finditer(line)] + [
+        (len(line), len(line))
+    ]:
+        room = limit - visible
+        if start - pos >= room:
+            # Reserve the last slot for the ellipsis.
+            kept = line[: pos + room - 1]
+            reset = "\x1b[0m" if ANSI_TOKEN_RE.search(kept) else ""
+            return kept + "…" + reset
+        visible += start - pos
+        pos = end
+    return line
+
+
 def failure_excerpt(tail: str, max_lines: int = 8) -> str:
     """The interesting part of a failed build's output: the builder's
     log lines (name>-prefixed from internal-json, deduped against
@@ -419,9 +443,9 @@ def failure_excerpt(tail: str, max_lines: int = 8) -> str:
             reason = raw
         elif plain and not _EXCERPT_NOISE.match(plain):
             other.setdefault(plain, raw)
-    lines = list((quoted or other).values())[-max_lines:]
+    lines = [_limit_line(x) for x in list((quoted or other).values())[-max_lines:]]
     if reason:
-        lines.append(reason)
+        lines.append(_limit_line(reason))
     return "\n".join(lines)
 
 
