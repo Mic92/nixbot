@@ -22,8 +22,14 @@ from nixbot.auth import User
 from nixbot.build_scheduler import AttributeStatus
 from nixbot.db import BuildStatus
 from nixbot.effects_state import TaskTokens
-from nixbot.executor import LogWriter, attribute_log_path, effect_log_path
+from nixbot.executor import (
+    LogWriter,
+    attribute_log_path,
+    container_path,
+    effect_log_path,
+)
 from nixbot.forge_tokens import ForgeTokenStore
+from nixbot.logstore import LogContainerWriter
 from nixbot.web import events as events_module
 from nixbot.web.auth_routes import SESSION_COOKIE, create_auth_router
 from nixbot.web.events import EventBroker
@@ -724,6 +730,51 @@ def test_log_viewer_and_raw(client: WebHarness, tmp_path: Path) -> None:
 
     missing = client.get("/repos/github/acme/widget/builds/2/logs/nope")
     assert missing.status_code == 404
+
+
+def test_structured_log_endpoints(client: WebHarness, tmp_path: Path) -> None:
+    async def run() -> None:
+        ctx = client.ctx
+        ctx.state_dir = tmp_path
+        build_id = await ctx.pool.fetchval("SELECT id FROM builds WHERE number = 2")
+        log_file = attribute_log_path(tmp_path, build_id, "x86_64-linux.bad")
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        log_file.write_bytes(zstandard.ZstdCompressor().compress(b"flat\n"))
+        w = LogContainerWriter()
+        w.register("/nix/store/aaa-qtbase-5.0.drv", "qtbase-5.0")
+        w.phase("/nix/store/aaa-qtbase-5.0.drv", "build")
+        w.line("/nix/store/aaa-qtbase-5.0.drv", "CC main.o")
+        w.line("/nix/store/aaa-qtbase-5.0.drv", "error: boom undeclared")
+        w.status("/nix/store/aaa-qtbase-5.0.drv", "failed")
+        container_path(log_file).write_bytes(w.finalize())
+
+    client.loop.run_until_complete(run())
+    base = "/repos/github/acme/widget/builds/2"
+    attr = "x86_64-linux.bad"
+
+    toc = client.get(f"{base}/logs/{attr}/toc").json()
+    assert toc["format"] == "nbl1"
+    assert toc["derivations"][0]["name"] == "qtbase-5.0"
+    assert toc["derivations"][0]["ph"] == [["build", 0]]
+
+    rows = client.get(f"{base}/logs/{attr}/drv/0").text
+    assert 'id="L1"' in rows
+    assert "CC main.o" in rows
+
+    hits = client.get(f"{base}/search?q=undeclared").json()
+    assert hits["groups"]
+    g = hits["groups"][0]
+    assert g["name"] == "qtbase-5.0"
+    assert g["attr"] == attr
+    assert g["lines"] == [2]
+
+
+def test_log_toc_legacy_without_container(client: WebHarness, tmp_path: Path) -> None:
+    seed_log(client, tmp_path)
+    toc = client.get(
+        "/repos/github/acme/widget/builds/2/logs/x86_64-linux.bad/toc"
+    ).json()
+    assert toc["format"] == "legacy"
 
 
 def test_attr_named_dot_txt_not_shadowed_by_raw_route(

@@ -30,7 +30,8 @@ from ..build_scheduler import TERMINAL_FAILURES  # noqa: TID252
 from ..db_gen import maintenance as maint_gen  # noqa: TID252
 from ..db_gen import scheduled as sched_gen  # noqa: TID252
 from ..db_gen import web as gen  # noqa: TID252
-from ..executor import log_path_for_key, read_log  # noqa: TID252
+from ..executor import container_path, log_path_for_key, read_log  # noqa: TID252
+from ..logstore import LogContainerReader, is_container  # noqa: TID252
 from ..status import NO_LOG_STATUSES  # noqa: TID252
 from .api_routes import FailureSummary, clean_row
 
@@ -208,6 +209,31 @@ def render_log_lines(text: str) -> str:
     # .logline is display:block; a joining "\n" inside <pre> would
     # render as an extra blank line.
     return "".join(lines)
+
+
+def render_drv_lines(reader: LogContainerReader, i: int, base: int = 0) -> str:
+    """One derivation's log as anchored HTML rows; `base` offsets the
+    global line numbers so anchors stay unique across the whole log."""
+    lines = []
+    style = _RESET
+    for n, line in enumerate(reader.lines(i), base + 1):
+        rendered, style = _ansi_convert(line, style)
+        lines.append(
+            f'<span class="logline" id="L{n}">'
+            f'<a class="lineno" href="#L{n}">{n}</a>{rendered}</span>'
+        )
+    return "".join(lines)
+
+
+async def _load_container(path: Path | None) -> LogContainerReader | None:
+    """The `.nbl1` sidecar if a finished build wrote one, else None."""
+    if path is None:
+        return None
+    cpath = container_path(path)
+    if not await asyncio.to_thread(cpath.exists):
+        return None
+    blob = await asyncio.to_thread(cpath.read_bytes)
+    return LogContainerReader(blob) if is_container(blob) else None
 
 
 async def _log_text(
@@ -500,6 +526,72 @@ class _LogRoutes:
         _, build = await self._build_or_404(request, forge, owner, name, number)
         return await _failure_summary(self.ctx, self.registry, build, tail)
 
+    async def log_toc(  # noqa: PLR0913
+        self,
+        request: Request,
+        forge: str,
+        owner: str,
+        name: str,
+        number: int,
+        attr: str,
+    ) -> dict:
+        """Per-derivation table of contents; `{format: "legacy"}` when no
+        container exists (old or running builds) so the client falls back."""
+        _, _, path = await self._resolve(request, forge, owner, name, number, attr)
+        reader = await _load_container(path)
+        if reader is None:
+            return {"format": "legacy"}
+        fields = ("name", "status", "n", "ph", "t0", "t1")
+        drvs = [
+            {"idx": i, **{k: reader.entry(i)[k] for k in fields}}
+            for i in range(len(reader))
+        ]
+        return {"format": "nbl1", "derivations": drvs}
+
+    async def log_drv_lines(  # noqa: PLR0913
+        self,
+        request: Request,
+        forge: str,
+        owner: str,
+        name: str,
+        number: int,
+        attr: str,
+        idx: int,
+    ) -> HTMLResponse:
+        """One derivation's log as anchored HTML rows."""
+        _, _, path = await self._resolve(request, forge, owner, name, number, attr)
+        reader = await _load_container(path)
+        if reader is None or not (0 <= idx < len(reader)):
+            raise HTTPException(status_code=404)
+        base = sum(reader.entry(i)["n"] for i in range(idx))
+        html = await asyncio.to_thread(render_drv_lines, reader, idx, base)
+        return HTMLResponse(html)
+
+    async def build_search(  # noqa: PLR0913
+        self,
+        request: Request,
+        forge: str,
+        owner: str,
+        name: str,
+        number: int,
+        q: str = Query(..., min_length=2),
+    ) -> dict:
+        """Search every attribute's container; per-derivation hit groups
+        (attr, name, line numbers), failures first. No container -> skipped."""
+        _, build = await self._build_or_404(request, forge, owner, name, number)
+        groups = []
+        for a in await self.ctx.queries.attributes(build["id"]):
+            path = log_path_for_key(self.ctx.state_dir, build["id"], a["attr"])
+            reader = await _load_container(path)
+            if reader is None:
+                continue
+            for hit in await asyncio.to_thread(reader.search, q):
+                hit["attr"] = a["attr"]
+                hit["status"] = reader.entry(hit["idx"])["status"]
+                groups.append(hit)
+        groups.sort(key=lambda h: (h["status"] != "failed", -len(h["lines"])))
+        return {"query": q, "groups": groups}
+
     async def log_stream(  # noqa: PLR0913
         self,
         request: Request,
@@ -581,9 +673,14 @@ def create_log_router(ctx: WebContext, registry: LogRegistry) -> APIRouter:
     # order matters — raw/stream/.txt are matched before the greedy
     # viewer catch-all. /logs/raw/{attr} is the unambiguous raw route;
     # the .txt suffix stays as a fallback for existing consumers.
+    router.get(f"{_BASE}/search")(routes.build_search)
     router.get(f"{_BASE}/logs/raw/{{attr:path}}")(routes.log_raw_text)
     router.get(f"{_BASE}/logs/{{attr}}.txt")(routes.log_raw_text_legacy)
     router.get(f"{_BASE}/logs/{{attr:path}}/stream")(routes.log_stream)
+    router.get(f"{_BASE}/logs/{{attr:path}}/toc")(routes.log_toc)
+    router.get(f"{_BASE}/logs/{{attr:path}}/drv/{{idx}}", response_class=HTMLResponse)(
+        routes.log_drv_lines
+    )
     router.get(f"{_BASE}/logs/{{attr:path}}", response_class=HTMLResponse)(
         routes.log_viewer
     )
