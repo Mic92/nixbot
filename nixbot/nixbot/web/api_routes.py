@@ -91,8 +91,8 @@ class Attribute(BaseModel):
     error: str | None
     started_at: datetime | None
     finished_at: datetime | None
-    log_path: str | None = None
     log_size: int | None = None
+    log_truncated: bool | None = None
 
 
 class BuildDetail(BaseModel):

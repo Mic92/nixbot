@@ -94,9 +94,7 @@ SELECT (max(number) FILTER (WHERE number < sqlc.arg(number)))::bigint AS prev,
 FROM builds WHERE project_id = $1;
 
 -- name: WebAttributes :many
-SELECT a.*, l.path AS log_path, l.size_bytes AS log_size
-FROM build_attributes a
-LEFT JOIN logs l ON l.attribute_id = a.id
+SELECT a.* FROM build_attributes a
 WHERE a.build_id = $1
 -- Display order: failures first, then running, then the rest.
 ORDER BY CASE
@@ -117,9 +115,7 @@ WHERE build_id = $1 AND (sqlc.narg(pattern)::text IS NULL OR attr ILIKE sqlc.nar
 GROUP BY status;
 
 -- name: WebAttributePage :many
-SELECT a.*, l.path AS log_path, l.size_bytes AS log_size
-FROM build_attributes a
-LEFT JOIN logs l ON l.attribute_id = a.id
+SELECT a.* FROM build_attributes a
 WHERE a.build_id = $1 AND a.status = ANY(sqlc.arg(statuses)::text[])
   AND (sqlc.narg(pattern)::text IS NULL OR a.attr ILIKE sqlc.narg(pattern))
 ORDER BY a.attr LIMIT sqlc.arg(limit_)::bigint OFFSET sqlc.arg(offset_)::bigint;
@@ -155,15 +151,6 @@ WHERE b.status IN ('pending', 'evaluating', 'building')
   AND (sqlc.narg(project_ids)::bigint[] IS NULL OR p.id = ANY(sqlc.narg(project_ids)))
 -- Active builds first; queue_position stays FIFO.
 ORDER BY b.status = 'pending', b.id;
-
--- name: EffectLogPath :one
-SELECT log_path AS path FROM build_effects
-WHERE build_id = $1 AND name = $2 AND log_path IS NOT NULL;
-
--- name: AttributeLogPath :one
-SELECT l.path FROM logs l
-JOIN build_attributes a ON a.id = l.attribute_id
-WHERE a.build_id = $1 AND a.attr = $2;
 
 -- name: AttributeStatus :one
 SELECT status FROM build_attributes WHERE build_id = $1 AND attr = $2;

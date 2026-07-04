@@ -101,39 +101,30 @@ RETURNING status_generation
 """
 
 COMPLETE_ATTRIBUTE: typing.Final[str] = """-- name: CompleteAttribute :exec
-WITH attr AS (
-    INSERT INTO build_attributes
-        (build_id, attr, system, drv_path, outputs, status, error,
-         cached, finished_at)
-    VALUES ($1, $2, $3, $4, $11::jsonb, $5, $6, $7, now())
-    ON CONFLICT (build_id, attr) DO UPDATE SET
-        status = EXCLUDED.status,
-        -- Eval recorded the full outputs map (multi-output drvs);
-        -- merge the freshly-known "out" path into it instead of
-        -- replacing it, and never NULL an existing map when no out
-        -- path is known.
-        outputs = CASE
-            WHEN EXCLUDED.outputs IS NULL
-                THEN build_attributes.outputs
-            ELSE COALESCE(build_attributes.outputs, '{}'::jsonb)
-                || EXCLUDED.outputs
-        END,
-        error = EXCLUDED.error,
-        cached = EXCLUDED.cached,
-        finished_at = now()
-    WHERE NOT $12::boolean
-        OR build_attributes.status IN ('pending', 'building')
-    RETURNING build_attributes.id
-), dropped AS (
-    -- Reruns rewrite the same log file; replace the metadata row
-    -- instead of accumulating duplicates.
-    DELETE FROM logs WHERE attribute_id IN (SELECT attr.id FROM attr)
-      AND $8::text IS NOT NULL
-)
-INSERT INTO logs (attribute_id, path, size_bytes, truncated)
-SELECT attr.id, $8, $9::bigint,
-       $10::boolean
-FROM attr WHERE $8::text IS NOT NULL
+INSERT INTO build_attributes
+    (build_id, attr, system, drv_path, outputs, status, error,
+     cached, log_size, log_truncated, finished_at)
+VALUES ($1, $2, $3, $4, $8::jsonb, $5, $6, $7,
+        $9::bigint, $10::boolean, now())
+ON CONFLICT (build_id, attr) DO UPDATE SET
+    status = EXCLUDED.status,
+    -- Eval recorded the full outputs map (multi-output drvs);
+    -- merge the freshly-known "out" path into it instead of
+    -- replacing it, and never NULL an existing map when no out
+    -- path is known.
+    outputs = CASE
+        WHEN EXCLUDED.outputs IS NULL
+            THEN build_attributes.outputs
+        ELSE COALESCE(build_attributes.outputs, '{}'::jsonb)
+            || EXCLUDED.outputs
+    END,
+    error = EXCLUDED.error,
+    cached = EXCLUDED.cached,
+    log_size = EXCLUDED.log_size,
+    log_truncated = EXCLUDED.log_truncated,
+    finished_at = now()
+WHERE NOT $11::boolean
+    OR build_attributes.status IN ('pending', 'building')
 """
 
 CREATE_BUILD: typing.Final[str] = """-- name: CreateBuild :one
@@ -174,7 +165,7 @@ WHERE id = $1 RETURNING id, project_id, number, tree_hash, commit_sha, branch, p
 """
 
 EFFECTS_FOR_BUILD: typing.Final[str] = """-- name: EffectsForBuild :many
-SELECT id, build_id, name, status, error, log_path, log_size, log_truncated, started_at, finished_at FROM build_effects WHERE build_id = $1 ORDER BY name
+SELECT id, build_id, name, status, error, log_size, log_truncated, started_at, finished_at FROM build_effects WHERE build_id = $1 ORDER BY name
 """
 
 EVAL_JOB_ROWS: typing.Final[str] = """-- name: EvalJobRows :many
@@ -195,7 +186,7 @@ AND status <> 'cancelled' ORDER BY id DESC LIMIT 1
 
 FINISH_EFFECT: typing.Final[str] = """-- name: FinishEffect :exec
 UPDATE build_effects SET
-    status = $3, error = $6, log_path = $7,
+    status = $3, error = $6,
     log_size = $4, log_truncated = $5, finished_at = now()
 WHERE build_id = $1 AND name = $2
 """
@@ -296,7 +287,7 @@ WHERE build_id = $1 AND status IN ('pending', 'building')
 START_EFFECT: typing.Final[str] = """-- name: StartEffect :exec
 INSERT INTO build_effects (build_id, name, status) VALUES ($1, $2, $3)
 ON CONFLICT (build_id, name) DO UPDATE SET
-    status = $3, error = NULL, log_path = NULL, log_size = 0,
+    status = $3, error = NULL, log_size = 0,
     log_truncated = FALSE, started_at = now(), finished_at = NULL
 """
 
@@ -305,7 +296,7 @@ INSERT INTO build_effects (build_id, name, status)
 SELECT $1::bigint, u.name, 'pending'
 FROM unnest($2::text[]) AS u(name)
 ON CONFLICT (build_id, name) DO UPDATE SET
-    status = 'pending', error = NULL, log_path = NULL, log_size = 0,
+    status = 'pending', error = NULL, log_size = 0,
     log_truncated = FALSE, started_at = now(), finished_at = NULL
 """
 
@@ -385,8 +376,8 @@ async def bump_build_status(conn: ConnectionLike, *, id_: int, status: str) -> i
     return row[0]
 
 
-async def complete_attribute(conn: ConnectionLike, *, build_id: int, attr: str, system: str | None, drv_path: str | None, status: str, error: str | None, cached: bool, log_path: str | None, log_size: int, log_truncated: bool, outputs: str | None, if_unfinished: bool) -> None:
-    await conn.execute(COMPLETE_ATTRIBUTE, build_id, attr, system, drv_path, status, error, cached, log_path, log_size, log_truncated, outputs, if_unfinished)
+async def complete_attribute(conn: ConnectionLike, *, build_id: int, attr: str, system: str | None, drv_path: str | None, status: str, error: str | None, cached: bool, outputs: str | None, log_size: int, log_truncated: bool, if_unfinished: bool) -> None:
+    await conn.execute(COMPLETE_ATTRIBUTE, build_id, attr, system, drv_path, status, error, cached, outputs, log_size, log_truncated, if_unfinished)
 
 
 async def create_build(conn: ConnectionLike, *, project_id: int, tree_hash: str | None, commit_sha: str, branch: str, pr_number: int | None, pr_author: str | None) -> models.Build | None:
@@ -412,7 +403,7 @@ async def detach_build_from_pr(conn: ConnectionLike, *, id_: int, pr_number: int
 
 def effects_for_build(conn: ConnectionLike, *, build_id: int) -> QueryResults[models.BuildEffect]:
     def _decode_hook(row: asyncpg.Record) -> models.BuildEffect:
-        return models.BuildEffect(id=row[0], build_id=row[1], name=row[2], status=row[3], error=row[4], log_path=row[5], log_size=row[6], log_truncated=row[7], started_at=row[8], finished_at=row[9])
+        return models.BuildEffect(id=row[0], build_id=row[1], name=row[2], status=row[3], error=row[4], log_size=row[5], log_truncated=row[6], started_at=row[7], finished_at=row[8])
     return QueryResults[models.BuildEffect](conn, EFFECTS_FOR_BUILD, _decode_hook, build_id)
 
 
@@ -436,8 +427,8 @@ async def find_reusable_build(conn: ConnectionLike, *, project_id: int, tree_has
     return models.Build(id=row[0], project_id=row[1], number=row[2], tree_hash=row[3], commit_sha=row[4], branch=row[5], pr_number=row[6], pr_author=row[7], status=row[8], status_generation=row[9], effects_started=row[10], error=row[11], created_at=row[12], started_at=row[13], finished_at=row[14], eval_warnings=row[15], eval_completed=row[16], effects_commit_sha=row[17], effects_branch=row[18], effects_pr_number=row[19])
 
 
-async def finish_effect(conn: ConnectionLike, *, build_id: int, name: str, status: str, log_size: int, log_truncated: bool, error: str | None, log_path: str | None) -> None:
-    await conn.execute(FINISH_EFFECT, build_id, name, status, log_size, log_truncated, error, log_path)
+async def finish_effect(conn: ConnectionLike, *, build_id: int, name: str, status: str, log_size: int, log_truncated: bool, error: str | None) -> None:
+    await conn.execute(FINISH_EFFECT, build_id, name, status, log_size, log_truncated, error)
 
 
 async def get_build(conn: ConnectionLike, *, id_: int) -> models.Build | None:

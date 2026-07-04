@@ -11,7 +11,6 @@ from __future__ import annotations
 import logging
 from dataclasses import replace
 from typing import TYPE_CHECKING
-from urllib.parse import quote
 
 from .db_gen import builds as builds_q
 from .db_gen import maintenance as q
@@ -208,13 +207,7 @@ async def _run_one_effect(
     # A green commit status on a failed deploy hides the failure; report
     # per-effect status so the forge reflects the real outcome.
     await o.reporter.effect_started(event, build, name)
-    # Effect names come from untrusted flakes; percent-encode so
-    # the log file cannot escape the log directory. The "effects/"
-    # subdirectory keeps them apart from attribute logs (a flat
-    # prefix would collide with an attribute named "effect-X").
-    async with o.open_log(
-        build.id, f"effect:{name}", f"effects/{quote(name, safe='')}.zst"
-    ) as writer:
+    async with o.open_log(build.id, f"effect:{name}") as writer:
         try:
             success = await run_effect(ctx, name, writer.write)
         except Exception as e:
@@ -237,7 +230,6 @@ async def _run_one_effect(
         name=name,
         status="succeeded" if success else "failed",
         error=error,
-        log_path=str(writer.path.relative_to(o.config.state_dir)),
         log_size=writer.bytes_seen,
         log_truncated=writer.truncated,
     )

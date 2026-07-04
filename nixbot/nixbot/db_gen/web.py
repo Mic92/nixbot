@@ -13,15 +13,11 @@ __all__: collections.abc.Sequence[str] = (
     "WebAttributeCountsRow",
     "WebAttributeHistoryRow",
     "WebAttributeNeighborNumbersRow",
-    "WebAttributePageRow",
-    "WebAttributesRow",
     "WebNeighborNumbersRow",
     "WebQueueRow",
     "WebRecentBuildsRow",
     "WebRepoOverviewRow",
-    "attribute_log_path",
     "attribute_status",
-    "effect_log_path",
     "metrics_attribute_counts",
     "metrics_build_counts",
     "metrics_build_duration",
@@ -104,6 +100,8 @@ class WebAttributeHistoryRow:
     error: str | None
     started_at: datetime.datetime | None
     finished_at: datetime.datetime | None
+    log_size: int
+    log_truncated: bool
     build_number: int
     branch: str
     commit_sha: str
@@ -114,40 +112,6 @@ class WebAttributeHistoryRow:
 class WebAttributeNeighborNumbersRow:
     prev: int
     next: int
-
-
-@dataclasses.dataclass()
-class WebAttributePageRow:
-    id: int
-    build_id: int
-    attr: str
-    system: str | None
-    drv_path: str | None
-    outputs: str | None
-    status: str
-    cached: bool
-    error: str | None
-    started_at: datetime.datetime | None
-    finished_at: datetime.datetime | None
-    log_path: str | None
-    log_size: int | None
-
-
-@dataclasses.dataclass()
-class WebAttributesRow:
-    id: int
-    build_id: int
-    attr: str
-    system: str | None
-    drv_path: str | None
-    outputs: str | None
-    status: str
-    cached: bool
-    error: str | None
-    started_at: datetime.datetime | None
-    finished_at: datetime.datetime | None
-    log_path: str | None
-    log_size: int | None
 
 
 @dataclasses.dataclass()
@@ -239,19 +203,8 @@ class WebRepoOverviewRow:
     pass_rate: int
 
 
-ATTRIBUTE_LOG_PATH: typing.Final[str] = """-- name: AttributeLogPath :one
-SELECT l.path FROM logs l
-JOIN build_attributes a ON a.id = l.attribute_id
-WHERE a.build_id = $1 AND a.attr = $2
-"""
-
 ATTRIBUTE_STATUS: typing.Final[str] = """-- name: AttributeStatus :one
 SELECT status FROM build_attributes WHERE build_id = $1 AND attr = $2
-"""
-
-EFFECT_LOG_PATH: typing.Final[str] = """-- name: EffectLogPath :one
-SELECT log_path AS path FROM build_effects
-WHERE build_id = $1 AND name = $2 AND log_path IS NOT NULL
 """
 
 METRICS_ATTRIBUTE_COUNTS: typing.Final[str] = """-- name: MetricsAttributeCounts :many
@@ -287,7 +240,7 @@ GROUP BY status
 """
 
 WEB_ATTRIBUTE_HISTORY: typing.Final[str] = """-- name: WebAttributeHistory :many
-SELECT a.id, a.build_id, a.attr, a.system, a.drv_path, a.outputs, a.status, a.cached, a.error, a.started_at, a.finished_at, b.number AS build_number, b.branch, b.commit_sha,
+SELECT a.id, a.build_id, a.attr, a.system, a.drv_path, a.outputs, a.status, a.cached, a.error, a.started_at, a.finished_at, a.log_size, a.log_truncated, b.number AS build_number, b.branch, b.commit_sha,
        b.created_at AS build_created_at
 FROM build_attributes a
 JOIN builds b ON b.id = a.build_id
@@ -304,18 +257,14 @@ WHERE b.project_id = $1 AND a.attr = $2
 """
 
 WEB_ATTRIBUTE_PAGE: typing.Final[str] = """-- name: WebAttributePage :many
-SELECT a.id, a.build_id, a.attr, a.system, a.drv_path, a.outputs, a.status, a.cached, a.error, a.started_at, a.finished_at, l.path AS log_path, l.size_bytes AS log_size
-FROM build_attributes a
-LEFT JOIN logs l ON l.attribute_id = a.id
+SELECT a.id, a.build_id, a.attr, a.system, a.drv_path, a.outputs, a.status, a.cached, a.error, a.started_at, a.finished_at, a.log_size, a.log_truncated FROM build_attributes a
 WHERE a.build_id = $1 AND a.status = ANY($2::text[])
   AND ($3::text IS NULL OR a.attr ILIKE $3)
 ORDER BY a.attr LIMIT $5::bigint OFFSET $4::bigint
 """
 
 WEB_ATTRIBUTES: typing.Final[str] = """-- name: WebAttributes :many
-SELECT a.id, a.build_id, a.attr, a.system, a.drv_path, a.outputs, a.status, a.cached, a.error, a.started_at, a.finished_at, l.path AS log_path, l.size_bytes AS log_size
-FROM build_attributes a
-LEFT JOIN logs l ON l.attribute_id = a.id
+SELECT a.id, a.build_id, a.attr, a.system, a.drv_path, a.outputs, a.status, a.cached, a.error, a.started_at, a.finished_at, a.log_size, a.log_truncated FROM build_attributes a
 WHERE a.build_id = $1
 ORDER BY CASE
     WHEN a.status IN ('failed', 'failed_eval', 'dependency_failed',
@@ -344,7 +293,7 @@ ORDER BY number DESC LIMIT $8 OFFSET $7
 """
 
 WEB_EFFECTS: typing.Final[str] = """-- name: WebEffects :many
-SELECT id, build_id, name, status, error, log_path, log_size, log_truncated, started_at, finished_at FROM build_effects WHERE build_id = $1 ORDER BY name
+SELECT id, build_id, name, status, error, log_size, log_truncated, started_at, finished_at FROM build_effects WHERE build_id = $1 ORDER BY name
 """
 
 WEB_NEIGHBOR_NUMBERS: typing.Final[str] = """-- name: WebNeighborNumbers :one
@@ -489,22 +438,8 @@ class QueryResults(typing.Generic[T]):
         return self._decode_hook(record)
 
 
-async def attribute_log_path(conn: ConnectionLike, *, build_id: int, attr: str) -> str | None:
-    row = await conn.fetchrow(ATTRIBUTE_LOG_PATH, build_id, attr)
-    if row is None:
-        return None
-    return row[0]
-
-
 async def attribute_status(conn: ConnectionLike, *, build_id: int, attr: str) -> str | None:
     row = await conn.fetchrow(ATTRIBUTE_STATUS, build_id, attr)
-    if row is None:
-        return None
-    return row[0]
-
-
-async def effect_log_path(conn: ConnectionLike, *, build_id: int, name: str) -> str | None:
-    row = await conn.fetchrow(EFFECT_LOG_PATH, build_id, name)
     if row is None:
         return None
     return row[0]
@@ -551,7 +486,7 @@ def web_attribute_counts(conn: ConnectionLike, *, build_id: int, pattern: str | 
 
 def web_attribute_history(conn: ConnectionLike, *, project_id: int, attr: str, limit_: int) -> QueryResults[WebAttributeHistoryRow]:
     def _decode_hook(row: asyncpg.Record) -> WebAttributeHistoryRow:
-        return WebAttributeHistoryRow(id=row[0], build_id=row[1], attr=row[2], system=row[3], drv_path=row[4], outputs=row[5], status=row[6], cached=row[7], error=row[8], started_at=row[9], finished_at=row[10], build_number=row[11], branch=row[12], commit_sha=row[13], build_created_at=row[14])
+        return WebAttributeHistoryRow(id=row[0], build_id=row[1], attr=row[2], system=row[3], drv_path=row[4], outputs=row[5], status=row[6], cached=row[7], error=row[8], started_at=row[9], finished_at=row[10], log_size=row[11], log_truncated=row[12], build_number=row[13], branch=row[14], commit_sha=row[15], build_created_at=row[16])
     return QueryResults[WebAttributeHistoryRow](conn, WEB_ATTRIBUTE_HISTORY, _decode_hook, project_id, attr, limit_)
 
 
@@ -562,16 +497,16 @@ async def web_attribute_neighbor_numbers(conn: ConnectionLike, *, project_id: in
     return WebAttributeNeighborNumbersRow(prev=row[0], next=row[1])
 
 
-def web_attribute_page(conn: ConnectionLike, *, build_id: int, statuses: collections.abc.Sequence[str], pattern: str | None, offset_: int, limit_: int) -> QueryResults[WebAttributePageRow]:
-    def _decode_hook(row: asyncpg.Record) -> WebAttributePageRow:
-        return WebAttributePageRow(id=row[0], build_id=row[1], attr=row[2], system=row[3], drv_path=row[4], outputs=row[5], status=row[6], cached=row[7], error=row[8], started_at=row[9], finished_at=row[10], log_path=row[11], log_size=row[12])
-    return QueryResults[WebAttributePageRow](conn, WEB_ATTRIBUTE_PAGE, _decode_hook, build_id, statuses, pattern, offset_, limit_)
+def web_attribute_page(conn: ConnectionLike, *, build_id: int, statuses: collections.abc.Sequence[str], pattern: str | None, offset_: int, limit_: int) -> QueryResults[models.BuildAttribute]:
+    def _decode_hook(row: asyncpg.Record) -> models.BuildAttribute:
+        return models.BuildAttribute(id=row[0], build_id=row[1], attr=row[2], system=row[3], drv_path=row[4], outputs=row[5], status=row[6], cached=row[7], error=row[8], started_at=row[9], finished_at=row[10], log_size=row[11], log_truncated=row[12])
+    return QueryResults[models.BuildAttribute](conn, WEB_ATTRIBUTE_PAGE, _decode_hook, build_id, statuses, pattern, offset_, limit_)
 
 
-def web_attributes(conn: ConnectionLike, *, build_id: int) -> QueryResults[WebAttributesRow]:
-    def _decode_hook(row: asyncpg.Record) -> WebAttributesRow:
-        return WebAttributesRow(id=row[0], build_id=row[1], attr=row[2], system=row[3], drv_path=row[4], outputs=row[5], status=row[6], cached=row[7], error=row[8], started_at=row[9], finished_at=row[10], log_path=row[11], log_size=row[12])
-    return QueryResults[WebAttributesRow](conn, WEB_ATTRIBUTES, _decode_hook, build_id)
+def web_attributes(conn: ConnectionLike, *, build_id: int) -> QueryResults[models.BuildAttribute]:
+    def _decode_hook(row: asyncpg.Record) -> models.BuildAttribute:
+        return models.BuildAttribute(id=row[0], build_id=row[1], attr=row[2], system=row[3], drv_path=row[4], outputs=row[5], status=row[6], cached=row[7], error=row[8], started_at=row[9], finished_at=row[10], log_size=row[11], log_truncated=row[12])
+    return QueryResults[models.BuildAttribute](conn, WEB_ATTRIBUTES, _decode_hook, build_id)
 
 
 async def web_build_by_number(conn: ConnectionLike, *, project_id: int, number: int) -> models.Build | None:
@@ -589,7 +524,7 @@ def web_builds_for_repo(conn: ConnectionLike, *, project_id: int, status: str | 
 
 def web_effects(conn: ConnectionLike, *, build_id: int) -> QueryResults[models.BuildEffect]:
     def _decode_hook(row: asyncpg.Record) -> models.BuildEffect:
-        return models.BuildEffect(id=row[0], build_id=row[1], name=row[2], status=row[3], error=row[4], log_path=row[5], log_size=row[6], log_truncated=row[7], started_at=row[8], finished_at=row[9])
+        return models.BuildEffect(id=row[0], build_id=row[1], name=row[2], status=row[3], error=row[4], log_size=row[5], log_truncated=row[6], started_at=row[7], finished_at=row[8])
     return QueryResults[models.BuildEffect](conn, WEB_EFFECTS, _decode_hook, build_id)
 
 

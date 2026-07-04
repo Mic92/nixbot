@@ -22,7 +22,7 @@ from nixbot.auth import User
 from nixbot.build_scheduler import AttributeStatus
 from nixbot.db import BuildStatus
 from nixbot.effects_state import TaskTokens
-from nixbot.executor import LogWriter
+from nixbot.executor import LogWriter, attribute_log_path, effect_log_path
 from nixbot.forge_tokens import ForgeTokenStore
 from nixbot.web import events as events_module
 from nixbot.web.auth_routes import SESSION_COOKIE, create_auth_router
@@ -691,21 +691,13 @@ def seed_log(client: WebHarness, tmp_path: Path) -> None:
     async def run() -> None:
         ctx = client.ctx
         ctx.state_dir = tmp_path
-        attr_id = await ctx.pool.fetchval(
-            """
-            SELECT a.id FROM build_attributes a
-            JOIN builds b ON b.id = a.build_id
-            WHERE b.number = 2 AND a.attr = 'x86_64-linux.bad'
-            """
-        )
-        await ctx.pool.execute("DELETE FROM logs WHERE attribute_id = $1", attr_id)
+        build_id = await ctx.pool.fetchval("SELECT id FROM builds WHERE number = 2")
         await ctx.pool.execute(
-            "INSERT INTO logs (attribute_id, path, size_bytes) VALUES ($1, $2, $3)",
-            attr_id,
-            "logs/2/x86_64-linux.bad.zst",
-            42,
+            "UPDATE build_attributes SET log_size = 42 "
+            "WHERE build_id = $1 AND attr = 'x86_64-linux.bad'",
+            build_id,
         )
-        log_file = tmp_path / "logs" / "2" / "x86_64-linux.bad.zst"
+        log_file = attribute_log_path(tmp_path, build_id, "x86_64-linux.bad")
         log_file.parent.mkdir(parents=True, exist_ok=True)
         log_file.write_bytes(
             zstandard.ZstdCompressor().compress(b"\x1b[31mbuild exploded\x1b[0m\n")
@@ -748,20 +740,14 @@ def test_attr_named_dot_txt_not_shadowed_by_raw_route(
             ("foo", b"plain foo log\n"),
             ("foo.txt", b"dot txt log\n"),
         ):
-            attr_id = await ctx.pool.fetchval(
-                "INSERT INTO build_attributes (build_id, attr, system, status)"
-                " VALUES ($1, $2, 'x86_64-linux', 'failed') RETURNING id",
-                build_id,
-                attr,
-            )
-            rel = f"logs/2/{attr}.zst"
-            f = tmp_path / rel
+            f = attribute_log_path(tmp_path, build_id, attr)
             f.parent.mkdir(parents=True, exist_ok=True)
             f.write_bytes(zstandard.ZstdCompressor().compress(content))
             await ctx.pool.execute(
-                "INSERT INTO logs (attribute_id, path, size_bytes) VALUES ($1, $2, $3)",
-                attr_id,
-                rel,
+                "INSERT INTO build_attributes (build_id, attr, system, status,"
+                " log_size) VALUES ($1, $2, 'x86_64-linux', 'failed', $3)",
+                build_id,
+                attr,
                 f.stat().st_size,
             )
         return build_id
@@ -797,20 +783,14 @@ def test_attr_names_with_special_characters(client: WebHarness, tmp_path: Path) 
 
     async def setup() -> int:
         build_id = await ctx.pool.fetchval("SELECT id FROM builds WHERE number = 2")
-        attr_id = await ctx.pool.fetchval(
-            "INSERT INTO build_attributes (build_id, attr, system, status)"
-            " VALUES ($1, $2, 'x86_64-linux', 'failed') RETURNING id",
-            build_id,
-            attr,
-        )
-        rel = "logs/2/weird.zst"
-        f = tmp_path / rel
+        f = attribute_log_path(tmp_path, build_id, attr)
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_bytes(zstandard.ZstdCompressor().compress(b"weird log\n"))
         await ctx.pool.execute(
-            "INSERT INTO logs (attribute_id, path, size_bytes) VALUES ($1, $2, $3)",
-            attr_id,
-            rel,
+            "INSERT INTO build_attributes (build_id, attr, system, status, log_size)"
+            " VALUES ($1, $2, 'x86_64-linux', 'failed', $3)",
+            build_id,
+            attr,
             f.stat().st_size,
         )
         return build_id
@@ -1204,7 +1184,10 @@ def test_api_build_failures_rejects_non_positive_tail(
     """splitlines()[-0:] is the WHOLE list: tail=0 must not dump the
     full log of every failed attribute."""
     seed_log(client, tmp_path)
-    log_file = tmp_path / "logs" / "2" / "x86_64-linux.bad.zst"
+    build_id = client.loop.run_until_complete(
+        client.ctx.pool.fetchval("SELECT id FROM builds WHERE number = 2")
+    )
+    log_file = attribute_log_path(tmp_path, build_id, "x86_64-linux.bad")
     lines = "".join(f"line {i}\n" for i in range(60))
     log_file.write_bytes(zstandard.ZstdCompressor().compress(lines.encode()))
 
@@ -1372,11 +1355,11 @@ def test_build_page_shows_effects(client: WebHarness) -> None:
         build_id = await ctx.pool.fetchval("SELECT id FROM builds WHERE number = 2")
         await ctx.pool.execute(
             """
-            INSERT INTO build_effects (build_id, name, status, error, log_path,
+            INSERT INTO build_effects (build_id, name, status, error, log_size,
                                        finished_at)
             VALUES ($1, 'deploy', 'failed', 'ssh: connection refused',
-                    'logs/effect-deploy.zst', now()),
-                   ($1, 'notify', 'running', NULL, NULL, NULL)
+                    42, now()),
+                   ($1, 'notify', 'running', NULL, 0, NULL)
             """,
             build_id,
         )
@@ -1397,16 +1380,15 @@ def test_effect_log_raw_text(client: WebHarness, tmp_path: Path) -> None:
     async def seed_effect_log() -> None:
         ctx = client.ctx
         ctx.state_dir = tmp_path
-        log_dir = tmp_path / "logs"
-        log_dir.mkdir(parents=True, exist_ok=True)
-        (log_dir / "effect-deploy2.zst").write_bytes(
+        build_id = await ctx.pool.fetchval("SELECT id FROM builds WHERE number = 2")
+        log_file = effect_log_path(tmp_path, build_id, "deploy2")
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        log_file.write_bytes(
             zstandard.ZstdCompressor().compress(b"activating system...\n")
         )
-        build_id = await ctx.pool.fetchval("SELECT id FROM builds WHERE number = 2")
         await ctx.pool.execute(
-            "INSERT INTO build_effects (build_id, name, status, log_path, "
-            "finished_at) VALUES ($1, 'deploy2', 'succeeded', "
-            "'logs/effect-deploy2.zst', now())",
+            "INSERT INTO build_effects (build_id, name, status, log_size, "
+            "finished_at) VALUES ($1, 'deploy2', 'succeeded', 42, now())",
             build_id,
         )
 

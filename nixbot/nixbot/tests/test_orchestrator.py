@@ -25,6 +25,7 @@ from nixbot.config import Config
 from nixbot.db import BuildStatus
 from nixbot.db_gen import builds as builds_q
 from nixbot.events import BuildResult, ChangeEvent, EvalReport, RepoInfo
+from nixbot.executor import attribute_log_path, effect_log_path
 from nixbot.gitrepo import FetchCredentials, RepoManager
 from nixbot.memory import EvalWorkerConfig
 from nixbot.models import CacheStatus
@@ -369,8 +370,7 @@ async def test_full_lifecycle(pool: asyncpg.Pool, run_event: EventRunner) -> Non
     }
     # Log metadata written in the same transaction as completion.
     logs = await pool.fetch(
-        "SELECT l.path FROM logs l JOIN build_attributes a "
-        "ON l.attribute_id = a.id WHERE a.build_id = $1",
+        "SELECT log_size FROM build_attributes WHERE build_id = $1 AND log_size > 0",
         build.id,
     )
     assert len(logs) == 2
@@ -690,13 +690,9 @@ async def test_log_path_attribute_name_sanitized(
     assert len(files) == 1
     assert files[0].parent == log_dir
     assert not (tmp_path / 'evil".attr.zst').exists()
-    log_path = await pool.fetchval(
-        "SELECT l.path FROM logs l JOIN build_attributes a "
-        "ON l.attribute_id = a.id WHERE a.build_id = $1",
-        build.id,
-    )
     state_dir = (tmp_path / "state").resolve()
-    assert (state_dir / log_path).resolve().is_relative_to(state_dir / "logs")
+    path = attribute_log_path(state_dir, build.id, evil)
+    assert path.resolve().is_relative_to(state_dir / "logs")
 
 
 async def test_cancel_interrupts_evaluation(
@@ -1273,7 +1269,6 @@ async def test_effect_rows_roundtrip(pool: asyncpg.Pool, tmp_path: Path) -> None
         name="deploy",
         status="failed",
         error="ssh: connection refused",
-        log_path="logs/1/effect-deploy.zst",
         log_size=123,
         log_truncated=False,
     )
@@ -1717,18 +1712,12 @@ async def test_effect_log_does_not_collide_with_attribute_log(
     )
     assert build is not None
     await drain_effect_items(orchestrator, project, pool)
-    attr_log = await pool.fetchval(
-        "SELECT l.path FROM logs l JOIN build_attributes a "
-        "ON l.attribute_id = a.id WHERE a.build_id = $1",
-        build.id,
-    )
-    effect_log = await pool.fetchval(
-        "SELECT log_path FROM build_effects WHERE build_id = $1",
-        build.id,
-    )
-    assert attr_log is not None
-    assert effect_log is not None
+    state_dir = orchestrator.config.state_dir
+    attr_log = attribute_log_path(state_dir, build.id, "effect-deploy")
+    effect_log = effect_log_path(state_dir, build.id, "deploy")
     assert attr_log != effect_log
+    assert attr_log.exists()
+    assert effect_log.exists()
 
 
 async def test_post_process_paths_are_forge_scoped(

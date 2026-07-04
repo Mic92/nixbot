@@ -14,7 +14,6 @@ import logging
 import shutil
 import time
 from typing import TYPE_CHECKING, Any
-from urllib.parse import quote
 
 from . import db
 from .build_scheduler import (
@@ -568,12 +567,8 @@ class _OrchestratorExecutor:
             attr_cancel.set()
 
         mirror = asyncio.create_task(_mirror_build_cancel())
-        # Attribute names come from untrusted flakes; percent-encode
-        # so the log file cannot escape the log directory.
         try:
-            async with self.o.open_log(
-                self.build_record.id, job.attr, f"{quote(job.attr, safe='')}.zst"
-            ) as writer:
+            async with self.o.open_log(self.build_record.id, job.attr) as writer:
                 outcome = await self.o.executor.build_attribute(
                     self.build_record.id,
                     job,
@@ -626,7 +621,6 @@ class _OrchestratorExecutor:
             self.o.pool,
             self.build_record.id,
             result,
-            log_path=str(writer.path.relative_to(self.o.config.state_dir)),
             log_size=writer.bytes_seen,
             log_truncated=writer.truncated,
         )
