@@ -100,6 +100,8 @@ class GitHubAppClient:
         self._installation_tokens: dict[
             tuple[int, tuple[str, ...] | None], _CachedToken
         ] = {}
+        # Per-key mint locks so concurrent misses collapse into one API call.
+        self._token_locks: dict[tuple[int, tuple[str, ...] | None], asyncio.Lock] = {}
         # owner/repo (lowercase) -> installation id; filled by discovery.
         self.repo_installations: dict[str, int] = {}
 
@@ -121,6 +123,22 @@ class GitHubAppClient:
         cached = self._installation_tokens.get(cache_key)
         if cached is not None and cached.expires > datetime.now(tz=UTC):
             return cached.token
+        lock = self._token_locks.setdefault(cache_key, asyncio.Lock())
+        async with lock:
+            # Re-check: another waiter may have minted while we blocked.
+            cached = self._installation_tokens.get(cache_key)
+            if cached is not None and cached.expires > datetime.now(tz=UTC):
+                return cached.token
+            return await self._mint_installation_token(
+                cache_key, installation_id, repositories
+            )
+
+    async def _mint_installation_token(
+        self,
+        cache_key: tuple[int, tuple[str, ...] | None],
+        installation_id: int,
+        repositories: tuple[str, ...] | None,
+    ) -> str:
         response = await self.http.post(
             f"{self.api_url}/app/installations/{installation_id}/access_tokens",
             headers={"Authorization": f"Bearer {await self._app_jwt()}"},
