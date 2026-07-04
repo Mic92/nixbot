@@ -130,15 +130,9 @@
     }
   });
 
-  // Search results are server-rendered; the client only jumps into a
-  // card, waiting for htmx to load its rows when they aren't yet present.
-  must("search-results").addEventListener("click", (e) => {
-    const a = /** @type {HTMLElement} */ (e.target).closest("a[data-idx]");
-    if (!a) return;
-    e.preventDefault();
-    const link = /** @type {HTMLElement} */ (a);
-    const idx = Number(link.dataset.idx);
-    const line = link.dataset.line ? Number(link.dataset.line) : null;
+  // Open the owning card (loading its rows if needed) and jump to a line.
+  /** @param {number} idx @param {number|null} line */
+  function openAt(idx, line) {
     const card = /** @type {HTMLDetailsElement|null} */ (
       list.querySelector(`.log-card[data-idx="${idx}"]`)
     );
@@ -148,7 +142,34 @@
     const handle = drawn.get(card);
     if (handle) jump(card, handle, idx, line);
     else pending = { card, idx, line }; // afterSwap completes the jump
+  }
+
+  // Search results are server-rendered; the client only jumps into a
+  // card, waiting for htmx to load its rows when they aren't yet present.
+  must("search-results").addEventListener("click", (e) => {
+    const a = /** @type {HTMLElement} */ (e.target).closest("a[data-idx]");
+    if (!a) return;
+    e.preventDefault();
+    const link = /** @type {HTMLElement} */ (a);
+    openAt(
+      Number(link.dataset.idx),
+      link.dataset.line ? Number(link.dataset.line) : null,
+    );
   });
+
+  // A #d{idx}-L{n} permalink can't scroll on its own: the row is fetched
+  // lazily, so on load (and on hashchange) resolve it through openAt.
+  function jumpToHash() {
+    const m = /^#d(\d+)-L(\d+)$/.exec(location.hash);
+    if (m) openAt(Number(m[1]), Number(m[2]));
+  }
+  globalThis.addEventListener("hashchange", jumpToHash);
+  // Wait for htmx to wire its toggle triggers (on DOMContentLoaded);
+  // opening a card sooner fires toggle into the void and never fetches.
+  if (document.readyState === "complete") jumpToHash();
+  else {document.addEventListener("DOMContentLoaded", jumpToHash, {
+      once: true,
+    });}
 
   // Live mode: build cards from the structured SSE (state burst + deltas),
   // in arrival order, the running one following its tail. The

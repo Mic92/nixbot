@@ -65,6 +65,14 @@ def test_structured_log_viewer(page: Page) -> None:
     hit.wait_for()
     assert hit.get_attribute("id") == "d0-L32"
 
+    # A #d{idx}-L{n} permalink expands the collapsed Succeeded panel, opens
+    # the toggle-loaded card, waits for its lazy rows, then highlights the
+    # line -- even though the row did not exist at page load.
+    page.goto("/repos/github/acme/widget/builds/2/logs/x86_64-linux.bad#d1-L1")
+    linked = page.locator(".log-lines .logline.hit")
+    linked.wait_for()
+    assert linked.get_attribute("id") == "d1-L1"
+
 
 def test_project_filter_form(page: Page) -> None:
     page.goto("/repos/github/acme/widget")
