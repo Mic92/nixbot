@@ -9,7 +9,6 @@ keeps the module dependency graph acyclic.
 from __future__ import annotations
 
 import logging
-from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from .db_gen import builds as builds_q
@@ -24,6 +23,7 @@ from .effects import (
     run_effect,
     should_run_effects,
 )
+from .events import effects_event_for_build
 from .executor import failure_excerpt
 from .repo_config import CONFIG_FILENAMES, BranchConfig
 
@@ -143,11 +143,9 @@ async def run_effect_item(
         worktree_event,
         worktree_path,
     ):
-        # rerun_worktree rebuilds the event from the build's stored
-        # commit (the right tree to check out), but effects report on
-        # the commit that triggered them (e.g. the default-branch merge
-        # that reused a PR build), recorded at mark_effects_started.
-        event = _effects_event(build, worktree_event)
+        # The checkout ref (build commit) differs from the report ref
+        # (see effects_event_for_build).
+        event = effects_event_for_build(worktree_event.repo, build)
         task_token = o.task_tokens.issue(build.project_id)
         try:
             ctx = effects_context(
@@ -160,25 +158,12 @@ async def run_effect_item(
                 task_token=task_token,
             )
             await _run_one_effect(o, event, ctx, build, name)
-            await _maybe_post_effects_summary(o, event, build)
+            await post_effects_summary(o, event, build)
         finally:
             o.task_tokens.revoke(task_token)
 
 
-def _effects_event(build: BuildRecord, fallback: ChangeEvent) -> ChangeEvent:
-    """The ref that triggered the effects run, recorded on the build;
-    pre-0018 builds have no record and fall back to the build commit."""
-    if build.effects_commit_sha is None:
-        return fallback
-    return replace(
-        fallback,
-        commit_sha=build.effects_commit_sha,
-        branch=build.effects_branch or fallback.branch,
-        pr_number=build.effects_pr_number,
-    )
-
-
-async def _maybe_post_effects_summary(
+async def post_effects_summary(
     o: Orchestrator, event: ChangeEvent, build: BuildRecord
 ) -> None:
     """Post the aggregate status once all effects settle; the items run

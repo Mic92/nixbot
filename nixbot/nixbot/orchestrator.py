@@ -394,6 +394,13 @@ class Orchestrator:
         """Dispatcher entry for one queued effect."""
         await effects_run.run_effect_item(self, info, build, name, credentials)
 
+    async def post_effects_summary(
+        self, event: ChangeEvent, build: BuildRecord
+    ) -> None:
+        """Post the aggregate effects status once none is still pending;
+        the last settled effect (or crash recovery) reports it."""
+        await effects_run.post_effects_summary(self, event, build)
+
     @asynccontextmanager
     async def open_log(self, build_id: int, key: str) -> AsyncIterator[LogWriter]:
         """LogWriter registered for live streaming; closed and

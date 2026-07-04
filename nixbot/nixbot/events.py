@@ -46,6 +46,31 @@ class ChangeEvent:
     commit_message: str = ""
 
 
+def event_for_build(repo: RepoInfo, build: BuildRecord) -> ChangeEvent:
+    """The triggering event of a build, reconstructed from its stored
+    fields; used by rerun and out-of-band reporting paths."""
+    return ChangeEvent(
+        repo=repo,
+        branch=build.branch,
+        commit_sha=build.commit_sha,
+        pr_number=build.pr_number,
+    )
+
+
+def effects_event_for_build(repo: RepoInfo, build: BuildRecord) -> ChangeEvent:
+    """Effects report on the ref that triggered them (e.g. a
+    default-branch merge that reused a PR build), recorded at
+    mark_effects_started; pre-0018 builds fall back to the build ref."""
+    if build.effects_commit_sha is None:
+        return event_for_build(repo, build)
+    return ChangeEvent(
+        repo=repo,
+        branch=build.effects_branch or build.branch,
+        commit_sha=build.effects_commit_sha,
+        pr_number=build.effects_pr_number,
+    )
+
+
 @dataclass(frozen=True)
 class EvalReport:
     """Evaluation-phase outcome reported to a forge. warnings and jobs
