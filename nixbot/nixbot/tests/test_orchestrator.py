@@ -140,6 +140,11 @@ class RecordingReporter:
     ) -> None:
         self.events.append(("finished", build.id, result.status, result.generation))
 
+    async def build_restarted(
+        self, event: ChangeEvent, build: BuildRecord, attr: str | None
+    ) -> None:
+        self.events.append(("restarted", build.id, attr))
+
     async def effect_started(
         self, event: ChangeEvent, build: BuildRecord, name: str
     ) -> None:

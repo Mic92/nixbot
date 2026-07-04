@@ -863,6 +863,48 @@ async def test_effect_item_setup_failure_settles_row(
         await pool.close()
 
 
+async def test_restart_attribute_posts_pending(
+    postgres_dsn: str, tmp_path: Path
+) -> None:
+    """Re-run on the forge must flip the check to pending immediately,
+    not only when the async rebuild finishes."""
+    config = Config(
+        db_url=postgres_dsn,
+        build_systems=["x86_64-linux"],
+        url="http://ci.test",
+        state_dir=tmp_path / "state",
+    )
+    service, _app = await build_service(config)
+    pool = service.pool
+    try:
+        project_id = await insert_project(pool, forge_repo_id="84", url="http://x")
+        build_id = await insert_build(
+            pool, project_id, commit_sha="c1", tree_hash="t1", status="failed"
+        )
+        await pool.execute(
+            "INSERT INTO build_attributes (build_id, attr, status) "
+            "VALUES ($1, 'x86_64-linux.a', 'failed')",
+            build_id,
+        )
+
+        restarts: list[tuple[int, str | None]] = []
+
+        class FakeReporter(NullStatusReporter):
+            async def build_restarted(
+                self, event: ChangeEvent, build: Any, attr: str | None
+            ) -> None:
+                del event
+                restarts.append((build.id, attr))
+
+        service.orchestrator.reporter = FakeReporter()
+
+        await service.restart_attribute(build_id, "x86_64-linux.a")
+
+        assert restarts == [(build_id, "x86_64-linux.a")]
+    finally:
+        await pool.close()
+
+
 async def test_recovery_reports_interrupted_effects(
     postgres_dsn: str, tmp_path: Path
 ) -> None:
