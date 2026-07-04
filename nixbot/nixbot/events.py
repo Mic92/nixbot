@@ -7,7 +7,7 @@ build pipeline.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
@@ -47,6 +47,18 @@ class ChangeEvent:
 
 
 @dataclass(frozen=True)
+class EvalReport:
+    """Evaluation-phase outcome reported to a forge. warnings and jobs
+    are populated on success; error carries the evaluator's log tail on
+    failure."""
+
+    success: bool
+    warnings: list[str] = field(default_factory=list)
+    jobs: Sequence[NixEvalJobSuccess] | None = None
+    error: str | None = None
+
+
+@dataclass(frozen=True)
 class BuildResult:
     """The final outcome of a build, as reported to a forge."""
 
@@ -63,13 +75,7 @@ class StatusReporter(Protocol):
     async def build_started(self, event: ChangeEvent, build: BuildRecord) -> None: ...
 
     async def eval_finished(
-        self,
-        event: ChangeEvent,
-        build: BuildRecord,
-        *,
-        success: bool,
-        warnings: list[str],
-        jobs: Sequence[NixEvalJobSuccess] | None = None,
+        self, event: ChangeEvent, build: BuildRecord, report: EvalReport
     ) -> None: ...
 
     async def eval_cancelled(self, event: ChangeEvent, build: BuildRecord) -> None: ...
@@ -111,13 +117,7 @@ class NullStatusReporter:
         pass
 
     async def eval_finished(
-        self,
-        event: ChangeEvent,
-        build: BuildRecord,
-        *,
-        success: bool,
-        warnings: list[str],
-        jobs: Sequence[NixEvalJobSuccess] | None = None,
+        self, event: ChangeEvent, build: BuildRecord, report: EvalReport
     ) -> None:
         pass
 

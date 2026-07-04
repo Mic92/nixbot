@@ -16,7 +16,7 @@ from .canceller import branch_key
 from .db import BuildStatus
 from .db_gen import builds as builds_q
 from .db_gen import maintenance as q
-from .events import ChangeEvent
+from .events import ChangeEvent, EvalReport
 from .gitrepo import pr_refspec
 
 if TYPE_CHECKING:
@@ -117,7 +117,7 @@ async def rerun_pending_attributes(
         ):
             # No re-eval on this path: re-post the eval context green,
             # the previous run may have left it red or pending.
-            await o.reporter.eval_finished(event, build, success=True, warnings=[])
+            await o.reporter.eval_finished(event, build, EvalReport(success=True))
             # cache_failures=False: see _ReadOnlyFailedBuildCache.
             status = await build_run.build_attributes(
                 o,

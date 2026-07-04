@@ -18,7 +18,7 @@ import pytest
 
 from nixbot.build_scheduler import AttributeResult, AttributeStatus
 from nixbot.db_gen.models import Build as BuildRecord
-from nixbot.events import BuildResult, ChangeEvent, RepoInfo
+from nixbot.events import BuildResult, ChangeEvent, EvalReport, RepoInfo
 from nixbot.forge import GitlabClient
 from nixbot.models import NixEvalJobError
 from nixbot.status import (
@@ -199,7 +199,7 @@ async def test_phase_statuses_and_target_url() -> None:
     reporter, poster, _ = make_reporter()
 
     await reporter.build_started(EVENT, BUILD)
-    await reporter.eval_finished(EVENT, BUILD, success=True, warnings=["w"])
+    await reporter.eval_finished(EVENT, BUILD, EvalReport(success=True, warnings=["w"]))
     await reporter.build_finished(EVENT, BUILD, BuildResult("succeeded", 1, []))
     contexts = [(p.context, p.state) for p in poster.posts]
     assert contexts == [
@@ -215,6 +215,24 @@ async def test_phase_statuses_and_target_url() -> None:
     assert "(1 warning)" in poster.posts[1].description
 
 
+async def test_eval_finished_failure_posts_error_tail() -> None:
+    """A failed eval carries the error tail as check-run text."""
+    reporter, poster, _ = make_reporter()
+
+    await reporter.eval_finished(
+        EVENT,
+        BUILD,
+        EvalReport(
+            success=False,
+            error="nix-eval-jobs failed with exit code 1:\nerror: syntax error",
+        ),
+    )
+    eval_post = next(p for p in poster.posts if p.context.endswith("nix-eval"))
+    assert eval_post.state == StatusState.failure
+    idx = poster.posts.index(eval_post)
+    assert "error: syntax error" in poster.extras[idx]["text"]
+
+
 async def test_eval_finished_build_plan_in_nix_build_body() -> None:
     """Pending nix-build run lists the attributes to build, each
     linking to its raw log."""
@@ -223,7 +241,7 @@ async def test_eval_finished_build_plan_in_nix_build_body() -> None:
         mk_job("checks.x86_64-linux.b"),
         mk_job("checks.x86_64-linux.a"),
     ]
-    await reporter.eval_finished(EVENT, BUILD, success=True, warnings=[], jobs=jobs)
+    await reporter.eval_finished(EVENT, BUILD, EvalReport(success=True, jobs=jobs))
 
     build_post = next(
         i for i, p in enumerate(poster.posts) if p.context.endswith("nix-build")
@@ -586,7 +604,9 @@ async def test_reporter_forwards_attr_and_text() -> None:
     run carries the warnings."""
     reporter, poster, _ = make_reporter()
 
-    await reporter.eval_finished(EVENT, BUILD, success=True, warnings=["w1", "w2"])
+    await reporter.eval_finished(
+        EVENT, BUILD, EvalReport(success=True, warnings=["w1", "w2"])
+    )
     eval_extra = poster.extras[0]
     assert eval_extra["text"] == "```\nw1\nw2\n```"
     assert eval_extra["project_id"] == PROJECT.id

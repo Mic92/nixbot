@@ -19,7 +19,7 @@ from .db import BuildStatus
 from .db_gen import builds as builds_q
 from .db_gen import maintenance as q
 from .db_gen import web as web_q
-from .events import BuildResult
+from .events import BuildResult, EvalReport
 from .gitrepo import GitError, run_git
 
 if TYPE_CHECKING:
@@ -64,7 +64,7 @@ async def replay_terminal_status(
         eval_success = build.status == BuildStatus.SUCCEEDED or bool(
             await builds_q.attribute_statuses(o.pool, build_id=build.id)
         )
-        await o.reporter.eval_finished(event, build, success=eval_success, warnings=[])
+        await o.reporter.eval_finished(event, build, EvalReport(success=eval_success))
     await o.reporter.build_finished(
         event, build, BuildResult(build.status, build.status_generation, [])
     )
@@ -110,7 +110,7 @@ async def finish_linked(
     for linked in o.linked_events.pop(build.id, []):
         if eval_success is not None:
             await o.reporter.eval_finished(
-                linked, build, success=eval_success, warnings=[]
+                linked, build, EvalReport(success=eval_success)
             )
         elif result.status == BuildStatus.CANCELLED:
             # Cancel during eval: the linked contexts' nix-eval

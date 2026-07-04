@@ -21,7 +21,7 @@ from .db import BuildStatus
 from .db_gen import builds as builds_q
 from .db_gen import failed as failed_q
 from .db_gen import maintenance as q
-from .events import BuildResult, ChangeEvent, StatusReporter
+from .events import BuildResult, ChangeEvent, EvalReport, StatusReporter
 from .gitrepo import (
     CredentialsProvider,
     FetchCredentials,
@@ -46,14 +46,13 @@ from .webhooks import (
 from .work_queue import WorkItem, WorkQueue
 
 if TYPE_CHECKING:
-    from collections.abc import Coroutine, Sequence
+    from collections.abc import Coroutine
 
     import asyncpg
 
     from .config import Config
     from .db import BuildRecord
     from .forge import GiteaClient, GitHubAppClient, GitlabClient
-    from .models import NixEvalJobSuccess
     from .orchestrator import Orchestrator
     from .polling import PolledRepository
     from .repos import RepoStore
@@ -118,17 +117,9 @@ class RetryingReporter:
         await self.inner.build_started(event, build)
 
     async def eval_finished(
-        self,
-        event: ChangeEvent,
-        build: BuildRecord,
-        *,
-        success: bool,
-        warnings: list[str],
-        jobs: Sequence[NixEvalJobSuccess] | None = None,
+        self, event: ChangeEvent, build: BuildRecord, report: EvalReport
     ) -> None:
-        await self.inner.eval_finished(
-            event, build, success=success, warnings=warnings, jobs=jobs
-        )
+        await self.inner.eval_finished(event, build, report)
 
     async def eval_cancelled(self, event: ChangeEvent, build: BuildRecord) -> None:
         await self.inner.eval_cancelled(event, build)
