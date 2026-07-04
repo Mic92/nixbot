@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shutil
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -43,7 +44,12 @@ from .events import (
     RepoInfo,
     StatusReporter,
 )
-from .executor import LogWriter
+from .executor import (
+    LogWriter,
+    attribute_log_path,
+    build_log_dir,
+    log_path_for_key,
+)
 from .gitrepo import MergeConflictError, pr_refspec
 from .web.logs import LogRegistry
 from .work_queue import WorkQueue
@@ -134,7 +140,23 @@ class Orchestrator:
     linked_events: dict[int, list[ChangeEvent]] = field(default_factory=dict)
 
     def _log_dir(self, build_id: int) -> Path:
-        return self.config.state_dir / "logs" / str(build_id)
+        return build_log_dir(self.config.state_dir, build_id)
+
+    def reset_build_logs(self, build_id: int, attr: str | None) -> None:
+        """Drop the previous run's log files when a build is reset to
+        pending. A full restart (attr None) also re-runs effects, so it
+        clears the whole build log directory; a single-attribute restart
+        removes only that attribute's log."""
+        if attr is None:
+            shutil.rmtree(self._log_dir(build_id), ignore_errors=True)
+        else:
+            attribute_log_path(self.config.state_dir, build_id, attr).unlink(
+                missing_ok=True
+            )
+
+    def reset_effect_logs(self, build_id: int) -> None:
+        """Drop all effect log files when a build's effects are reset."""
+        shutil.rmtree(self._log_dir(build_id) / "effects", ignore_errors=True)
 
     def gcroots_dir(self, build: BuildRecord) -> Path:
         return self.config.state_dir / "eval-gcroots" / str(build.id)
@@ -373,13 +395,11 @@ class Orchestrator:
         await effects_run.run_effect_item(self, info, build, name, credentials)
 
     @asynccontextmanager
-    async def open_log(
-        self, build_id: int, key: str, filename: str
-    ) -> AsyncIterator[LogWriter]:
+    async def open_log(self, build_id: int, key: str) -> AsyncIterator[LogWriter]:
         """LogWriter registered for live streaming; closed and
         unregistered on exit. Shared by attribute and effect runs."""
-        log_path = self._log_dir(build_id) / filename
-        writer = LogWriter(path=log_path, size_limit=self.config.log_size_limit)
+        path = log_path_for_key(self.config.state_dir, build_id, key)
+        writer = LogWriter(path=path, size_limit=self.config.log_size_limit)
         self.log_registry.register(build_id, key, writer)
         try:
             yield writer

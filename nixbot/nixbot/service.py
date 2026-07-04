@@ -331,8 +331,11 @@ class CIService:
 
     async def _restart(self, build_id: int, *, attr: str | None) -> None:
         # Reset synchronously so the build row is the source of truth
-        # for the UI/recovery; the queue item is only a wake-up.
+        # for the UI/recovery; the queue item is only a wake-up. Drop
+        # the previous run's logs here too, so the pending row does not
+        # show stale output until the rebuild starts.
         await q.reset_build_for_restart(self.pool, build_id=build_id, attr=attr)
+        self.orchestrator.reset_build_logs(build_id, attr)
         await self.enqueue_work("rerun", f"build-{build_id}", {"build_id": build_id})
 
     async def restart_effects(self, build_id: int) -> None:
@@ -513,7 +516,6 @@ class CIService:
                 name=name,
                 status="failed",
                 error=str(e) or type(e).__name__,
-                log_path=None,
                 log_size=0,
                 log_truncated=False,
             )

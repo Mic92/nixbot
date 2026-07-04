@@ -151,46 +151,36 @@ RETURNING attr;
 -- name: CompleteAttribute :exec
 -- Status, outputs, error and log metadata in one atomic statement
 -- (crash-recovery invariant). With if_unfinished, already-terminal
--- rows are left untouched (the upsert returns no row, so the log
--- CTEs become no-ops as well).
-WITH attr AS (
-    INSERT INTO build_attributes
-        (build_id, attr, system, drv_path, outputs, status, error,
-         cached, finished_at)
-    VALUES ($1, $2, $3, $4, sqlc.narg(outputs)::jsonb, $5, $6, $7, now())
-    ON CONFLICT (build_id, attr) DO UPDATE SET
-        status = EXCLUDED.status,
-        -- Eval recorded the full outputs map (multi-output drvs);
-        -- merge the freshly-known "out" path into it instead of
-        -- replacing it, and never NULL an existing map when no out
-        -- path is known.
-        outputs = CASE
-            WHEN EXCLUDED.outputs IS NULL
-                THEN build_attributes.outputs
-            ELSE COALESCE(build_attributes.outputs, '{}'::jsonb)
-                || EXCLUDED.outputs
-        END,
-        error = EXCLUDED.error,
-        cached = EXCLUDED.cached,
-        finished_at = now()
-    WHERE NOT sqlc.arg(if_unfinished)::boolean
-        OR build_attributes.status IN ('pending', 'building')
-    RETURNING build_attributes.id
-), dropped AS (
-    -- Reruns rewrite the same log file; replace the metadata row
-    -- instead of accumulating duplicates.
-    DELETE FROM logs WHERE attribute_id IN (SELECT attr.id FROM attr)
-      AND sqlc.narg(log_path)::text IS NOT NULL
-)
-INSERT INTO logs (attribute_id, path, size_bytes, truncated)
-SELECT attr.id, sqlc.narg(log_path), sqlc.arg(log_size)::bigint,
-       sqlc.arg(log_truncated)::boolean
-FROM attr WHERE sqlc.narg(log_path)::text IS NOT NULL;
+-- rows are left untouched (the upsert returns no row).
+INSERT INTO build_attributes
+    (build_id, attr, system, drv_path, outputs, status, error,
+     cached, log_size, log_truncated, finished_at)
+VALUES ($1, $2, $3, $4, sqlc.narg(outputs)::jsonb, $5, $6, $7,
+        sqlc.arg(log_size)::bigint, sqlc.arg(log_truncated)::boolean, now())
+ON CONFLICT (build_id, attr) DO UPDATE SET
+    status = EXCLUDED.status,
+    -- Eval recorded the full outputs map (multi-output drvs);
+    -- merge the freshly-known "out" path into it instead of
+    -- replacing it, and never NULL an existing map when no out
+    -- path is known.
+    outputs = CASE
+        WHEN EXCLUDED.outputs IS NULL
+            THEN build_attributes.outputs
+        ELSE COALESCE(build_attributes.outputs, '{}'::jsonb)
+            || EXCLUDED.outputs
+    END,
+    error = EXCLUDED.error,
+    cached = EXCLUDED.cached,
+    log_size = EXCLUDED.log_size,
+    log_truncated = EXCLUDED.log_truncated,
+    finished_at = now()
+WHERE NOT sqlc.arg(if_unfinished)::boolean
+    OR build_attributes.status IN ('pending', 'building');
 
 -- name: StartEffect :exec
 INSERT INTO build_effects (build_id, name, status) VALUES ($1, $2, $3)
 ON CONFLICT (build_id, name) DO UPDATE SET
-    status = $3, error = NULL, log_path = NULL, log_size = 0,
+    status = $3, error = NULL, log_size = 0,
     log_truncated = FALSE, started_at = now(), finished_at = NULL;
 
 -- name: StartPendingEffects :exec
@@ -199,12 +189,12 @@ INSERT INTO build_effects (build_id, name, status)
 SELECT sqlc.arg(build_id)::bigint, u.name, 'pending'
 FROM unnest(sqlc.arg(names)::text[]) AS u(name)
 ON CONFLICT (build_id, name) DO UPDATE SET
-    status = 'pending', error = NULL, log_path = NULL, log_size = 0,
+    status = 'pending', error = NULL, log_size = 0,
     log_truncated = FALSE, started_at = now(), finished_at = NULL;
 
 -- name: FinishEffect :exec
 UPDATE build_effects SET
-    status = $3, error = sqlc.narg(error), log_path = sqlc.narg(log_path),
+    status = $3, error = sqlc.narg(error),
     log_size = $4, log_truncated = $5, finished_at = now()
 WHERE build_id = $1 AND name = $2;
 

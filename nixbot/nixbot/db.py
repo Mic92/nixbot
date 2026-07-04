@@ -146,7 +146,6 @@ async def complete_attribute(  # noqa: PLR0913
     build_id: int,
     result: AttributeResult,
     *,
-    log_path: str | None = None,
     log_size: int = 0,
     log_truncated: bool = False,
     if_unfinished: bool = False,
@@ -172,7 +171,6 @@ async def complete_attribute(  # noqa: PLR0913
             and isinstance(result.job, NixEvalJobSuccess)
             and result.job.cache_status == CacheStatus.cached
         ),
-        log_path=log_path,
         log_size=log_size,
         log_truncated=log_truncated,
         if_unfinished=if_unfinished,

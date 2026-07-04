@@ -30,7 +30,7 @@ from ..build_scheduler import TERMINAL_FAILURES  # noqa: TID252
 from ..db_gen import maintenance as maint_gen  # noqa: TID252
 from ..db_gen import scheduled as sched_gen  # noqa: TID252
 from ..db_gen import web as gen  # noqa: TID252
-from ..executor import read_log  # noqa: TID252
+from ..executor import log_path_for_key, read_log  # noqa: TID252
 from ..status import NO_LOG_STATUSES  # noqa: TID252
 from .api_routes import FailureSummary, clean_row
 
@@ -210,28 +210,6 @@ def render_log_lines(text: str) -> str:
     return "".join(lines)
 
 
-async def _log_path(
-    ctx: WebContext, registry: LogRegistry, build: dict, attr: str
-) -> Path | None:
-    if attr.startswith("effect:"):
-        # Effects store log metadata inline (no attribute row).
-        log_rel = await gen.effect_log_path(
-            ctx.pool, build_id=build["id"], name=attr.removeprefix("effect:")
-        )
-    else:
-        log_rel = await gen.attribute_log_path(
-            ctx.pool, build_id=build["id"], attr=attr
-        )
-    path = ctx.state_dir / log_rel if log_rel else None
-    if path is None:
-        # No logs row until completion; running attributes use the
-        # live writer's on-disk file.
-        writer = registry.get(build["id"], attr)
-        if writer is not None:
-            path = writer.path
-    return path
-
-
 async def _log_text(
     registry: LogRegistry, build: dict, attr: str, path: Path | None
 ) -> str | None:
@@ -261,7 +239,9 @@ async def _failure_summary(
     for a in await ctx.queries.attributes(build["id"]):
         if a["status"] not in _FAILURE_STATUSES:
             continue
-        path = await _log_path(ctx, registry, build, a["attr"])
+        # The file may not exist yet (never ran, or pending after a
+        # reset); _log_text handles that.
+        path = log_path_for_key(ctx.state_dir, build["id"], a["attr"])
         text = await _log_text(registry, build, a["attr"], path)
         failures.append(
             {
@@ -316,7 +296,8 @@ class _LogRoutes:
         attr: str,
     ) -> tuple[dict, dict, Path | None]:
         project, build = await self._build_or_404(request, forge, owner, name, number)
-        return project, build, await _log_path(self.ctx, self.registry, build, attr)
+        path = log_path_for_key(self.ctx.state_dir, build["id"], attr)
+        return project, build, path
 
     async def log_raw_text(  # noqa: PLR0913
         self,

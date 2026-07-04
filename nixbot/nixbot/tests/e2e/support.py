@@ -16,6 +16,7 @@ import asyncpg
 import uvicorn
 import zstandard
 
+from nixbot.executor import attribute_log_path
 from nixbot.tests.support import insert_build, insert_project
 from nixbot.web.app import create_app
 from nixbot.web.logs import LogRegistry
@@ -65,22 +66,16 @@ async def seed(dsn: str, state_dir: Path | None = None) -> None:
             )
             # Finished builds get a log for the prev/next navigation.
             if state_dir is not None and status != "building":
-                attr_id = await pool.fetchval(
-                    "SELECT id FROM build_attributes"
-                    " WHERE build_id = $1 AND attr = 'x86_64-linux.bad'",
-                    build_id,
-                )
-                rel_path = f"logs/{number}/x86_64-linux.bad.zst"
-                log_file = state_dir / rel_path
+                log_file = attribute_log_path(state_dir, build_id, "x86_64-linux.bad")
                 log_file.parent.mkdir(parents=True, exist_ok=True)
                 log_file.write_bytes(
                     zstandard.ZstdCompressor().compress(f"log #{number}\n".encode())
                 )
                 await pool.execute(
-                    "INSERT INTO logs (attribute_id, path, size_bytes)"
-                    " VALUES ($1, $2, $3)",
-                    attr_id,
-                    rel_path,
+                    "UPDATE build_attributes SET log_size = $3"
+                    " WHERE build_id = $1 AND attr = $2",
+                    build_id,
+                    "x86_64-linux.bad",
                     log_file.stat().st_size,
                 )
     finally:

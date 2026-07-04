@@ -193,13 +193,13 @@ WITH cleared_failures AS (
            AND ($1::text IS NULL OR attr = $1))
 ), reset_attrs AS (
     UPDATE build_attributes SET status = 'pending', error = NULL,
-        started_at = NULL, finished_at = NULL
+        started_at = NULL, finished_at = NULL, log_size = 0,
+        log_truncated = FALSE
     WHERE build_id = $2::bigint
       AND ($1::text IS NULL OR attr = $1)
 ), reset_effect_rows AS (
     UPDATE build_effects SET status = 'pending', error = NULL,
-        finished_at = NULL, log_path = NULL, log_size = 0,
-        log_truncated = FALSE
+        finished_at = NULL, log_size = 0, log_truncated = FALSE
     WHERE build_id = $2::bigint
       AND $1::text IS NULL
 )
@@ -215,7 +215,7 @@ WITH flag AS (
     UPDATE builds SET effects_started = FALSE WHERE id = $1
 )
 UPDATE build_effects SET status = 'pending', error = NULL,
-    finished_at = NULL, log_path = NULL, log_size = 0,
+    finished_at = NULL, log_size = 0,
     log_truncated = FALSE WHERE build_id = $1
 """
 

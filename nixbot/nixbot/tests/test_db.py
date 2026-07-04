@@ -120,25 +120,19 @@ async def test_schema_constraints(postgres_dsn: str) -> None:
                 """,
             project_id,
         )
-        attr_id = await conn.fetchval(
+        await conn.execute(
             """
                 INSERT INTO build_attributes (build_id, attr, system, drv_path)
                 VALUES ($1, 'checks.x86_64-linux.foo', 'x86_64-linux',
                         '/nix/store/foo.drv')
-                RETURNING id
                 """,
             build_id,
-        )
-        await conn.execute(
-            "INSERT INTO logs (attribute_id, path, size_bytes) "
-            "VALUES ($1, 'a/b.zst', 42)",
-            attr_id,
         )
 
         # Cascade delete: removing the project removes everything.
         await conn.execute("DELETE FROM projects WHERE id = $1", project_id)
         assert await conn.fetchval("SELECT count(*) FROM builds") == 0
-        assert await conn.fetchval("SELECT count(*) FROM logs") == 0
+        assert await conn.fetchval("SELECT count(*) FROM build_attributes") == 0
     finally:
         await conn.close()
 
@@ -447,9 +441,9 @@ async def test_complete_attribute_marks_substituted_as_cached(
     assert await cached("built") is False
 
 
-async def test_complete_attribute_replaces_log_row(pool: asyncpg.Pool) -> None:
-    # Attribute restarts rewrite the same log file; the metadata row
-    # must be replaced, not duplicated with stale sizes.
+async def test_complete_attribute_replaces_log_metadata(pool: asyncpg.Pool) -> None:
+    # Attribute restarts rewrite the same log file; the inline size
+    # metadata must reflect the latest run, not the first.
     project_id = await insert_project(pool, "log-dup")
     build, _ = await db.get_or_create_build(pool, project_id, "tree-l", "sha", "main")
     job = mk_job("foo")
@@ -465,19 +459,14 @@ async def test_complete_attribute_replaces_log_row(pool: asyncpg.Pool) -> None:
                 drv_path=job.drv_path,
                 system=job.system,
             ),
-            log_path="logs/x/foo.zst",
             log_size=size,
         )
     rows = await pool.fetch(
-        """
-            SELECT l.size_bytes FROM logs l
-            JOIN build_attributes a ON a.id = l.attribute_id
-            WHERE a.build_id = $1 AND a.attr = 'foo'
-            """,
+        "SELECT log_size FROM build_attributes WHERE build_id = $1 AND attr = 'foo'",
         build.id,
     )
     assert len(rows) == 1
-    assert rows[0]["size_bytes"] == 20
+    assert rows[0]["log_size"] == 20
 
 
 async def test_record_attributes_persists_pending_rows_with_outputs(

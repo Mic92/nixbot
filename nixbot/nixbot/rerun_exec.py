@@ -152,8 +152,11 @@ async def rerun_effects(
     o.cancel_events[build.id] = asyncio.Event()
     try:
         # Reset under the claim: resetting earlier (e.g. in the
-        # service) could clobber a rerun already in flight.
+        # service) could clobber a rerun already in flight. Drop the
+        # previous run's logs here too, so pending rows show no stale
+        # output.
         await q.reset_effects_state(o.pool, build_id=build.id)
+        o.reset_effect_logs(build.id)
         async with rerun_worktree(o, info, build, "effects", credentials) as (
             event,
             worktree_path,

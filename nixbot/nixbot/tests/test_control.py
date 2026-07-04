@@ -19,6 +19,7 @@ from nixbot.bootstrap import build_service
 from nixbot.config import Config
 from nixbot.db_gen import builds as builds_q
 from nixbot.events import BuildResult, ChangeEvent, NullStatusReporter
+from nixbot.executor import attribute_log_path
 from nixbot.forge_tokens import ForgeTokenStore
 from nixbot.service import (
     MAX_REPORT_ATTEMPTS,
@@ -574,6 +575,44 @@ async def test_build_service_composition(postgres_dsn: str, tmp_path: Path) -> N
         await service.pool.close()
 
 
+async def test_restart_removes_stale_logs(postgres_dsn: str, tmp_path: Path) -> None:
+    """A restart drops the previous run's log metadata and on-disk file
+    at reset time, so the pending row does not show stale output."""
+    config = Config(
+        db_url=postgres_dsn,
+        build_systems=["x86_64-linux"],
+        url="http://ci.test",
+        state_dir=tmp_path / "state",
+    )
+    service, _app = await build_service(config)
+    pool = service.pool
+    try:
+        project_id = await insert_project(pool, forge_repo_id="78", url="http://x")
+        build_id = await insert_build(
+            pool, project_id, commit_sha="c1", tree_hash="t1", status="failed"
+        )
+        await pool.execute(
+            "INSERT INTO build_attributes (build_id, attr, status, log_size) "
+            "VALUES ($1, 'x86_64-linux.a', 'failed', 9)",
+            build_id,
+        )
+        log_file = attribute_log_path(config.state_dir, build_id, "x86_64-linux.a")
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        log_file.write_bytes(b"stale log")
+
+        await service.restart_build(build_id)
+
+        assert (
+            await pool.fetchval(
+                "SELECT log_size FROM build_attributes WHERE build_id = $1", build_id
+            )
+            == 0
+        )
+        assert not log_file.exists()
+    finally:
+        await pool.close()
+
+
 async def test_restart_clears_failed_cache_immediately(
     postgres_dsn: str, tmp_path: Path
 ) -> None:
@@ -892,7 +931,7 @@ async def test_restart_resets_effects(postgres_dsn: str, tmp_path: Path) -> None
         )
         await pool.execute(
             "INSERT INTO build_effects (build_id, name, status, finished_at, "
-            "log_path) VALUES ($1, 'deploy', 'failed', now(), 'old.zst')",
+            "log_size) VALUES ($1, 'deploy', 'failed', now(), 42)",
             build_id,
         )
 
@@ -904,13 +943,13 @@ async def test_restart_resets_effects(postgres_dsn: str, tmp_path: Path) -> None
         # Stale log cleared by the reset; the failed rerun
         # (unfetchable URL) settled the row.
         row = await pool.fetchrow(
-            "SELECT status, error, log_path FROM build_effects WHERE build_id = $1",
+            "SELECT status, error, log_size FROM build_effects WHERE build_id = $1",
             build_id,
         )
         assert dict(row) == {
             "status": "failed",
             "error": "build did not succeed",
-            "log_path": None,
+            "log_size": 0,
         }
 
         # Single-attribute restart keeps the guard: a partial
