@@ -471,10 +471,11 @@ class StructuredCapture:
 
     Activity ids map to full drv paths; log lines, phases and stop
     timestamps attach to the owning derivation. Unattributed output (nix's
-    own messages) collects under a synthetic ``driver`` derivation.
+    own evaluation/scheduling/copy messages) collects under a synthetic
+    ``setup`` entry.
     """
 
-    DRIVER = "<driver>"
+    SETUP = "<setup>"
 
     def __init__(
         self, clock: Callable[[], float] = time.time, max_lines: int | None = None
@@ -486,7 +487,7 @@ class StructuredCapture:
         )
         self._clock = clock
         self._act: dict[int, str] = {}
-        self._idx: dict[str, int] = {self.DRIVER: 0}
+        self._idx: dict[str, int] = {self.SETUP: 0}
         # Monotonic per-derivation line counter for live delta numbering:
         # the container's line count stops growing once a drv hits its
         # retention cap, which would repeat delta "from" and collide row
@@ -495,7 +496,7 @@ class StructuredCapture:
         self._running: set[str] = set()
         self._subs: list[asyncio.Queue[dict | None]] = []
         self._closed = False
-        self._w.register(self.DRIVER, "driver")
+        self._w.register(self.SETUP, "setup")
 
     def _ts(self) -> int:
         return int(self._clock() * 1000)
@@ -566,7 +567,7 @@ class StructuredCapture:
         return self._seen[drv]
 
     def log_line(self, act_id: int, text: str) -> None:
-        drv = self._act.get(act_id, self.DRIVER)
+        drv = self._act.get(act_id, self.SETUP)
         self._w.line(drv, text, ts=self._ts())
         self._emit(
             {
@@ -578,7 +579,7 @@ class StructuredCapture:
         )
 
     def phase(self, act_id: int, name: str) -> None:
-        drv = self._act.get(act_id, self.DRIVER)
+        drv = self._act.get(act_id, self.SETUP)
         self._w.phase(drv, name, ts=self._ts())
         self._emit(
             {
@@ -596,10 +597,10 @@ class StructuredCapture:
             self._running.discard(drv)
             self._emit({"t": "status", "idx": self._idx.get(drv, 0), "status": "built"})
 
-    def driver_line(self, text: str) -> None:
-        self._w.line(self.DRIVER, text, ts=self._ts())
+    def setup_line(self, text: str) -> None:
+        self._w.line(self.SETUP, text, ts=self._ts())
         self._emit(
-            {"t": "line", "idx": 0, "from": self._bump(self.DRIVER), "text": text}
+            {"t": "line", "idx": 0, "from": self._bump(self.SETUP), "text": text}
         )
 
     def set_status(self, drv_path: str, status: str) -> None:
@@ -631,7 +632,7 @@ def _feed_capture(event: Any, capture: StructuredCapture) -> None:
     elif action == "stop":
         capture.stop(event.get("id"))
     elif action == "msg" and event.get("msg"):
-        capture.driver_line(event["msg"])
+        capture.setup_line(event["msg"])
 
 
 def _render_event(event: Any, activities: dict[int, str]) -> bytes | None:
@@ -668,7 +669,7 @@ def render_log_event(
     """
     if not line.startswith(b"@nix "):
         if capture is not None and line.strip():
-            capture.driver_line(line.decode(errors="replace").rstrip("\n"))
+            capture.setup_line(line.decode(errors="replace").rstrip("\n"))
         return line  # not an event: pass through (e.g. daemon chatter)
     try:
         event = json.loads(line[len(b"@nix ") :])

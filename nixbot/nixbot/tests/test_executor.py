@@ -589,8 +589,8 @@ def test_structured_capture_demux() -> None:
     assert r.entry(qt)["ph"] == [["unpack", 0], ["build", 1]]
     assert r.entry(qt)["status"] == "failed"
     assert r.lines(by_name["zlib-1.3"]) == ["building zlib"]
-    # nix's own message lands in the synthetic driver bucket.
-    assert r.lines(by_name["driver"]) == ["note: keeping going"]
+    # nix's own message lands in the synthetic setup bucket.
+    assert r.lines(by_name["setup"]) == ["note: keeping going"]
 
 
 async def test_structured_capture_live_stream() -> None:
