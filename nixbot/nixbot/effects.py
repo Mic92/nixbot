@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .proc import ProcessGroup
+from .redact import Redactor, secret_literals
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -277,8 +278,21 @@ async def run_effect_command(
         return path
 
     secrets_file: Path | None = None
+    secret_content: str | None = None
     if ctx.secret_name is not None:
-        secrets_file = _side_file("secrets.json", _read_secret_file(ctx.secret_name))
+        secret_content = _read_secret_file(ctx.secret_name)
+        secrets_file = _side_file("secrets.json", secret_content)
+    # Redact the deploy secrets and the git and task tokens from
+    # anything the effect prints.
+    sink = log_write
+    literals = secret_literals(secret_content, ctx.git_token, ctx.task_token)
+    if literals and sink is not None:
+        redactor = Redactor(literals)
+        raw_sink = sink
+
+        async def sink(data: bytes) -> None:
+            await raw_sink(redactor(data))
+
     extra: list[str] = []
     if ctx.git_token is not None:
         extra += ["--git-token-file", str(_side_file("git-token", ctx.git_token))]
@@ -299,7 +313,7 @@ async def run_effect_command(
                 *targets,
             ],
             ctx.worktree_path,
-            log_write,
+            sink,
             time_limit=ctx.timeout,
         )
         return returncode == 0
