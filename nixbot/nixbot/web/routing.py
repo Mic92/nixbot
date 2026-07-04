@@ -17,7 +17,7 @@ from __future__ import annotations
 from starlette.convertors import Convertor, register_url_convertor
 
 # Literal segments that follow {name} in project routes.
-_RESERVED = ("builds", "rows", "attrs", "schedules")
+_RESERVED = ("builds", "rows", "attrs", "schedules", r"badge\.svg")
 _SEGMENT = r"(?:(?!(?:" + "|".join(_RESERVED) + r")(?:/|$))[^/]+)"
 
 

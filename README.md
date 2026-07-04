@@ -20,6 +20,7 @@ Chat with us on Matrix:
 - Gitea/Github integration:
   - Login with GitHub to control builds
   - CI status notification in pull requests and on the default branch
+- Embeddable SVG build-status badges for READMEs
 - All builds share the same nix store for speed
 - Tested with large flakes (50k flake outputs per evaluation)
 - The last attribute of a build is protected from garbage collection
@@ -143,6 +144,24 @@ grant themselves effects access.
 > modify the effect code to exfiltrate these secrets. Only enable
 > `effects_on_pull_requests` for repositories where you trust all contributors,
 > or where no secrets are configured.
+
+## Status badges
+
+Nixbot serves an SVG build-status badge for the latest build on a branch:
+
+```
+https://<nixbot-host>/repos/<forge>/<owner>/<repo>/badge.svg
+```
+
+It reports the default branch unless `?branch=<name>` is given. Embed it in a
+README with:
+
+```markdown
+[![nixbot](https://<nixbot-host>/repos/github/<owner>/<repo>/badge.svg)](https://<nixbot-host>/repos/github/<owner>/<repo>)
+```
+
+Private repositories return 404 to anonymous requests, so status is never
+exposed.
 
 ## Binary caches
 

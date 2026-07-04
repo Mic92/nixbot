@@ -40,8 +40,10 @@ from ..auth import can_control_build, is_admin  # noqa: TID252
 from ..forge_tokens import RevokedSessionStore  # noqa: TID252
 from ..recovery import check_db_health  # noqa: TID252
 from ..schedules import ScheduledEffectsStore, schedule_overview  # noqa: TID252
+from . import badge
 from .api_routes import create_api_router
 from .auth_routes import SESSION_COOKIE
+from .badge import message_for
 from .events import EventBroker, create_events_router
 from .logs import LogRegistry, create_log_api_router, create_log_router
 from .metrics import create_metrics_router
@@ -557,6 +559,30 @@ class _PageRoutes:
             history=await ctx.queries.attribute_history(project["id"], attr),
         )
 
+    async def badge(
+        self, request: Request, forge: str, owner: str, name: str, branch: str = ""
+    ) -> Response:
+        """SVG status badge for the latest build on a branch (default:
+        the repo's default branch). Private repos 404 for anonymous
+        callers like every other route, so status never leaks."""
+        ctx = self.ctx
+        project = await ctx.repo_or_404(forge, owner, name, request)
+        builds = await ctx.queries.builds_for_repo(
+            project["id"],
+            limit=1,
+            filters=BuildFilters(branch=branch or project["default_branch"]),
+        )
+        status = builds.items[0]["status"] if builds.items else None
+        message, color = message_for(status)
+        svg = badge.render(ctx.env, "nixbot", message, color)
+        return Response(
+            svg,
+            media_type="image/svg+xml",
+            # Short cache: reflect new builds quickly without refetching
+            # on every README load.
+            headers={"Cache-Control": "max-age=60"},
+        )
+
     async def health(self) -> PlainTextResponse:
         if not await check_db_health(self.ctx.pool):
             return PlainTextResponse("database unavailable", status_code=503)
@@ -592,6 +618,7 @@ def create_router(ctx: WebContext) -> APIRouter:
     ]
     for path, handler in html_pages:
         router.get(path, response_class=HTMLResponse)(handler)
+    router.get("/repos/{forge}/{owner:owner}/{name:segment}/badge.svg")(pages.badge)
     router.get("/health", response_class=PlainTextResponse)(pages.health)
     router.get("/llms.txt", response_class=PlainTextResponse)(pages.llms_txt)
     return router
@@ -622,6 +649,8 @@ the instance restricts project visibility.
 - GET /api/queue -> global build queue
 - GET /repos/{forge}/{owner}/{name}/builds/{number}/logs/raw/{attr}?tail=N
   -> plain-text log (full when tail is omitted)
+- GET /repos/{forge}/{owner}/{name}/badge.svg?branch=B
+  -> SVG build-status badge for a branch (default branch when branch is omitted)
 
 ## Control (Authorization: Bearer <token>; create tokens at /settings)
 
