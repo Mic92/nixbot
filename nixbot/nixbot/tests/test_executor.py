@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 import nixbot.executor as executor_mod
+from nixbot.ansi import strip_ansi
 from nixbot.build_scheduler import BuildOutcome
 from nixbot.executor import (
     FRAME_FLUSH_THRESHOLD,
@@ -597,6 +598,34 @@ def test_failure_excerpt_without_log_lines_keeps_filtered_tail() -> None:
     excerpt = failure_excerpt(tail)
     assert "required to build" in excerpt
     assert "3 available machines" in excerpt
+
+
+def test_failure_excerpt_truncates_overlong_lines() -> None:
+    long = "x" * 2000
+    excerpt = failure_excerpt(f"fail-1> {long}\nReason: nope.\n")
+    log_line = excerpt.splitlines()[0]
+    # Visible length capped; ellipsis marks the cut.
+    assert log_line.endswith("…")
+    assert len(strip_ansi(log_line)) <= 650
+
+
+def test_failure_excerpt_truncates_overlong_reason() -> None:
+    excerpt = failure_excerpt(f"Reason: {'z' * 2000}\n")
+    assert len(strip_ansi(excerpt)) <= 650
+    assert excerpt.endswith("…")
+
+
+def test_failure_excerpt_keeps_ansi_when_truncating() -> None:
+    # ANSI codes must not count toward the length budget and must
+    # survive truncation intact.
+    body = "\x1b[31m" + "y" * 2000 + "\x1b[0m"
+    excerpt = failure_excerpt(f"fail-1> {body}\n")
+    log_line = excerpt.splitlines()[0]
+    assert "\x1b[31m" in log_line
+    assert len(strip_ansi(log_line)) <= 650
+    # Truncation drops the source line's own reset; a reset is
+    # re-appended so red does not bleed into the following line.
+    assert log_line.endswith("\x1b[0m")
 
 
 async def test_iter_lines_survives_line_over_stream_limit() -> None:

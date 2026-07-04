@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 import httpx
 
+from nixbot.forge.retry import make_client
 from nixbot.gitrepo import FetchCredentials
 
 if TYPE_CHECKING:
@@ -85,7 +86,7 @@ class TokenForgeClient:
     ) -> None:
         self.instance_url = instance_url.rstrip("/")
         self.token = token
-        self.http = http or httpx.AsyncClient()
+        self.http = http or make_client()
 
     def auth_headers(self) -> dict[str, str]:
         raise NotImplementedError
