@@ -21,8 +21,14 @@ from .db import BuildStatus
 from .db_gen import builds as builds_q
 from .db_gen import failed as failed_q
 from .db_gen import maintenance as q
-from .db_gen import web as web_q
-from .events import BuildResult, ChangeEvent, EvalReport, StatusReporter
+from .events import (
+    BuildResult,
+    ChangeEvent,
+    EvalReport,
+    StatusReporter,
+    effects_event_for_build,
+    event_for_build,
+)
 from .gitrepo import (
     CredentialsProvider,
     FetchCredentials,
@@ -463,12 +469,7 @@ class CIService:
         project = await self.repo_store.by_id(build.project_id)
         if project is None:
             return
-        event = ChangeEvent(
-            repo=repo_info(project),
-            branch=build.branch,
-            commit_sha=build.commit_sha,
-            pr_number=build.pr_number,
-        )
+        event = event_for_build(repo_info(project), build)
         rows = await builds_q.attribute_statuses(self.pool, build_id=build_id)
         reporter = self.orchestrator.reporter
         if isinstance(reporter, RetryingReporter):
@@ -561,33 +562,16 @@ class CIService:
             project = await self.repo_store.by_id(build.project_id)
             if project is None:
                 continue
-            event = ChangeEvent(
-                repo=repo_info(project),
-                branch=build.effects_branch or build.branch,
-                commit_sha=build.effects_commit_sha or build.commit_sha,
-                pr_number=build.effects_pr_number
-                if build.effects_commit_sha
-                else build.pr_number,
-            )
-            reporter = self.orchestrator.reporter
+            event = effects_event_for_build(repo_info(project), build)
             for name in names:
-                await reporter.effect_finished(
+                await self.orchestrator.reporter.effect_finished(
                     event,
                     build,
                     name,
                     success=False,
                     error="interrupted by a service restart",
                 )
-            statuses = [
-                e.status for e in await web_q.web_effects(self.pool, build_id=build_id)
-            ]
-            if not any(s in ("pending", "running") for s in statuses):
-                await reporter.effects_finished(
-                    event,
-                    build,
-                    failed=sum(1 for s in statuses if s != "succeeded"),
-                    succeeded=sum(1 for s in statuses if s == "succeeded"),
-                )
+            await self.orchestrator.post_effects_summary(event, build)
 
     async def cancel_attribute(self, build_id: int, attr: str) -> None:
         event = self.orchestrator.attr_cancel_events.get((build_id, attr))
@@ -630,12 +614,7 @@ class CIService:
         project = await self.repo_store.by_id(build.project_id)
         if project is None:
             return
-        change = ChangeEvent(
-            repo=repo_info(project),
-            branch=build.branch,
-            commit_sha=build.commit_sha,
-            pr_number=build.pr_number,
-        )
+        change = event_for_build(repo_info(project), build)
         await self.orchestrator.reporter.build_finished(
             change, build, BuildResult(status, generation, [])
         )

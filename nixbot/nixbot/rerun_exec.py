@@ -16,7 +16,7 @@ from .canceller import branch_key
 from .db import BuildStatus
 from .db_gen import builds as builds_q
 from .db_gen import maintenance as q
-from .events import ChangeEvent, EvalReport
+from .events import ChangeEvent, EvalReport, event_for_build
 from .gitrepo import pr_refspec
 
 if TYPE_CHECKING:
@@ -40,12 +40,7 @@ async def rerun_worktree(
 ) -> AsyncIterator[tuple[ChangeEvent, Path]]:
     """Event reconstruction plus a fresh worktree at the recorded
     commit; shared by the rerun paths."""
-    event = ChangeEvent(
-        repo=info,
-        branch=build.branch,
-        commit_sha=build.commit_sha,
-        pr_number=build.pr_number,
-    )
+    event = event_for_build(info, build)
     # PR head commits are only reachable via the PR refs.
     refspecs = ["+refs/heads/*:refs/heads/*"]
     if build.pr_number is not None:
