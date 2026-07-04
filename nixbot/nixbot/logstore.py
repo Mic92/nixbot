@@ -52,6 +52,10 @@ class LogContainerWriter:
             d.name = name
         return d
 
+    def register(self, drv: str, name: str | None = None) -> None:
+        """Ensure a derivation exists (and set its name) before any line."""
+        self._get(drv, name)
+
     def line(
         self, drv: str, text: str, ts: int | None = None, name: str | None = None
     ) -> None:

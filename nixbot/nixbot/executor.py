@@ -28,9 +28,10 @@ import io
 import json
 import logging
 import re
+import time
 from collections import OrderedDict, deque
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
 import zstandard
@@ -38,10 +39,11 @@ import zstandard
 from .ansi import ANSI_TOKEN_RE, strip_ansi
 from .build_scheduler import BuildOutcome
 from .gcroots import safe_attr_filename
+from .logstore import LogContainerWriter
 from .proc import ProcessGroup
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Callable
     from pathlib import Path
 
     from .models import NixEvalJobSuccess
@@ -452,6 +454,7 @@ def failure_excerpt(tail: str, max_lines: int = 8) -> str:
 # nix activity/result types (nix/util/logging.hh).
 ACT_BUILD = 105
 RES_BUILD_LOG_LINE = 101
+RES_SET_PHASE = 104
 
 
 def _drv_display_name(drv_path: str) -> str:
@@ -460,19 +463,66 @@ def _drv_display_name(drv_path: str) -> str:
     return name or drv_path
 
 
-def render_log_event(line: bytes, activities: dict[int, str]) -> bytes | None:
-    """One line of `nix build --log-format internal-json` to log text.
+class StructuredCapture:
+    """Demux the internal-json stream into a per-derivation container.
 
-    Build-log lines get a `name> ` prefix from their build activity;
-    nix's own messages pass through with their ANSI colors. Returns
-    None for events with no log output (progress, stops, ...).
+    Activity ids map to full drv paths; log lines, phases and stop
+    timestamps attach to the owning derivation. Unattributed output (nix's
+    own messages) collects under a synthetic ``driver`` derivation.
     """
-    if not line.startswith(b"@nix "):
-        return line  # not an event: pass through (e.g. daemon chatter)
-    try:
-        event = json.loads(line[len(b"@nix ") :])
-    except ValueError:
-        return line
+
+    DRIVER = "<driver>"
+
+    def __init__(self, clock: Callable[[], float] = time.time) -> None:
+        self._w = LogContainerWriter()
+        self._clock = clock
+        self._act: dict[int, str] = {}
+        self._w.register(self.DRIVER, "driver")
+
+    def _ts(self) -> int:
+        return int(self._clock() * 1000)
+
+    def start_build(self, act_id: int, drv_path: str) -> None:
+        self._act[act_id] = drv_path
+        self._w.register(drv_path, _drv_display_name(drv_path))
+
+    def log_line(self, act_id: int, text: str) -> None:
+        self._w.line(self._act.get(act_id, self.DRIVER), text, ts=self._ts())
+
+    def phase(self, act_id: int, name: str) -> None:
+        self._w.phase(self._act.get(act_id, self.DRIVER), name, ts=self._ts())
+
+    def stop(self, act_id: int) -> None:
+        drv = self._act.get(act_id)
+        if drv is not None:
+            self._w.stop(drv, self._ts())
+
+    def driver_line(self, text: str) -> None:
+        self._w.line(self.DRIVER, text, ts=self._ts())
+
+    def set_status(self, drv_path: str, status: str) -> None:
+        self._w.status(drv_path, status)
+
+    def finalize(self) -> bytes:
+        return self._w.finalize()
+
+
+def _feed_capture(event: Any, capture: StructuredCapture) -> None:
+    action, etype = event.get("action"), event.get("type")
+    fields = event.get("fields") or []
+    if action == "start" and etype == ACT_BUILD and fields:
+        capture.start_build(event["id"], str(fields[0]))
+    elif action == "result" and etype == RES_BUILD_LOG_LINE:
+        capture.log_line(event.get("id"), (fields or [""])[0])
+    elif action == "result" and etype == RES_SET_PHASE and fields and fields[0]:
+        capture.phase(event.get("id"), str(fields[0]))
+    elif action == "stop":
+        capture.stop(event.get("id"))
+    elif action == "msg" and event.get("msg"):
+        capture.driver_line(event["msg"])
+
+
+def _render_event(event: Any, activities: dict[int, str]) -> bytes | None:
     action = event.get("action")
     if action == "start" and event.get("type") == ACT_BUILD:
         fields = event.get("fields") or []
@@ -491,16 +541,45 @@ def render_log_event(line: bytes, activities: dict[int, str]) -> bytes | None:
     return None
 
 
+def render_log_event(
+    line: bytes,
+    activities: dict[int, str],
+    capture: StructuredCapture | None = None,
+) -> bytes | None:
+    """One line of `nix build --log-format internal-json` to log text.
+
+    Build-log lines get a `name> ` prefix from their build activity;
+    nix's own messages pass through with their ANSI colors. Returns
+    None for events with no log output (progress, stops, ...). When
+    `capture` is given, the same parsed event also feeds the structured
+    per-derivation container (phases and stop timestamps included).
+    """
+    if not line.startswith(b"@nix "):
+        if capture is not None and line.strip():
+            capture.driver_line(line.decode(errors="replace").rstrip("\n"))
+        return line  # not an event: pass through (e.g. daemon chatter)
+    try:
+        event = json.loads(line[len(b"@nix ") :])
+    except ValueError:
+        return line
+    if capture is not None:
+        _feed_capture(event, capture)
+    return _render_event(event, activities)
+
+
 def is_transient_error(output_tail: str) -> bool:
     return any(marker in output_tail for marker in TRANSIENT_ERROR_MARKERS)
 
 
 async def _pump_output(
-    stream: asyncio.StreamReader, output_tail: deque[bytes], log_writer: LogWriter
+    stream: asyncio.StreamReader,
+    output_tail: deque[bytes],
+    log_writer: LogWriter,
+    capture: StructuredCapture | None = None,
 ) -> None:
     activities: dict[int, str] = {}
     async for raw in iter_lines(stream):
-        line = render_log_event(raw, activities)
+        line = render_log_event(raw, activities, capture)
         if line is None:
             continue
         output_tail.append(line)
@@ -594,8 +673,9 @@ class NixBuildExecutor:
         assert proc.stdout is not None  # noqa: S101
 
         output_tail: deque[bytes] = deque(maxlen=100)
+        capture = StructuredCapture()
         pump_task = asyncio.create_task(
-            _pump_output(proc.stdout, output_tail, log_writer)
+            _pump_output(proc.stdout, output_tail, log_writer, capture)
         )
         cancel_task = asyncio.create_task(cancel_event.wait())
         try:
@@ -614,14 +694,21 @@ class NixBuildExecutor:
                     f"\n\nnixbot: build timed out after "
                     f"{self.settings.timeout}s\n\n".encode()
                 )
+                await _finalize_container(
+                    capture, log_writer, job.drv_path, failed=True
+                )
                 # Timeouts are genuine failures (cached when enabled).
                 return BuildOutcome.failure, False
             if proc.returncode == 0:
                 # Even when the kill raced a clean exit: the build
                 # finished, the result is real.
+                await _finalize_container(
+                    capture, log_writer, job.drv_path, failed=False
+                )
                 return BuildOutcome.success, False
             if cancel_event.is_set():
                 return BuildOutcome.cancelled, False
+            await _finalize_container(capture, log_writer, job.drv_path, failed=True)
             tail_text = b"".join(output_tail).decode(errors="replace")
             return BuildOutcome.failure, is_transient_error(tail_text)
         finally:
@@ -636,6 +723,22 @@ class NixBuildExecutor:
                 with contextlib.suppress(asyncio.CancelledError):
                     await pump_task
                 await group.reap()
+
+
+def container_path(log_path: Path) -> Path:
+    return log_path.with_name(log_path.name + ".nbl1")
+
+
+async def _finalize_container(
+    capture: StructuredCapture,
+    log_writer: LogWriter,
+    drv_path: str,
+    *,
+    failed: bool,
+) -> None:
+    capture.set_status(drv_path, "failed" if failed else "built")
+    blob = capture.finalize()
+    await asyncio.to_thread(container_path(log_writer.path).write_bytes, blob)
 
 
 def read_log(path: Path) -> bytes:

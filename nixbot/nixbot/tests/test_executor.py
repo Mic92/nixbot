@@ -25,6 +25,7 @@ from nixbot.executor import (
     FairScheduler,
     LogWriter,
     NixBuildExecutor,
+    StructuredCapture,
     build_nix_command,
     failure_excerpt,
     is_transient_error,
@@ -32,6 +33,7 @@ from nixbot.executor import (
     read_log,
     render_log_event,
 )
+from nixbot.logstore import LogContainerReader
 
 from .support import mk_job
 
@@ -552,6 +554,42 @@ def test_render_log_event_attributes_and_colors() -> None:
     assert render_log_event(b'@nix {"action":"stop","id":7}', activities) is None
     # Non-event output passes through.
     assert render_log_event(b"plain line\n", activities) == b"plain line\n"
+
+
+def test_structured_capture_demux() -> None:
+    clock = iter(range(1000, 2000))
+    cap = StructuredCapture(clock=lambda: next(clock))
+    activities: dict[int, str] = {}
+
+    def feed(line: bytes) -> None:
+        render_log_event(line, activities, cap)
+
+    feed(
+        b'@nix {"action":"start","id":1,"type":105,'
+        b'"fields":["/nix/store/aaa-qtbase-5.0.drv"]}'
+    )
+    feed(
+        b'@nix {"action":"start","id":2,"type":105,'
+        b'"fields":["/nix/store/bbb-zlib-1.3.drv"]}'
+    )
+    feed(b'@nix {"action":"result","id":1,"type":104,"fields":["unpack"]}')
+    feed(b'@nix {"action":"result","id":1,"type":101,"fields":["unpacking qt"]}')
+    feed(b'@nix {"action":"result","id":2,"type":101,"fields":["building zlib"]}')
+    feed(b'@nix {"action":"result","id":1,"type":104,"fields":["build"]}')
+    feed(b'@nix {"action":"result","id":1,"type":101,"fields":["CC main.o"]}')
+    feed(b'@nix {"action":"msg","level":0,"msg":"note: keeping going"}')
+    feed(b'@nix {"action":"stop","id":1}')
+    cap.set_status("/nix/store/aaa-qtbase-5.0.drv", "failed")
+
+    r = LogContainerReader(cap.finalize())
+    by_name = {r.entry(i)["name"]: i for i in range(len(r))}
+    qt = by_name["qtbase-5.0"]
+    assert r.lines(qt) == ["unpacking qt", "CC main.o"]
+    assert r.entry(qt)["ph"] == [["unpack", 0], ["build", 1]]
+    assert r.entry(qt)["status"] == "failed"
+    assert r.lines(by_name["zlib-1.3"]) == ["building zlib"]
+    # nix's own message lands in the synthetic driver bucket.
+    assert r.lines(by_name["driver"]) == ["note: keeping going"]
 
 
 # As written by render_log_event: the builder's own lines arrive as
