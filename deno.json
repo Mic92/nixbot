@@ -1,0 +1,9 @@
+{
+  "compilerOptions": {
+    "checkJs": true,
+    "lib": ["dom", "dom.iterable", "esnext"]
+  },
+  "lint": {
+    "exclude": ["nixbot/nixbot/web/static/vendor"]
+  }
+}
