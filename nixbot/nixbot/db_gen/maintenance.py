@@ -7,6 +7,7 @@ from __future__ import annotations
 __all__: collections.abc.Sequence[str] = (
     "AttributesForBuildsRow",
     "CleanupOldRowsRow",
+    "FailInterruptedEffectsRow",
     "QueryResults",
     "SucceededAttributeOutputsRow",
     "all_build_ids",
@@ -63,6 +64,12 @@ class AttributesForBuildsRow:
 class CleanupOldRowsRow:
     kind: str
     id: int
+
+
+@dataclasses.dataclass()
+class FailInterruptedEffectsRow:
+    build_id: int
+    name: str
 
 
 @dataclasses.dataclass()
@@ -159,10 +166,11 @@ EFFECT_STATUS: typing.Final[str] = """-- name: EffectStatus :one
 SELECT status FROM build_effects WHERE build_id = $1 AND name = $2
 """
 
-FAIL_INTERRUPTED_EFFECTS: typing.Final[str] = """-- name: FailInterruptedEffects :exec
+FAIL_INTERRUPTED_EFFECTS: typing.Final[str] = """-- name: FailInterruptedEffects :many
 UPDATE build_effects SET status = 'failed',
     error = 'interrupted by a service restart', finished_at = now()
 WHERE status = 'running' AND started_at < $1
+RETURNING build_id, name
 """
 
 FAIL_INTERRUPTED_SCHEDULED_RUNS: typing.Final[str] = """-- name: FailInterruptedScheduledRuns :exec
@@ -353,8 +361,10 @@ async def effect_status(conn: ConnectionLike, *, build_id: int, name: str) -> st
     return row[0]
 
 
-async def fail_interrupted_effects(conn: ConnectionLike, *, started_before: datetime.datetime) -> None:
-    await conn.execute(FAIL_INTERRUPTED_EFFECTS, started_before)
+def fail_interrupted_effects(conn: ConnectionLike, *, started_before: datetime.datetime) -> QueryResults[FailInterruptedEffectsRow]:
+    def _decode_hook(row: asyncpg.Record) -> FailInterruptedEffectsRow:
+        return FailInterruptedEffectsRow(build_id=row[0], name=row[1])
+    return QueryResults[FailInterruptedEffectsRow](conn, FAIL_INTERRUPTED_EFFECTS, _decode_hook, started_before)
 
 
 async def fail_interrupted_scheduled_runs(conn: ConnectionLike, *, started_before: datetime.datetime) -> None:

@@ -40,7 +40,7 @@ from .db_gen import maintenance as q
 from .models import CacheStatus, NixEvalJobSuccess
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Sequence
     from datetime import datetime
 
 
@@ -155,14 +155,16 @@ def _valid_paths_from_db(paths: list[str], nix_db: Path) -> set[str]:
 
 async def fail_interrupted_effects(
     pool: asyncpg.Pool, started_before: datetime
-) -> None:
+) -> Sequence[q.FailInterruptedEffectsRow]:
     """Settle effect rows left running by a crash: started effects
     never auto-re-run. Pending rows keep their queued items and run
     after the requeue. Only rows started before `started_before`
     (process start) are swept: the sweep runs concurrently with the
-    work loop, and newer rows are live effects."""
-    await q.fail_interrupted_effects(pool, started_before=started_before)
+    work loop, and newer rows are live effects. Returns the settled
+    rows for the caller to report."""
+    settled = await q.fail_interrupted_effects(pool, started_before=started_before)
     await q.fail_interrupted_scheduled_runs(pool, started_before=started_before)
+    return settled
 
 
 async def check_store_paths(paths: list[str], nix_db: Path = NIX_DB) -> set[str]:

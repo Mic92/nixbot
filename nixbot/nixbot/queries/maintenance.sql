@@ -84,10 +84,11 @@ ORDER BY id;
 SELECT build_id, attr, system, drv_path, outputs, status
 FROM build_attributes WHERE build_id = ANY(sqlc.arg(build_ids)::bigint[]);
 
--- name: FailInterruptedEffects :exec
+-- name: FailInterruptedEffects :many
 UPDATE build_effects SET status = 'failed',
     error = 'interrupted by a service restart', finished_at = now()
-WHERE status = 'running' AND started_at < sqlc.arg(started_before);
+WHERE status = 'running' AND started_at < sqlc.arg(started_before)
+RETURNING build_id, name;
 
 -- name: FailInterruptedScheduledRuns :exec
 UPDATE scheduled_effect_runs SET status = 'failed',
