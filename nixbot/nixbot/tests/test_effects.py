@@ -151,7 +151,7 @@ async def test_run_effect_with_secrets(
 ) -> None:
     creds = tmp_path / "creds"
     creds.mkdir()
-    (creds / "widget-secret").write_text('{"token": "s3"}')
+    (creds / "widget-secret").write_text('{"token": "s3-longsecret"}')
     monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(creds))
 
     chunks: list[bytes] = []
@@ -163,7 +163,10 @@ async def test_run_effect_with_secrets(
     ok = await run_effect(ctx, "deploy", log_write)
     assert ok
     output = b"".join(chunks).decode()
-    assert '{"token": "s3"}' in output  # secrets file content reached the CLI
+    # The effect echoes the secrets file; the deploy secret must be
+    # masked in the log even though the CLI received the real file.
+    assert "s3-longsecret" not in output
+    assert "***" in output
     # Deploy credentials must not be world/group readable while on disk.
     assert "mode=600" in output
     assert "running effect" in output
