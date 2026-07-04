@@ -117,8 +117,10 @@
     vp.removeAttribute("aria-busy");
     const card = /** @type {HTMLElement|null} */ (vp.closest(".log-card"));
     if (!card) return;
+    // A capped (head+tail) log has a gap, so scrollTop->line math and its
+    // phase bar would be wrong; drop the phases for those.
     const ph = /** @type {[string,number][]} */ (
-      JSON.parse(card.dataset.ph || "[]")
+      vp.querySelector(".log-elided") ? [] : JSON.parse(card.dataset.ph || "[]")
     );
     const handle = wireLog(vp, ph, card.querySelector(".phasebar"));
     drawn.set(card, handle);

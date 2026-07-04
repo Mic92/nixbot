@@ -784,6 +784,47 @@ def test_structured_log_endpoints(client: WebHarness, tmp_path: Path) -> None:
     assert "no matches" in client.get(f"{base}/search").text  # empty query
 
 
+def test_structured_log_window_caps_huge_derivation(
+    client: WebHarness, tmp_path: Path
+) -> None:
+    """A derivation larger than the render cap serves a head+tail window
+    with a load-more marker; ?start&end pulls a bounded middle chunk."""
+    drv = "/nix/store/aaa-huge.drv"
+
+    async def run() -> None:
+        ctx = client.ctx
+        ctx.state_dir = tmp_path
+        build_id = await ctx.pool.fetchval("SELECT id FROM builds WHERE number = 2")
+        log_file = attribute_log_path(tmp_path, build_id, "x86_64-linux.bad")
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        w = LogContainerWriter()
+        w.register(drv, "huge")
+        for i in range(12000):
+            w.line(drv, f"line{i:05d}")
+        w.status(drv, "built")
+        container_path(log_file).write_bytes(w.finalize())
+
+    client.loop.run_until_complete(run())
+    base = "/repos/github/acme/widget/builds/2/logs/x86_64-linux.bad"
+
+    capped = client.get(f"{base}/drv/0").text
+    assert 'id="d0-L1"' in capped  # head
+    assert "line00000" in capped
+    assert 'id="d0-L12000"' in capped  # tail
+    assert "line11999" in capped
+    assert "line05000" not in capped  # elided middle
+    # The marker auto-loads the gap in bounded chunks.
+    assert 'hx-trigger="revealed"' in capped
+    assert "start=2000&end=4000" in capped
+
+    chunk = client.get(f"{base}/drv/0?start=2000&end=4000").text
+    assert 'id="d0-L2001"' in chunk
+    assert "line02000" in chunk
+    assert 'id="d0-L4000"' in chunk
+    assert "line03999" in chunk
+    assert "start=4000" in chunk  # next marker for the remaining gap
+
+
 def test_log_toc_legacy_without_container(client: WebHarness, tmp_path: Path) -> None:
     seed_log(client, tmp_path)
     toc = client.get(

@@ -231,9 +231,54 @@ def render_rows(
     return "".join(out), style
 
 
-def render_drv_lines(reader: LogContainerReader, i: int) -> str:
-    """One derivation's log as anchored HTML rows."""
-    return render_rows(i, 1, reader.lines(i))[0]
+# A single huge derivation would insert tens of thousands of DOM nodes in
+# one swap and hang the tab. Render only a head+tail window; the elided
+# middle auto-loads as the reader scrolls, one bounded chunk at a time.
+_RENDER_HEAD = 2000
+_RENDER_TAIL = 3000
+_RENDER_CAP = _RENDER_HEAD + _RENDER_TAIL
+_RENDER_CHUNK = 2000
+
+
+def _chunk_marker(idx: int, base: str, start: int, end: int) -> str:
+    """A marker that auto-loads lines [start, end) (0-based) once scrolled
+    into view, one bounded chunk at a time; htmx swaps the fetched rows
+    (and the next marker, if any) over it."""
+    nxt = min(start + _RENDER_CHUNK, end)
+    return (
+        f'<div class="log-elided" role="separator"'
+        f' hx-get="{base}/drv/{idx}?start={start}&end={nxt}"'
+        f' hx-trigger="revealed" hx-target="this" hx-swap="outerHTML">'
+        f"loading {end - start:,} hidden lines…</div>"
+    )
+
+
+def render_drv_window(
+    reader: LogContainerReader,
+    idx: int,
+    base: str,
+    start: int | None = None,
+    end: int | None = None,
+) -> str:
+    """A derivation's log as anchored rows. The initial view (no range)
+    is capped to a head+tail window with a load-more marker spanning the
+    gap; a range request renders lines [start, end) plus another marker
+    if more of the gap remains before the tail."""
+    lines = reader.lines(idx)
+    n = len(lines)
+    gap_end = n - _RENDER_TAIL  # tail starts here; never render past it
+    if start is None:
+        if n <= _RENDER_CAP:
+            return render_rows(idx, 1, lines)[0]
+        head = render_rows(idx, 1, lines[:_RENDER_HEAD])[0]
+        tail = render_rows(idx, gap_end + 1, lines[gap_end:])[0]
+        return head + _chunk_marker(idx, base, _RENDER_HEAD, gap_end) + tail
+    start = max(0, start)
+    end = min(end if end is not None else start + _RENDER_CHUNK, gap_end)
+    rows = render_rows(idx, start + 1, lines[start:end])[0]
+    if end < gap_end:
+        rows += _chunk_marker(idx, base, end, gap_end)
+    return rows
 
 
 def _toc_entries(reader: LogContainerReader) -> list[dict]:
@@ -572,12 +617,17 @@ class _LogRoutes:
         attr: str,
         idx: int,
     ) -> HTMLResponse:
-        """One derivation's log as anchored HTML rows."""
+        """One derivation's log as anchored HTML rows. ?start&end pulls a
+        bounded slice of the elided middle for the load-more marker."""
         _, _, path = await self._resolve(request, forge, owner, name, number, attr)
         reader = await _load_container(path)
         if reader is None or not (0 <= idx < len(reader)):
             raise HTTPException(status_code=404)
-        html = await asyncio.to_thread(render_drv_lines, reader, idx)
+        base = request.url.path.rsplit("/drv/", 1)[0]
+        qp = request.query_params
+        start = int(qp["start"]) if "start" in qp else None
+        end = int(qp["end"]) if "end" in qp else None
+        html = await asyncio.to_thread(render_drv_window, reader, idx, base, start, end)
         return HTMLResponse(html)
 
     async def log_drv_raw(  # noqa: PLR0913
