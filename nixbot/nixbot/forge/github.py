@@ -25,6 +25,7 @@ import httpx
 from nixbot.gitrepo import FetchCredentials
 
 from .base import DiscoveredRepo, ForgeError, paginate_link, paginate_link_pages
+from .retry import make_client
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -94,7 +95,7 @@ class GitHubAppClient:
         self.app_id = app_id
         self.private_key_file = private_key_file
         self.api_url = api_url
-        self.http = http or httpx.AsyncClient()
+        self.http = http or make_client()
         self._jwt: _CachedToken | None = None
         # Keyed by (installation id, repo scope); None = installation-wide.
         self._installation_tokens: dict[

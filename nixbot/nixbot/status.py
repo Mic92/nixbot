@@ -27,13 +27,9 @@ Target URLs point at the service's own URL scheme
 
 from __future__ import annotations
 
-import contextlib
 import logging
-import math
-import time
 from collections import OrderedDict
 from datetime import UTC, datetime
-from email.utils import parsedate_to_datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, ClassVar, Protocol
 from urllib.parse import quote
@@ -43,6 +39,7 @@ import httpx
 from .ansi import strip_ansi
 from .db_gen import failed as q
 from .forge import ForgeError
+from .forge.retry import retry_after_seconds
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -94,31 +91,10 @@ class CheckPermissionError(ForgeError):
     hammering the API until the operator fixes the permission."""
 
 
-def _retry_after_seconds(response: httpx.Response) -> float | None:
-    value = response.headers.get("Retry-After")
-    if value is not None:
-        try:
-            seconds = float(value)
-            # float() accepts nan/inf; nan would poison every later
-            # min/max comparison down to asyncio.sleep.
-            if math.isfinite(seconds):
-                return max(0.0, seconds)
-        except ValueError:
-            with contextlib.suppress(TypeError, ValueError):
-                dt = parsedate_to_datetime(value)
-                return max(0.0, dt.timestamp() - time.time())
-    # GitHub primary rate limits: no Retry-After, only a reset epoch.
-    if response.headers.get("X-RateLimit-Remaining") == "0":
-        with contextlib.suppress(TypeError, ValueError):
-            reset = int(response.headers["X-RateLimit-Reset"])
-            return max(0.0, reset - time.time())
-    return None
-
-
 def _raise_for_status(response: httpx.Response, repo: str) -> None:
     if response.status_code >= httpx.codes.BAD_REQUEST:
         msg = f"status post for {repo} failed: HTTP {response.status_code}"
-        raise StatusPostError(msg, retry_after=_retry_after_seconds(response))
+        raise StatusPostError(msg, retry_after=retry_after_seconds(response))
 
 
 class CommitStatusPoster(Protocol):
