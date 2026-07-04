@@ -41,6 +41,29 @@ def test_build_prev_next_navigation(page: Page) -> None:
     page.wait_for_url("**/builds/2")
 
 
+def test_structured_log_viewer(page: Page) -> None:
+    page.goto("/repos/github/acme/widget/builds/2/logs/x86_64-linux.bad")
+    # Failing derivation card is open with its phase bar; log rows load
+    # lazily from /drv/{idx}.
+    card = page.locator('.log-card[data-pos="0"]')
+    card.get_by_text("hello-2.12").wait_for()
+    assert card.get_attribute("open") is not None
+    card.locator(".phasebar").wait_for()
+    card.locator("text=error: build failed on the last step").wait_for()
+
+    # Successes hide behind an expand-to-browse panel until opened.
+    assert page.locator("#succeeded-list .log-card").count() == 0
+    page.locator("#succeeded-panel > summary").click()
+    page.locator("#succeeded-list").get_by_text("zlib-1.3").wait_for()
+
+    # Build-scoped search groups hits and jumps to the matching line.
+    page.fill("#search-input", "error")
+    page.locator("#search-results a[data-line]").first.click()
+    hit = page.locator(".log-lines .logline.hit")
+    hit.wait_for()
+    assert hit.get_attribute("id") == "d0-L32"
+
+
 def test_project_filter_form(page: Page) -> None:
     page.goto("/repos/github/acme/widget")
     # No filter button: the select applies itself, the ref input

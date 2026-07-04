@@ -897,3 +897,255 @@ details.webhook-setup summary {
 	font-size: 0.75rem;
 	padding: 0.15rem 0.5rem;
 }
+
+/* Structured log viewer: per-derivation cards, phase bar, lazy log.
+   Disclosure is native <details>; only the summary chrome is styled. */
+.log-card {
+	background: var(--card);
+	border: 1px solid var(--border);
+	border-left: 3px solid var(--bad);
+	border-radius: 8px;
+	margin: 0.5rem 0;
+	overflow: hidden;
+}
+.log-card.ok {
+	border-left-color: var(--ok);
+}
+.log-card > summary {
+	display: flex;
+	align-items: center;
+	gap: 0.6rem;
+	padding: 0.55rem 0.8rem;
+	cursor: pointer;
+	list-style: none;
+}
+.log-card > summary::-webkit-details-marker {
+	display: none;
+}
+.log-card > summary:hover {
+	background: var(--hover);
+}
+.card-text {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+}
+.card-name {
+	font-weight: 600;
+	overflow-wrap: anywhere;
+}
+.card-text .meta {
+	color: var(--muted);
+	font-size: 0.8rem;
+}
+.browse-hint::after {
+	content: "expand to browse";
+}
+.succeeded-panel[open] > summary .browse-hint::after {
+	content: "collapse";
+}
+.log-card-body {
+	border-top: 1px solid var(--border);
+}
+.excerpt {
+	padding: 0.6rem 0.8rem;
+}
+.raw {
+	color: var(--accent);
+	text-decoration: none;
+	white-space: nowrap;
+}
+.raw:hover {
+	text-decoration: underline;
+}
+/* Grow to fit, cap then scroll; smaller cap on phones. */
+.log-lines {
+	max-height: 21rem;
+	overflow: auto;
+	overscroll-behavior: contain;
+	border-top: 1px solid var(--border);
+	background: var(--card);
+	font-family: var(--mono);
+	font-size: 0.8125rem;
+}
+@media (max-width: 40rem) {
+	.log-lines {
+		max-height: 14rem;
+	}
+}
+/* Whole log stays in the DOM (Ctrl-F, anchors, selection, a11y);
+   content-visibility skips off-screen layout/paint. Fixed 20px row +
+   matching contain-intrinsic-size keeps the scrollbar honest and lets
+   the phase bar map scrollTop -> line by ROW_H (see structured-logs.js). */
+.log-lines .logline {
+	display: flex;
+	height: 20px;
+	line-height: 20px;
+	white-space: pre;
+	content-visibility: auto;
+	contain-intrinsic-size: auto 20px;
+	scroll-margin-top: 2rem;
+}
+/* Space the gutter with margin, not flex gap: ANSI colors split a line
+   into several span children and gap would space them apart mid-line. */
+.log-lines .lineno {
+	width: 5ch;
+	margin: 0 1ch 0 0;
+	padding: 0;
+	color: var(--muted);
+	text-decoration: none;
+	text-align: right;
+	flex: none;
+}
+.log-lines .logline:target,
+.log-lines .logline.hit {
+	background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.phasebar {
+	display: flex;
+	align-items: center;
+	gap: 0.4rem;
+	padding: 0.2rem 0.5rem 0.2rem 0.8rem;
+	background: var(--card);
+	border-top: 1px solid var(--border);
+	border-bottom: 1px solid var(--border);
+	font-size: 0.7rem;
+	text-transform: uppercase;
+	letter-spacing: 0.07em;
+	color: var(--muted);
+}
+.phasebar[hidden] {
+	display: none;
+}
+.phase-label {
+	font-weight: 600;
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.phase-pos {
+	font-weight: 400;
+	opacity: 0.7;
+}
+.phasebar button {
+	all: unset;
+	cursor: pointer;
+	padding: 0.1rem 0.4rem;
+	border-radius: 4px;
+	color: var(--muted);
+}
+.phasebar button:hover:not(:disabled) {
+	background: var(--hover);
+	color: var(--fg);
+}
+.phasebar button:disabled {
+	opacity: 0.35;
+	cursor: default;
+}
+/* Touch: 44px tap targets (WCAG 2.5.5) without bloating desktop. */
+@media (pointer: coarse) {
+	.phasebar {
+		padding-block: 0;
+	}
+	.phasebar button {
+		padding: 0 0.7rem;
+		min-height: 44px;
+		display: inline-flex;
+		align-items: center;
+	}
+}
+.log-search {
+	margin: 0 0 1rem;
+}
+.log-search input {
+	width: 100%;
+	box-sizing: border-box;
+	border-radius: 8px;
+	padding: 0.55rem 0.8rem;
+	font: inherit;
+}
+.search-count {
+	margin: 0.4rem 0 0;
+	font-size: 0.8rem;
+	color: var(--muted);
+}
+.search-results {
+	list-style: none;
+	margin: 0.3rem 0 0;
+	padding: 0;
+}
+.search-group {
+	margin: 0.15rem 0;
+}
+.search-results a {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	padding: 0.35rem 0.5rem;
+	border-radius: 6px;
+	text-decoration: none;
+	color: inherit;
+	font-size: 0.8125rem;
+}
+.search-results a:hover,
+.search-results a:focus-visible {
+	background: var(--hover);
+	outline: none;
+}
+.search-results a:focus-visible {
+	box-shadow: inset 0 0 0 2px var(--accent);
+}
+.search-drv {
+	border-left: 3px solid var(--bad);
+}
+.search-drv.ok {
+	border-left-color: var(--ok);
+}
+.search-name {
+	font-weight: 600;
+}
+.search-badge {
+	color: var(--muted);
+	font-size: 0.75rem;
+	margin-left: auto;
+}
+.search-lines {
+	list-style: none;
+	margin: 0;
+	padding: 0 0 0 1.6rem;
+}
+.search-line {
+	color: var(--muted);
+	flex: none;
+	font-variant-numeric: tabular-nums;
+	width: 5ch;
+	text-align: right;
+}
+.succeeded-panel {
+	background: var(--card);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+}
+.succeeded-panel > summary {
+	display: flex;
+	align-items: center;
+	gap: 0.6rem;
+	padding: 0.55rem 0.8rem;
+	cursor: pointer;
+	list-style: none;
+}
+.succeeded-panel > summary::-webkit-details-marker {
+	display: none;
+}
+.succeeded-panel > summary:hover {
+	background: var(--hover);
+}
+#succeeded-list {
+	border-top: 1px solid var(--border);
+	padding: 0.4rem 0.6rem;
+}
+#succeeded-list .log-card {
+	margin: 0.35rem 0;
+}

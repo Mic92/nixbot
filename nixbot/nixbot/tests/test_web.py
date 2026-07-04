@@ -743,9 +743,12 @@ def test_structured_log_endpoints(client: WebHarness, tmp_path: Path) -> None:
         w = LogContainerWriter()
         w.register("/nix/store/aaa-qtbase-5.0.drv", "qtbase-5.0")
         w.phase("/nix/store/aaa-qtbase-5.0.drv", "build")
-        w.line("/nix/store/aaa-qtbase-5.0.drv", "CC main.o")
+        w.line("/nix/store/aaa-qtbase-5.0.drv", "\x1b[31mCC main.o\x1b[0m")
         w.line("/nix/store/aaa-qtbase-5.0.drv", "error: boom undeclared")
         w.status("/nix/store/aaa-qtbase-5.0.drv", "failed")
+        # A substituted dep with no build output.
+        w.register("/nix/store/bbb-zlib-1.3.drv", "zlib-1.3")
+        w.status("/nix/store/bbb-zlib-1.3.drv", "built")
         container_path(log_file).write_bytes(w.finalize())
 
     client.loop.run_until_complete(run())
@@ -758,8 +761,17 @@ def test_structured_log_endpoints(client: WebHarness, tmp_path: Path) -> None:
     assert toc["derivations"][0]["ph"] == [["build", 0]]
 
     rows = client.get(f"{base}/logs/{attr}/drv/0").text
-    assert 'id="L1"' in rows
+    assert 'id="d0-L1"' in rows
     assert "CC main.o" in rows
+
+    # Per-derivation raw: plain text, ANSI stripped.
+    raw = client.get(f"{base}/logs/{attr}/drv/0/raw").text
+    assert raw == "CC main.o\nerror: boom undeclared"
+    assert "\x1b" not in raw
+    # A zero-line derivation still has a valid (empty) raw endpoint.
+    assert client.get(f"{base}/logs/{attr}/drv/1/raw").text == ""
+    assert toc["derivations"][1]["n"] == 0
+    assert client.get(f"{base}/logs/{attr}/drv/9/raw").status_code == 404
 
     hits = client.get(f"{base}/search?q=undeclared").json()
     assert hits["groups"]

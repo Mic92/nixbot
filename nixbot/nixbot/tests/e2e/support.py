@@ -16,7 +16,8 @@ import asyncpg
 import uvicorn
 import zstandard
 
-from nixbot.executor import attribute_log_path
+from nixbot.executor import attribute_log_path, container_path
+from nixbot.logstore import LogContainerWriter
 from nixbot.tests.support import insert_build, insert_project
 from nixbot.web.app import create_app
 from nixbot.web.logs import LogRegistry
@@ -25,6 +26,27 @@ if TYPE_CHECKING:
     import concurrent.futures
     from collections.abc import Coroutine
     from pathlib import Path
+
+
+def _seed_container(*, failed: bool) -> bytes:
+    """A container with one primary derivation (phased, optionally
+    failed) plus a built dependency, for the structured log viewer."""
+    w = LogContainerWriter()
+    hello = "/nix/store/aaa-hello-2.12.drv"
+    w.register(hello, "hello-2.12")
+    w.phase(hello, "unpack")
+    w.line(hello, "unpacking sources")
+    w.phase(hello, "build")
+    for i in range(30):
+        w.line(hello, f"CC step {i}.o")
+    if failed:
+        w.line(hello, "error: build failed on the last step")
+    w.status(hello, "failed" if failed else "built")
+    dep = "/nix/store/bbb-zlib-1.3.drv"
+    w.register(dep, "zlib-1.3")
+    w.line(dep, "building zlib")
+    w.status(dep, "built")
+    return w.finalize()
 
 
 async def seed(dsn: str, state_dir: Path | None = None) -> None:
@@ -70,6 +92,11 @@ async def seed(dsn: str, state_dir: Path | None = None) -> None:
                 log_file.parent.mkdir(parents=True, exist_ok=True)
                 log_file.write_bytes(
                     zstandard.ZstdCompressor().compress(f"log #{number}\n".encode())
+                )
+                # Structured sidecar: the log page renders the
+                # per-derivation viewer when this exists.
+                container_path(log_file).write_bytes(
+                    _seed_container(failed=status == "failed")
                 )
                 await pool.execute(
                     "UPDATE build_attributes SET log_size = $3"

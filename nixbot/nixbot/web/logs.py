@@ -211,18 +211,27 @@ def render_log_lines(text: str) -> str:
     return "".join(lines)
 
 
-def render_drv_lines(reader: LogContainerReader, i: int, base: int = 0) -> str:
-    """One derivation's log as anchored HTML rows; `base` offsets the
-    global line numbers so anchors stay unique across the whole log."""
+def render_drv_lines(reader: LogContainerReader, i: int) -> str:
+    """One derivation's log as anchored HTML rows. Ids are prefixed with
+    the derivation index (`d{i}-L{n}`) so anchors stay unique when many
+    derivations share the page."""
     lines = []
     style = _RESET
-    for n, line in enumerate(reader.lines(i), base + 1):
+    for n, line in enumerate(reader.lines(i), 1):
         rendered, style = _ansi_convert(line, style)
         lines.append(
-            f'<span class="logline" id="L{n}">'
-            f'<a class="lineno" href="#L{n}">{n}</a>{rendered}</span>'
+            f'<span class="logline" id="d{i}-L{n}">'
+            f'<a class="lineno" href="#d{i}-L{n}">{n}</a>{rendered}</span>'
         )
     return "".join(lines)
+
+
+def _toc_entries(reader: LogContainerReader) -> list[dict]:
+    fields = ("name", "status", "n", "ph", "t0", "t1")
+    return [
+        {"idx": i, **{k: reader.entry(i)[k] for k in fields}}
+        for i in range(len(reader))
+    ]
 
 
 async def _load_container(path: Path | None) -> LogContainerReader | None:
@@ -541,12 +550,7 @@ class _LogRoutes:
         reader = await _load_container(path)
         if reader is None:
             return {"format": "legacy"}
-        fields = ("name", "status", "n", "ph", "t0", "t1")
-        drvs = [
-            {"idx": i, **{k: reader.entry(i)[k] for k in fields}}
-            for i in range(len(reader))
-        ]
-        return {"format": "nbl1", "derivations": drvs}
+        return {"format": "nbl1", "derivations": _toc_entries(reader)}
 
     async def log_drv_lines(  # noqa: PLR0913
         self,
@@ -563,9 +567,26 @@ class _LogRoutes:
         reader = await _load_container(path)
         if reader is None or not (0 <= idx < len(reader)):
             raise HTTPException(status_code=404)
-        base = sum(reader.entry(i)["n"] for i in range(idx))
-        html = await asyncio.to_thread(render_drv_lines, reader, idx, base)
+        html = await asyncio.to_thread(render_drv_lines, reader, idx)
         return HTMLResponse(html)
+
+    async def log_drv_raw(  # noqa: PLR0913
+        self,
+        request: Request,
+        forge: str,
+        owner: str,
+        name: str,
+        number: int,
+        attr: str,
+        idx: int,
+    ) -> PlainTextResponse:
+        """One derivation's log as plain text (ANSI stripped)."""
+        _, _, path = await self._resolve(request, forge, owner, name, number, attr)
+        reader = await _load_container(path)
+        if reader is None or not (0 <= idx < len(reader)):
+            raise HTTPException(status_code=404)
+        lines = await asyncio.to_thread(reader.lines, idx)
+        return PlainTextResponse(strip_ansi("\n".join(lines)))
 
     async def build_search(  # noqa: PLR0913
         self,
@@ -627,10 +648,16 @@ class _LogRoutes:
         # history on connect, the client would throw it away.
         live = self.registry.get(build["id"], attr) is not None
         content = ""
+        toc: list[dict] | None = None
         waiting = False
         unavailable = False
         if not live:
-            if path is not None and path.exists():
+            reader = await _load_container(path)
+            if reader is not None:
+                # Structured viewer: per-derivation cards render lazily
+                # from /toc + /drv/{idx}; no flat body needed.
+                toc = _toc_entries(reader)
+            elif path is not None and path.exists():
                 data = await asyncio.to_thread(read_log, path)
                 content = await asyncio.to_thread(
                     render_log_lines, data.decode(errors="replace")
@@ -654,6 +681,7 @@ class _LogRoutes:
             attr_status=attr_status,
             attr=attr,
             content=content,
+            toc=toc,
             live=live,
             waiting=waiting,
             unavailable=unavailable,
@@ -678,6 +706,7 @@ def create_log_router(ctx: WebContext, registry: LogRegistry) -> APIRouter:
     router.get(f"{_BASE}/logs/{{attr}}.txt")(routes.log_raw_text_legacy)
     router.get(f"{_BASE}/logs/{{attr:path}}/stream")(routes.log_stream)
     router.get(f"{_BASE}/logs/{{attr:path}}/toc")(routes.log_toc)
+    router.get(f"{_BASE}/logs/{{attr:path}}/drv/{{idx}}/raw")(routes.log_drv_raw)
     router.get(f"{_BASE}/logs/{{attr:path}}/drv/{{idx}}", response_class=HTMLResponse)(
         routes.log_drv_lines
     )
