@@ -21,6 +21,7 @@ from .db import BuildStatus
 from .db_gen import builds as builds_q
 from .db_gen import failed as failed_q
 from .db_gen import maintenance as q
+from .db_gen import web as web_q
 from .events import BuildResult, ChangeEvent, EvalReport, StatusReporter
 from .gitrepo import (
     CredentialsProvider,
@@ -46,7 +47,7 @@ from .webhooks import (
 from .work_queue import WorkItem, WorkQueue
 
 if TYPE_CHECKING:
-    from collections.abc import Coroutine
+    from collections.abc import Coroutine, Sequence
 
     import asyncpg
 
@@ -525,7 +526,8 @@ class CIService:
         """Crash recovery: settle already-built attributes, then queue
         reruns for the rest. Builds interrupted mid-eval (no attribute
         rows) re-evaluate via the rerun path."""
-        await fail_interrupted_effects(self.pool, self._started_at)
+        settled_effects = await fail_interrupted_effects(self.pool, self._started_at)
+        await self._report_interrupted_effects(settled_effects)
         for resumable in await find_unfinished_builds(self.pool):
             remaining, settled = await settle_already_built(self.pool, resumable)
             if settled:
@@ -542,6 +544,50 @@ class CIService:
                 f"build-{resumable.build_id}",
                 {"build_id": resumable.build_id},
             )
+
+    async def _report_interrupted_effects(
+        self, settled: Sequence[q.FailInterruptedEffectsRow]
+    ) -> None:
+        """Post the failure of effects settled by crash recovery: the
+        forge holds the pending status from effect_started, and nothing
+        re-runs a settled effect to clear it."""
+        by_build: dict[int, list[str]] = {}
+        for row in settled:
+            by_build.setdefault(row.build_id, []).append(row.name)
+        for build_id, names in by_build.items():
+            build = await builds_q.get_build(self.pool, id_=build_id)
+            if build is None:
+                continue
+            project = await self.repo_store.by_id(build.project_id)
+            if project is None:
+                continue
+            event = ChangeEvent(
+                repo=repo_info(project),
+                branch=build.effects_branch or build.branch,
+                commit_sha=build.effects_commit_sha or build.commit_sha,
+                pr_number=build.effects_pr_number
+                if build.effects_commit_sha
+                else build.pr_number,
+            )
+            reporter = self.orchestrator.reporter
+            for name in names:
+                await reporter.effect_finished(
+                    event,
+                    build,
+                    name,
+                    success=False,
+                    error="interrupted by a service restart",
+                )
+            statuses = [
+                e.status for e in await web_q.web_effects(self.pool, build_id=build_id)
+            ]
+            if not any(s in ("pending", "running") for s in statuses):
+                await reporter.effects_finished(
+                    event,
+                    build,
+                    failed=sum(1 for s in statuses if s != "succeeded"),
+                    succeeded=sum(1 for s in statuses if s == "succeeded"),
+                )
 
     async def cancel_attribute(self, build_id: int, attr: str) -> None:
         event = self.orchestrator.attr_cancel_events.get((build_id, attr))

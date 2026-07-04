@@ -863,6 +863,69 @@ async def test_effect_item_setup_failure_settles_row(
         await pool.close()
 
 
+async def test_recovery_reports_interrupted_effects(
+    postgres_dsn: str, tmp_path: Path
+) -> None:
+    """An effect left running by a crash is settled failed but never
+    re-runs; recovery must post that failure so the check run does not
+    stay pending forever (issue #58)."""
+    config = Config(
+        db_url=postgres_dsn,
+        build_systems=["x86_64-linux"],
+        url="http://ci.test",
+        state_dir=tmp_path / "state",
+    )
+    service, _app = await build_service(config)
+    pool = service.pool
+    try:
+        project_id = await insert_project(pool, forge_repo_id="82", url="http://x")
+        build_id = await insert_build(
+            pool, project_id, commit_sha="c1", tree_hash="t1", status="succeeded"
+        )
+        # started_at before the service start so the sweep claims it.
+        await pool.execute(
+            "INSERT INTO build_effects (build_id, name, status, started_at) "
+            "VALUES ($1, 'deploy', 'running', now() - interval '1 hour')",
+            build_id,
+        )
+
+        finished: list[tuple[str, bool]] = []
+        summaries: list[tuple[int, int]] = []
+
+        class FakeReporter(NullStatusReporter):
+            async def effect_finished(
+                self,
+                event: ChangeEvent,
+                build: Any,
+                name: str,
+                *,
+                success: bool,
+                error: str | None = None,
+            ) -> None:
+                del event, build, error
+                finished.append((name, success))
+
+            async def effects_finished(
+                self,
+                event: ChangeEvent,
+                build: Any,
+                *,
+                failed: int,
+                succeeded: int,
+            ) -> None:
+                del event, build
+                summaries.append((failed, succeeded))
+
+        service.orchestrator.reporter = FakeReporter()
+
+        await service.recover_unfinished_builds()
+
+        assert finished == [("deploy", False)]
+        assert summaries == [(1, 0)]
+    finally:
+        await pool.close()
+
+
 async def test_work_dispatch(postgres_dsn: str, tmp_path: Path) -> None:
     """The dispatcher reconstructs payloads and fails unknown kinds."""
 
