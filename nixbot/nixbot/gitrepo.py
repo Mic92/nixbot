@@ -303,9 +303,15 @@ class RepoManager:
         if not (path / "HEAD").exists():
             shutil.rmtree(path, ignore_errors=True)
             path.parent.mkdir(parents=True, exist_ok=True)
-            await run_git(["clone", "--bare", url, str(path)], credentials=credentials)
+            # Blobless partial clone: history blobs are fetched lazily at
+            # checkout instead of upfront, cutting clone cost for repos
+            # with large history (nixpkgs).
+            await run_git(
+                ["clone", "--bare", "--filter=blob:none", url, str(path)],
+                credentials=credentials,
+            )
         await run_git(
-            ["fetch", "--force", "--prune", url, *refspecs],
+            ["fetch", "--force", "--prune", "--filter=blob:none", url, *refspecs],
             cwd=path,
             credentials=credentials,
         )
