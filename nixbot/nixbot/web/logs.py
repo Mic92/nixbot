@@ -634,22 +634,16 @@ class _LogRoutes:
         number: int,
         attr: str,
     ) -> StreamingResponse:
-        """SSE: history from disk, then live chunks until completion.
-
-        With ?format=structured, stream per-derivation deltas from the
-        live capture instead of rendered lines."""
-        _, build, path = await self._resolve(request, forge, owner, name, number, attr)
+        """SSE: a per-derivation state burst then structured deltas from
+        the live capture until the build finishes."""
+        _, build, _ = await self._resolve(request, forge, owner, name, number, attr)
         writer = self.registry.get(build["id"], attr)
-        if request.query_params.get("format") == "structured":
-            capture = writer.capture if writer else None
-            base = request.url.path.removesuffix("/stream")
-            macros: Any = self.ctx.env.get_template("_macros.html").module
-            return StreamingResponse(
-                _structured_events(capture, macros.drv_card, base),
-                media_type="text/event-stream",
-            )
+        capture = writer.capture if writer else None
+        base = request.url.path.removesuffix("/stream")
+        macros: Any = self.ctx.env.get_template("_macros.html").module
         return StreamingResponse(
-            _stream_events(writer, path), media_type="text/event-stream"
+            _structured_events(capture, macros.drv_card, base),
+            media_type="text/event-stream",
         )
 
     async def log_viewer(  # noqa: PLR0913

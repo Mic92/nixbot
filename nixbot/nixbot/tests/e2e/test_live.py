@@ -9,7 +9,7 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING
 
-from nixbot.executor import LogWriter
+from nixbot.executor import LogWriter, StructuredCapture
 
 if TYPE_CHECKING:
     from playwright.sync_api import Page
@@ -62,28 +62,45 @@ def test_attribute_table_refreshes_while_building(
 def test_log_page_streams_live_output(page: Page, server: TestServer) -> None:
     build_id = server.run(_build_id(server, 3))
     writer = LogWriter(path=server.state_dir / "live" / f"{ATTR}.zst")
+    cap = StructuredCapture()
+    writer.capture = cap
     server.registry.register(build_id, ATTR, writer)
+    drv = "/nix/store/aaa-hello-2.12.drv"
+
+    started = False
+
+    async def emit(text: str) -> None:
+        nonlocal started
+        if not started:
+            cap.start_build(1, drv)
+            started = True
+        cap.log_line(1, text)
+
+    async def finish() -> None:
+        cap.close()
+
     try:
         page.goto(f"/repos/github/acme/widget/builds/3/logs/{ATTR}")
-        log = page.locator("#log")
 
-        # Live-only logs have no history replay: lines sent before the
-        # EventSource subscribes would be lost, so wait for the stream.
+        # Structured live has no history replay: deltas sent before the
+        # EventSource subscribes are lost, so wait for the subscription.
         deadline = time.monotonic() + 15
-        while not writer._subscribers:  # noqa: SLF001
+        while not cap._subs:  # noqa: SLF001
             if time.monotonic() > deadline:
                 msg = "browser never connected to the SSE stream"
                 raise TimeoutError(msg)
             time.sleep(0.1)
 
-        server.run(writer.write(b"hello from the build\n"))
-        log.get_by_text("hello from the build").wait_for(timeout=15_000)
+        lines = page.locator(".log-card .log-lines .logline")
+        server.run(emit("hello from the build"))
+        lines.get_by_text("hello from the build").wait_for(timeout=15_000)
 
-        server.run(writer.write(b"second line arrives later\n"))
-        log.get_by_text("second line arrives later").wait_for(timeout=15_000)
+        server.run(emit("second line arrives later"))
+        lines.get_by_text("second line arrives later").wait_for(timeout=15_000)
 
         # close() ends the SSE stream; streamed content stays visible.
-        server.run(writer.close())
-        assert "hello from the build" in log.inner_text()
+        server.run(finish())
+        card = page.locator(".log-card", has_text="hello-2.12")
+        assert "hello from the build" in card.inner_text()
     finally:
         server.registry.unregister(build_id, ATTR)

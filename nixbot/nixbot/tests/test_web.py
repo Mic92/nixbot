@@ -948,16 +948,6 @@ def test_log_viewer_unavailable_for_logless_status(client: WebHarness) -> None:
         client.loop.run_until_complete(restore())
 
 
-def test_log_sse_stream_finished(client: WebHarness, tmp_path: Path) -> None:
-    seed_log(client, tmp_path)
-    response = client.get(
-        "/repos/github/acme/widget/builds/2/logs/x86_64-linux.bad/stream"
-    )
-    assert response.status_code == 200
-    assert "build exploded" in response.text
-    assert "event: done" in response.text
-
-
 # --- JSON API ----------------------------------------------------------
 
 
@@ -1111,42 +1101,6 @@ def test_openapi_docs(client: WebHarness) -> None:
 # --- live logs ---------------------------------------------------------
 
 
-def test_live_log_history_before_completion(client: WebHarness, tmp_path: Path) -> None:
-    """Running attributes have no logs DB row yet: viewer/raw/stream
-    must fall back to the registered LogWriter's on-disk file."""
-    ctx = client.ctx
-    ctx.state_dir = tmp_path
-    registry = client.app.state.log_registry
-
-    async def run() -> tuple[str, str, str]:
-        build_id = await ctx.pool.fetchval("SELECT id FROM builds WHERE number = 3")
-        writer = LogWriter(path=tmp_path / "logs" / "live" / "x86_64-linux.ok.zst")
-        await writer.write(b"early output\n")
-        registry.register(build_id, "x86_64-linux.ok", writer)
-        try:
-            base = "/repos/github/acme/widget/builds/3/logs/x86_64-linux.ok"
-            raw = (await client.http.get(f"{base}.txt")).text
-            viewer = (await client.http.get(base)).text
-            # The stream must replay history; close the writer so the
-            # SSE generator terminates.
-            stream_task = asyncio.ensure_future(client.http.get(f"{base}/stream"))
-            await asyncio.sleep(0.1)
-            await writer.write(b"late output\n")
-            await writer.close()
-            stream = (await stream_task).text
-        finally:
-            registry.unregister(build_id, "x86_64-linux.ok")
-        return raw, viewer, stream
-
-    raw, viewer, stream = client.loop.run_until_complete(run())
-    assert "early output" in raw
-    # The live viewer renders no snapshot; the stream replays history.
-    assert "const LIVE = true" in viewer
-    assert "early output" in stream
-    assert "late output" in stream
-    assert "event: done" in stream
-
-
 def test_structured_live_stream(client: WebHarness, tmp_path: Path) -> None:
     """A running attribute with a capture streams per-derivation deltas;
     the viewer wires the structured client to that stream."""
@@ -1178,7 +1132,7 @@ def test_structured_live_stream(client: WebHarness, tmp_path: Path) -> None:
         return viewer, stream
 
     viewer, stream = client.loop.run_until_complete(run())
-    assert "const LIVE_STRUCTURED = true" in viewer
+    assert "const LIVE = true" in viewer
     assert "format=structured" in viewer  # data-stream on #drv-list
     assert "event: state" in stream
     assert '"name":"qtbase-5.0"' in stream  # snapshot burst
@@ -1202,21 +1156,23 @@ def test_log_sse_stream_caps_history_backlog(
     registry = client.app.state.log_registry
 
     async def run() -> str:
-        build_id = await ctx.pool.fetchval("SELECT id FROM builds WHERE number = 3")
-        writer = LogWriter(path=tmp_path / "logs" / "live" / "big.zst")
+        project_id = await ctx.pool.fetchval(
+            "SELECT id FROM projects WHERE forge_repo_id = 'web-1'"
+        )
+        run_id = await _insert_scheduled_run(
+            ctx.pool, project_id, effect="big", status="running"
+        )
+        writer = LogWriter(path=tmp_path / "logs" / "scheduled" / f"{run_id}.zst")
         await writer.write("".join(f"line{i:05d}\n" for i in range(3000)).encode())
-        registry.register(build_id, "x86_64-linux.ok", writer)
+        registry.register_scheduled(run_id, writer)
         try:
-            stream_task = asyncio.ensure_future(
-                client.http.get(
-                    "/repos/github/acme/widget/builds/3/logs/x86_64-linux.ok/stream"
-                )
-            )
+            url = f"/repos/github/acme/widget/schedules/runs/{run_id}/stream"
+            stream_task = asyncio.ensure_future(client.http.get(url))
             await asyncio.sleep(0.1)
             await writer.close()
             return (await stream_task).text
         finally:
-            registry.unregister(build_id, "x86_64-linux.ok")
+            registry.unregister_scheduled(run_id)
 
     stream = client.loop.run_until_complete(run())
     assert "line02999" in stream
@@ -1235,21 +1191,23 @@ def test_log_sse_stream_neutralizes_carriage_returns(
     registry = client.app.state.log_registry
 
     async def run() -> str:
-        build_id = await ctx.pool.fetchval("SELECT id FROM builds WHERE number = 3")
-        writer = LogWriter(path=tmp_path / "logs" / "live" / "cr.zst")
+        project_id = await ctx.pool.fetchval(
+            "SELECT id FROM projects WHERE forge_repo_id = 'web-1'"
+        )
+        run_id = await _insert_scheduled_run(
+            ctx.pool, project_id, effect="cr", status="running"
+        )
+        writer = LogWriter(path=tmp_path / "logs" / "scheduled" / f"{run_id}.zst")
         await writer.write(b"progress 1%\rprogress 2%\r\nevent: done\rtail\n")
-        registry.register(build_id, "x86_64-linux.ok", writer)
+        registry.register_scheduled(run_id, writer)
         try:
-            stream_task = asyncio.ensure_future(
-                client.http.get(
-                    "/repos/github/acme/widget/builds/3/logs/x86_64-linux.ok/stream"
-                )
-            )
+            url = f"/repos/github/acme/widget/schedules/runs/{run_id}/stream"
+            stream_task = asyncio.ensure_future(client.http.get(url))
             await asyncio.sleep(0.1)
             await writer.close()
             return (await stream_task).text
         finally:
-            registry.unregister(build_id, "x86_64-linux.ok")
+            registry.unregister_scheduled(run_id)
 
     stream = client.loop.run_until_complete(run())
     body_lines = stream.split("\n")

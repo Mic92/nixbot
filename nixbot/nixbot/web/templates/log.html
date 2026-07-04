@@ -37,12 +37,6 @@
           {% endif %}
         </div>
       </div>
-      {% if live and not live_structured %}
-        <label>
-          <input type="checkbox" id="follow" checked>
-          follow tail
-        </label>
-      {% endif %}
       {% if waiting %}
         <p class="muted">waiting for the build to start…</p>
       {% elif unavailable %}
@@ -100,7 +94,6 @@
   {% endif %}
   <script>
     const LIVE = {{ live | tojson }};
-    const LIVE_STRUCTURED = {{ live_structured | tojson }};
     const RUNNING = {{ (attr_status in ("pending", "building")) | tojson }};
     const log = document.getElementById("log");
     /* Failures sit at the end; start there unless a line is linked. */
@@ -118,38 +111,5 @@
       if (e.attr !== {{ attr | tojson }}) return;
       if (!LIVE || !["pending", "building"].includes(e.status)) location.reload();
     };
-    if (LIVE && !LIVE_STRUCTURED && log) {
-      const follow = document.getElementById("follow");
-      /* Scroll only the log pane so the header stays usable; scrolling
-         up pauses following, scrolling back to the bottom resumes it. */
-      const atBottom = () =>
-        log.scrollHeight - log.scrollTop - log.clientHeight < 4;
-      log.addEventListener("scroll", () => { follow.checked = atBottom(); });
-      const source = new EventSource(
-        "{{ build_path(project, build.number) }}/logs/{{ attr | urlencode }}/stream");
-      /* The stream replays full history on every (re)connect. */
-      let errors = 0;
-      source.onopen = () => {
-        errors = 0;
-        log.textContent = "";
-      };
-      /* EventSource reconnects every ~1s forever; if the server stays
-         gone (engine restart), give up and let a reload render the
-         finished log server-side. */
-      source.onerror = () => {
-        if (++errors >= 5) {
-          source.close();
-          setTimeout(() => location.reload(), 3000);
-        }
-      };
-      source.onmessage = (event) => {
-        // server-rendered HTML chunks, newlines included
-        log.insertAdjacentHTML("beforeend", event.data);
-        if (follow.checked) log.scrollTop = log.scrollHeight;
-      };
-      /* The terminal status event reloads the page; just stop the
-         dead stream from reconnecting. */
-      source.addEventListener("done", () => source.close());
-    }
   </script>
 {% endblock body %}
