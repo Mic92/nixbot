@@ -189,6 +189,30 @@ async def test_context_prefix_configurable() -> None:
     }
 
 
+async def test_build_restarted_posts_pending_new_runs() -> None:
+    """Re-run must flip the checks to pending immediately and, on
+    GitHub, force a new check run so it renders as re-running."""
+    reporter, poster, _ = make_reporter()
+
+    await reporter.build_restarted(EVENT, BUILD, "x86_64-linux.foo")
+    contexts = [(p.context, p.state) for p in poster.posts]
+    assert contexts == [
+        (
+            "nixbot/nix-build github:acme/widget#checks.x86_64-linux.foo",
+            StatusState.pending,
+        ),
+        ("nixbot/nix-build", StatusState.pending),
+    ]
+    assert all(extra["force_new"] for extra in poster.extras)
+
+    poster.posts.clear()
+    await reporter.build_restarted(EVENT, BUILD, None)
+    assert [(p.context, p.state) for p in poster.posts] == [
+        ("nixbot/nix-eval", StatusState.pending),
+        ("nixbot/nix-build", StatusState.pending),
+    ]
+
+
 def test_eval_description_warning_count() -> None:
     assert eval_description(True, []) == "evaluation succeeded"
     assert eval_description(True, ["w"]) == "evaluation succeeded (1 warning)"
@@ -778,6 +802,35 @@ async def test_github_check_run_patch_404_recreates() -> None:
     )
     assert methods == ["PATCH", "POST"]
     assert store.ids[(1, "sha1", "ctx")] == (None, 777)
+
+
+async def test_github_check_run_force_new_ignores_stored_id() -> None:
+    """A restart must create a fresh run so GitHub renders it as
+    re-running, even though a run id for the context is stored."""
+    methods: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        methods.append(request.method)
+        return httpx.Response(201, json={"id": 999})
+
+    store = _MemoryCheckRunIds()
+    store.ids[(1, "sha1", "ctx")] = (None, 1)
+    poster = _check_run_poster(httpx.MockTransport(handler), store)
+
+    await poster.post(
+        "acme",
+        "widget",
+        "sha1",
+        "ctx",
+        StatusState.pending,
+        "d",
+        "u",
+        project_id=1,
+        build_id=10,
+        force_new=True,
+    )
+    assert methods == ["POST"]
+    assert store.ids[(1, "sha1", "ctx")] == (None, 999)
 
 
 async def test_github_check_run_403_is_permission_error() -> None:

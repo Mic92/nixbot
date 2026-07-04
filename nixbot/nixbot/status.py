@@ -136,6 +136,7 @@ class CommitStatusPoster(Protocol):
         build_id: int = 0,
         attr: str | None = None,
         text: str | None = None,
+        force_new: bool = False,
     ) -> None: ...
 
 
@@ -225,6 +226,7 @@ class GitHubCheckRunPoster:
         build_id: int = 0,
         attr: str | None = None,
         text: str | None = None,
+        force_new: bool = False,
     ) -> None:
         installation_id = await self.client.installation_for_repo(f"{owner}/{repo}")
         if installation_id is None:
@@ -247,7 +249,10 @@ class GitHubCheckRunPoster:
             body["conclusion"] = conclusion
 
         base = f"{self.client.api_url}/repos/{owner}/{repo}/check-runs"
-        run_id = await self.store.get(project_id, sha, context)
+        # GitHub only renders a check as re-running for a *new* run of
+        # the same name, so a restart creates one instead of patching
+        # (community discussion 38288).
+        run_id = None if force_new else await self.store.get(project_id, sha, context)
         if run_id is not None:
             response = await self.client.http.patch(
                 f"{base}/{run_id}", headers=headers, json=body
@@ -442,6 +447,7 @@ class ForgeStatusReporter:
         attr: str | None = None,
         text: str | None = None,
         propagate: bool = False,
+        force_new: bool = False,
     ) -> None:
         poster = self.posters.get(event.repo.forge)
         if poster is None:
@@ -461,6 +467,7 @@ class ForgeStatusReporter:
                 build_id=build.id,
                 attr=attr,
                 text=text,
+                force_new=force_new,
             )
         except CheckPermissionError:
             # Per-org and not transient: log the hint and move on, never
@@ -627,6 +634,45 @@ class ForgeStatusReporter:
                 counts[_count_key(attr_status)] += 1
         table_statuses = attr_statuses or {r.attr: r.status.value for r in results}
         await self._post_summary(event, build, result.status, counts, table_statuses)
+
+    async def build_restarted(
+        self, event: ChangeEvent, build: BuildRecord, attr: str | None
+    ) -> None:
+        """Flip the restarted checks to pending before the async rebuild
+        starts; force_new so GitHub renders them as re-running."""
+        if attr is None:
+            await self._post(
+                event,
+                build,
+                f"{self.context_prefix}/nix-eval",
+                StatusState.pending,
+                "restarting",
+                force_new=True,
+            )
+        else:
+            context = attr_status_context(
+                event.repo.forge,
+                event.repo.name,
+                attr,
+                context_prefix=self.context_prefix,
+            )
+            await self._post(
+                event,
+                build,
+                context,
+                StatusState.pending,
+                "rebuilding",
+                attr=attr,
+                force_new=True,
+            )
+        await self._post(
+            event,
+            build,
+            f"{self.context_prefix}/nix-build",
+            StatusState.pending,
+            "rebuilding",
+            force_new=True,
+        )
 
     async def _post_attribute_statuses(
         self,

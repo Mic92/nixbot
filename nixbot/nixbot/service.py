@@ -131,6 +131,11 @@ class RetryingReporter:
     async def eval_cancelled(self, event: ChangeEvent, build: BuildRecord) -> None:
         await self.inner.eval_cancelled(event, build)
 
+    async def build_restarted(
+        self, event: ChangeEvent, build: BuildRecord, attr: str | None
+    ) -> None:
+        await self.inner.build_restarted(event, build, attr)
+
     async def effect_started(
         self, event: ChangeEvent, build: BuildRecord, name: str
     ) -> None:
@@ -343,6 +348,15 @@ class CIService:
         # show stale output until the rebuild starts.
         await q.reset_build_for_restart(self.pool, build_id=build_id, attr=attr)
         self.orchestrator.reset_build_logs(build_id, attr)
+        # Flip the forge checks to pending now; the async rerun only
+        # posts the terminal status, possibly much later.
+        build = await builds_q.get_build(self.pool, id_=build_id)
+        project = (
+            await self.repo_store.by_id(build.project_id) if build is not None else None
+        )
+        if build is not None and project is not None:
+            event = event_for_build(repo_info(project), build)
+            await self.orchestrator.reporter.build_restarted(event, build, attr)
         await self.enqueue_work("rerun", f"build-{build_id}", {"build_id": build_id})
 
     async def restart_effects(self, build_id: int) -> None:
