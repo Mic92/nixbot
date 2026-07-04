@@ -774,12 +774,14 @@ def test_structured_log_endpoints(client: WebHarness, tmp_path: Path) -> None:
     assert toc["derivations"][1]["n"] == 0
     assert client.get(f"{base}/logs/{attr}/drv/9/raw").status_code == 404
 
-    hits = client.get(f"{base}/search?q=undeclared").json()
-    assert hits["groups"]
-    g = hits["groups"][0]
-    assert g["name"] == "qtbase-5.0"
-    assert g["attr"] == attr
-    assert g["lines"] == [2]
+    # Search now returns rendered HTML the client swaps in.
+    hits = client.get(f"{base}/search?q=undeclared").text
+    assert 'class="search-name">qtbase-5.0<' in hits
+    assert 'data-idx="0" data-line="2"' in hits
+    assert "1 derivation," in hits
+    assert "1 log match" in hits
+    assert "no matches" in client.get(f"{base}/search?q=zzznope").text
+    assert "no matches" in client.get(f"{base}/search").text  # empty query
 
 
 def test_log_toc_legacy_without_container(client: WebHarness, tmp_path: Path) -> None:
@@ -1168,6 +1170,7 @@ def test_structured_live_stream(client: WebHarness, tmp_path: Path) -> None:
             )
             await asyncio.sleep(0.1)
             cap.phase(1, "build")
+            cap.log_line(1, "\x1b[31mCC failed\x1b[0m")
             cap.close()
             stream = (await task).text
         finally:
@@ -1179,8 +1182,13 @@ def test_structured_live_stream(client: WebHarness, tmp_path: Path) -> None:
     assert "format=structured" in viewer  # data-stream on #drv-list
     assert "event: state" in stream
     assert '"name":"qtbase-5.0"' in stream  # snapshot burst
+    # Rows are rendered server-side (ANSI applied), not shipped as raw text.
+    assert "d1-L1" in stream
+    assert '"text"' not in stream
     assert "event: delta" in stream
     assert '"t":"phase"' in stream  # live delta after subscribe
+    assert '"t":"line"' in stream  # rendered delta
+    assert "ansi-red" in stream
     assert "event: done" in stream
 
 

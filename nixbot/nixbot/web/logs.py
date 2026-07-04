@@ -11,7 +11,7 @@ import asyncio
 import dataclasses
 import html
 import json
-from typing import TYPE_CHECKING, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import (
@@ -37,7 +37,7 @@ from ..status import NO_LOG_STATUSES  # noqa: TID252
 from .api_routes import FailureSummary, clean_row
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
+    from collections.abc import AsyncGenerator, Callable, Iterable
     from pathlib import Path
 
     from ..executor import LogWriter, StructuredCapture  # noqa: TID252
@@ -212,19 +212,28 @@ def render_log_lines(text: str) -> str:
     return "".join(lines)
 
 
-def render_drv_lines(reader: LogContainerReader, i: int) -> str:
-    """One derivation's log as anchored HTML rows. Ids are prefixed with
-    the derivation index (`d{i}-L{n}`) so anchors stay unique when many
-    derivations share the page."""
-    lines = []
-    style = _RESET
-    for n, line in enumerate(reader.lines(i), 1):
+def render_rows(
+    idx: int, start: int, lines: Iterable[str], style: _Style = _RESET
+) -> tuple[str, _Style]:
+    """Anchored `d{idx}-L{n}` rows for a derivation, numbered from
+    ``start``. Returns the trailing SGR style so a live stream can carry
+    it into the next batch. Ids are prefixed with the derivation index so
+    anchors stay unique when many derivations share the page."""
+    out = []
+    n = start
+    for line in lines:
         rendered, style = _ansi_convert(line, style)
-        lines.append(
-            f'<span class="logline" id="d{i}-L{n}">'
-            f'<a class="lineno" href="#d{i}-L{n}">{n}</a>{rendered}</span>'
+        out.append(
+            f'<span class="logline" id="d{idx}-L{n}">'
+            f'<a class="lineno" href="#d{idx}-L{n}">{n}</a>{rendered}</span>'
         )
-    return "".join(lines)
+        n += 1
+    return "".join(out), style
+
+
+def render_drv_lines(reader: LogContainerReader, i: int) -> str:
+    """One derivation's log as anchored HTML rows."""
+    return render_rows(i, 1, reader.lines(i))[0]
 
 
 def _toc_entries(reader: LogContainerReader) -> list[dict]:
@@ -596,23 +605,25 @@ class _LogRoutes:
         owner: str,
         name: str,
         number: int,
-        q: str = Query(..., min_length=2),
-    ) -> dict:
+        q: str = "",
+    ) -> HTMLResponse:
         """Search every attribute's container; per-derivation hit groups
-        (attr, name, line numbers), failures first. No container -> skipped."""
+        (attr, name, line numbers), failures first. No container -> skipped.
+        Returns rendered HTML the client swaps into #search-results."""
         _, build = await self._build_or_404(request, forge, owner, name, number)
-        groups = []
-        for a in await self.ctx.queries.attributes(build["id"]):
-            path = log_path_for_key(self.ctx.state_dir, build["id"], a["attr"])
-            reader = await _load_container(path)
-            if reader is None:
-                continue
-            for hit in await asyncio.to_thread(reader.search, q):
-                hit["attr"] = a["attr"]
-                hit["status"] = reader.entry(hit["idx"])["status"]
-                groups.append(hit)
-        groups.sort(key=lambda h: (h["status"] != "failed", -len(h["lines"])))
-        return {"query": q, "groups": groups}
+        groups: list[dict] = []
+        if len(q.strip()) >= 2:  # noqa: PLR2004
+            for a in await self.ctx.queries.attributes(build["id"]):
+                path = log_path_for_key(self.ctx.state_dir, build["id"], a["attr"])
+                reader = await _load_container(path)
+                if reader is None:
+                    continue
+                for hit in await asyncio.to_thread(reader.search, q):
+                    hit["attr"] = a["attr"]
+                    hit["status"] = reader.entry(hit["idx"])["status"]
+                    groups.append(hit)
+            groups.sort(key=lambda h: (h["status"] != "failed", -len(h["lines"])))
+        return await self.ctx.render("_search_results.html", groups=groups)
 
     async def log_stream(  # noqa: PLR0913
         self,
@@ -631,8 +642,11 @@ class _LogRoutes:
         writer = self.registry.get(build["id"], attr)
         if request.query_params.get("format") == "structured":
             capture = writer.capture if writer else None
+            base = request.url.path.removesuffix("/stream")
+            macros: Any = self.ctx.env.get_template("_macros.html").module
             return StreamingResponse(
-                _structured_events(capture), media_type="text/event-stream"
+                _structured_events(capture, macros.drv_card, base),
+                media_type="text/event-stream",
             )
         return StreamingResponse(
             _stream_events(writer, path), media_type="text/event-stream"
@@ -800,15 +814,30 @@ async def _stream_events(
 
 async def _structured_events(
     capture: StructuredCapture | None,
+    drv_card: Callable[..., str],
+    base: str,
 ) -> AsyncGenerator[str, None]:
     """Live per-derivation stream: a full-state burst on connect, then
     JSON deltas until the build finishes. A finished/absent capture just
-    signals done so the client reloads into the container page."""
+    signals done so the client reloads into the container page.
+
+    Card shells (via the drv_card macro) and log rows are rendered here;
+    the client only inserts HTML. Each drv carries its trailing SGR style
+    so a later line delta continues the same color."""
+
+    def card(d: dict) -> str:
+        return str(drv_card(d, base, open=d["status"] in ("running", "failed")))
+
     if capture is None:
         yield "event: done\ndata: \n\n"
         return
     queue = capture.subscribe()
     state = capture.state()  # atomic with subscribe: no await between
+    styles: dict[int, _Style] = {}
+    for e in state:
+        html_rows, styles[e["idx"]] = render_rows(e["idx"], 1, e.pop("lines"))
+        e["html"] = html_rows
+        e["card"] = card(e)
     yield f"event: state\ndata: {json.dumps(state, separators=(',', ':'))}\n\n"
     try:
         while True:
@@ -820,6 +849,15 @@ async def _structured_events(
             if delta is None:
                 yield "event: done\ndata: \n\n"
                 return
+            if delta["t"] == "drv":
+                delta["card"] = card(
+                    {**delta, "status": "running", "n": 0, "ph": [], "t0": None}
+                )
+            elif delta["t"] == "line":
+                idx = delta["idx"]
+                delta["html"], styles[idx] = render_rows(
+                    idx, delta["from"], [delta.pop("text")], styles.get(idx, _RESET)
+                )
             yield f"event: delta\ndata: {json.dumps(delta, separators=(',', ':'))}\n\n"
     finally:
         capture.unsubscribe(queue)

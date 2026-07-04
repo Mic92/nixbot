@@ -1071,7 +1071,7 @@ details.webhook-setup summary {
 	font-size: 0.8rem;
 	color: var(--muted);
 }
-.search-results {
+.search-results-list {
 	list-style: none;
 	margin: 0.3rem 0 0;
 	padding: 0;

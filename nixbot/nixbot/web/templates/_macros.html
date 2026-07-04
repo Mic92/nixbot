@@ -59,6 +59,56 @@
               data-copy="{{ value }}"
               aria-label="copy {{ label }}">copy</button>
     {%- endmacro %}
+    {# Phase-bar widget; scroll position drives it client-side. #}
+    {% macro phasebar() -%}
+      <div class="phasebar" hidden>
+        <span class="phase-label"></span>
+        <button type="button" class="phase-prev" aria-label="Previous phase">↑ prev</button>
+        <button type="button" class="phase-next" aria-label="Next phase">↓ next</button>
+      </div>
+    {%- endmacro %}
+    {# Structured log card, shared by the finished page and the live SSE.
+       On the finished page htmx fetches the rows into .log-lines on first
+       open (or immediately for the open card); live cards omit htmx and
+       stream rows in over the SSE. Metadata rides on data-*. #}
+    {% macro drv_card(d, base, open=false, live=false) -%}
+      {%- set failed = d.status == "failed" -%}
+      {%- set state = "failed" if failed else "succeeded" -%}
+      {%- set dur = ("%.1fs" | format((d.t1 - d.t0) / 1000)) if (d.t0 is not none and d.t1 is not none) else "" -%}
+      {%- set meta = "failed" if failed else (["built", dur] | select | join(" · ")) -%}
+      {%- set fetch = (not live) and d.n > 0 -%}
+      <details class="log-card{{ '' if failed else ' ok' }}"
+               data-pos="{{ d.idx }}"
+               data-idx="{{ d.idx }}"
+               data-n="{{ d.n }}"
+               data-ph='{{ d.ph | tojson }}'
+               {% if open %}open{% endif %}
+               {% if fetch %} hx-get="{{ base }}/drv/{{ d.idx }}" hx-trigger="{{ 'load' if open else 'toggle once' }}" hx-target="find .log-lines" hx-swap="innerHTML" {% endif %}>
+        <summary>
+          <span class="status-icon {{ state }}" aria-hidden="true"></span>
+          <span class="card-text">
+            <span class="card-name">{{ d.name }}</span>
+            <span class="meta">{{ meta }}
+              {% if d.n > 0 %}
+                · <a href="{{ base }}/drv/{{ d.idx }}/raw"
+    class="raw"
+    onclick="event.stopPropagation()">raw&nbsp;↗</a>
+              {% endif %}
+            </span>
+          </span>
+        </summary>
+        <div class="log-card-body">
+          {% if d.n == 0 and d.status != "running" %}
+            <div class="excerpt">
+              <span class="meta">no output</span>
+            </div>
+          {% else %}
+            {{ phasebar() }}
+            <div class="log-lines" aria-busy="true"></div>
+          {% endif %}
+        </div>
+      </details>
+    {%- endmacro %}
     {% macro error_row(error, colspan=3) -%}
       <tr>
         <td colspan="{{ colspan }}">

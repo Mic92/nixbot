@@ -40,7 +40,8 @@ def _seed_container(*, failed: bool) -> bytes:
     for i in range(30):
         w.line(hello, f"CC step {i}.o")
     if failed:
-        w.line(hello, "error: build failed on the last step")
+        # Colored so the viewer's ANSI->span rendering is exercised.
+        w.line(hello, "\x1b[31;1merror: build failed on the last step\x1b[0m")
     w.status(hello, "failed" if failed else "built")
     dep = "/nix/store/bbb-zlib-1.3.drv"
     w.register(dep, "zlib-1.3")

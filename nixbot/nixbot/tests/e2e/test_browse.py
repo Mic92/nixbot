@@ -50,9 +50,11 @@ def test_structured_log_viewer(page: Page) -> None:
     assert card.get_attribute("open") is not None
     card.locator(".phasebar").wait_for()
     card.locator("text=error: build failed on the last step").wait_for()
+    # ANSI colors render as ansi-* spans, matching the flat log viewer.
+    assert card.locator(".log-lines .logline .ansi-red").count() >= 1
 
-    # Successes hide behind an expand-to-browse panel until opened.
-    assert page.locator("#succeeded-list .log-card").count() == 0
+    # Successes hide behind a collapsed expand-to-browse panel.
+    assert page.locator("#succeeded-panel").get_attribute("open") is None
     page.locator("#succeeded-panel > summary").click()
     page.locator("#succeeded-list").get_by_text("zlib-1.3").wait_for()
 

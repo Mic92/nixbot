@@ -1,6 +1,6 @@
 // @ts-check
-// Structured per-derivation log viewer. Cards render lazily from the
-// embedded TOC; each fetches its rows (/drv/{idx}) on first open. Rows are
+// Structured per-derivation log viewer. Cards are server-rendered; htmx
+// fetches each card's rows (/drv/{idx}) lazily on first open. Rows are
 // fixed 20px + content-visibility, so the whole log stays in the DOM
 // (native Ctrl-F, anchors, selection, a11y) with off-screen layout skipped;
 // the phase bar maps scrollTop -> line via ROW_H. Disclosure is native
@@ -8,9 +8,8 @@
 "use strict";
 
 /**
- * @typedef {{idx:number,name:string,status:string,ph:[string,number][],n:number,pos?:number,t0?:number|null,t1?:number|null,lines?:string[]}} Drv
- * @typedef {{t:string,idx:number,name?:string,status?:string,phase?:string,line?:number,from?:number,text?:string}} Delta
- * @typedef {{idx:number,name:string,status:string,lines:number[]}} Group
+ * @typedef {{idx:number,name:string,status:string,ph:[string,number][],n:number,t0?:number|null,t1?:number|null,html?:string,card?:string}} Drv
+ * @typedef {{t:string,idx:number,name?:string,status?:string,phase?:string,line?:number,from?:number,html?:string,card?:string}} Delta
  * @typedef {{scrollToLine:(n:number)=>void,refresh:()=>void}} LogHandle
  */
 
@@ -23,28 +22,16 @@
     if (!el) throw new Error(`missing #${id}`);
     return el;
   };
-  const escMap = /** @type {Record<string,string>} */ (
-    { "&": "&amp;", "<": "&lt;", ">": "&gt;" }
-  );
   /** @param {string} s @returns {string} */
-  const esc = (s) => s.replace(/[&<>]/g, (c) => escMap[c]);
-  /** @param {number} n @param {string} word @param {string} [suffix] */
-  const pl = (n, word, suffix = "s") => word + (n === 1 ? "" : suffix);
+  const esc = (s) =>
+    s.replace(
+      /[&<>]/g,
+      (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c] ?? c),
+    );
 
   const list = must("drv-list");
-  const BASE = list.dataset.base;
-  const SEARCH = list.dataset.search;
   const STREAM = list.dataset.stream; // set only while the build runs
   const ROW_H = 20; // must match .log-lines .logline height in style.css
-  /** @param {string} s */
-  // deno-lint-ignore no-control-regex -- ESC is the ANSI sequence intro
-  const stripAnsi = (s) => s.replace(/\x1b\[[0-9;]*m/g, "");
-
-  const phaseBarHTML = `<div class="phasebar" hidden>
-    <span class="phase-label"></span>
-    <button type="button" class="phase-prev" aria-label="Previous phase">↑ prev</button>
-    <button type="button" class="phase-next" aria-label="Next phase">↓ next</button>
-  </div>`;
 
   /** @param {ParentNode} el @param {string} sel @returns {HTMLElement} */
   const pick = (el, sel) => {
@@ -101,216 +88,65 @@
     return { scrollToLine, refresh: update };
   }
 
-  /** @param {Drv} d */
-  const bodyInnerHTML = (d) =>
-    d.n === 0
-      ? `<div class="excerpt"><span class="meta">no output</span></div>`
-      : `<div class="excerpt">
-      <a href="${BASE}/drv/${d.idx}/raw" class="raw">raw&nbsp;↗</a>
-    </div>
-    ${phaseBarHTML}
-    <div class="log-lines" aria-busy="true"></div>`;
-
-  /** @param {Drv} d @param {boolean} open */
-  function cardHTML(d, open) {
-    const failed = d.status === "failed";
-    const dur = d.t0 != null && d.t1 != null
-      ? `${((d.t1 - d.t0) / 1000).toFixed(1)}s`
-      : "";
-    const meta = failed ? "failed" : ["built", dur].filter(Boolean).join(" · ");
-    const state = failed ? "failed" : "succeeded";
-    return `<details class="log-card${
-      failed ? "" : " ok"
-    }" data-pos="${d.pos}"${open ? " open" : ""}>
-      <summary>
-        <span class="status-icon ${state}" aria-hidden="true"></span>
-        <span class="card-text">
-          <span class="card-name">${esc(d.name)}</span>
-          <span class="meta">${meta}</span>
-        </span>
-      </summary>
-      <div class="log-card-body">${open ? bodyInnerHTML(d) : ""}</div>
-    </details>`;
-  }
-
-  /** @type {WeakMap<HTMLElement, LogHandle>} */
-  const drawn = new WeakMap();
-  /** @param {HTMLElement} card @returns {Promise<LogHandle|null>} */
-  async function showCard(card) {
-    const d = TOC[Number(card.dataset.pos)];
-    const body = pick(card, ".log-card-body");
-    if (!body.firstElementChild) body.innerHTML = bodyInnerHTML(d);
-    const cached = drawn.get(card);
-    if (cached) return cached;
-    const vp =
-      /** @type {HTMLElement|null} */ (body.querySelector(".log-lines"));
-    if (!vp) return null; // no output: nothing to fetch or wire
-    const res = await fetch(`${BASE}/drv/${d.idx}`);
-    vp.innerHTML = await res.text();
-    vp.removeAttribute("aria-busy");
-    const handle = wireLog(
-      vp,
-      d.ph,
-      /** @type {HTMLElement|null} */ (body.querySelector(".phasebar")),
-    );
-    drawn.set(card, handle);
-    return handle;
-  }
-
-  // toggle doesn't bubble, so bind per-card when a list is (re)drawn.
-  /** @param {ParentNode} container */
-  function wireCards(container) {
-    for (const c of container.querySelectorAll(".log-card")) {
-      const card = /** @type {HTMLDetailsElement} */ (c);
-      card.addEventListener("toggle", () => {
-        if (card.open) showCard(card);
-      });
-    }
-  }
-
   if (STREAM) return runLive();
 
-  const TOC = /** @type {Drv[]} */ (
-    JSON.parse(must("toc-data").textContent ?? "[]")
-  );
-  TOC.forEach((d, i) => (d.pos = i));
-  const FAILED = TOC.filter((d) => d.status === "failed");
-  const OK = TOC.filter((d) => d.status !== "failed");
-
-  // failures first (first one open); successes collapsed behind a card.
-  const okBlock = OK.length
-    ? `<h2 class="section">Succeeded (${OK.length})</h2>
-       <details class="succeeded-panel" id="succeeded-panel">
-         <summary>
-           <span class="status-icon succeeded" aria-hidden="true"></span>
-           <span class="card-text"><span class="card-name">${OK.length} built</span>
-             <span class="meta">expand to browse</span></span>
-         </summary>
-         <div id="succeeded-list"></div>
-       </details>`
-    : "";
-  list.innerHTML =
-    (FAILED.length
-      ? `<h2 class="section">Failures (${FAILED.length})</h2>`
-      : "") +
-    FAILED.map((d, i) => cardHTML(d, i === 0)).join("") +
-    okBlock;
-  wireCards(list);
-  const firstFail = /** @type {HTMLElement|null} */ (
-    list.querySelector(".log-card")
-  );
-  if (firstFail && FAILED.length) showCard(firstFail);
-
-  const LIST_CAP = 100;
-  /** @param {string} q */
-  function drawOk(q) {
-    const hits = q ? OK.filter((d) => d.name.toLowerCase().includes(q)) : OK;
-    must("succeeded-list").innerHTML = hits
-      .slice(0, LIST_CAP)
-      .map((d) => cardHTML(d, false))
-      .join("");
-    wireCards(must("succeeded-list"));
-  }
+  // htmx fetches each card's rows into .log-lines (on open, or on load for
+  // the first failure); here we wire the phase bar to the swapped-in rows.
+  /** @type {WeakMap<HTMLElement, LogHandle>} */
+  const drawn = new WeakMap();
   const succeeded =
     /** @type {HTMLDetailsElement|null} */ ($("succeeded-panel"));
-  if (succeeded) {
-    succeeded.addEventListener("toggle", () => {
-      if (succeeded.open && !must("succeeded-list").firstElementChild) {
-        drawOk("");
-      }
-    });
+  /** @type {{card:HTMLElement, idx:number, line:number|null}|null} */
+  let pending = null;
+
+  /** @param {HTMLElement} card @param {LogHandle} handle
+   * @param {number} idx @param {number|null} line */
+  function jump(card, handle, idx, line) {
+    card.scrollIntoView({ block: "nearest" });
+    document
+      .querySelectorAll(".log-lines .logline.hit")
+      .forEach((x) => x.classList.remove("hit"));
+    if (line == null) return;
+    document.getElementById(`d${idx}-L${line}`)?.classList.add("hit");
+    handle.scrollToLine(line);
   }
 
-  // Build-scoped search: one debounced request, results grouped by
-  // derivation (failures first), each line jumps into the owning card.
-  const posByIdx = new Map(
-    TOC.map((d) => [d.idx, /** @type {number} */ (d.pos)]),
-  );
-  /** @param {string} raw */
-  async function search(raw) {
-    const q = raw.trim();
-    const results = must("search-results");
-    const count = must("search-count");
-    results.innerHTML = "";
-    if (q.length < 2) {
-      count.textContent = "";
-      return;
+  document.body.addEventListener("htmx:afterSwap", (e) => {
+    const vp = /** @type {HTMLElement} */ (e.target);
+    if (!vp.classList?.contains("log-lines")) return;
+    vp.removeAttribute("aria-busy");
+    const card = /** @type {HTMLElement|null} */ (vp.closest(".log-card"));
+    if (!card) return;
+    const ph = /** @type {[string,number][]} */ (
+      JSON.parse(card.dataset.ph || "[]")
+    );
+    const handle = wireLog(vp, ph, card.querySelector(".phasebar"));
+    drawn.set(card, handle);
+    if (pending && pending.card === card) {
+      jump(card, handle, pending.idx, pending.line);
+      pending = null;
     }
-    const res = await fetch(`${SEARCH}?q=${encodeURIComponent(q)}`);
-    const groups = /** @type {Group[]} */ ((await res.json()).groups);
-    const total = groups.reduce((n, g) => n + g.lines.length, 0);
-    count.textContent = groups.length
-      ? `${groups.length} ${pl(groups.length, "derivation")}, ` +
-        `${total} log ${pl(total, "match", "es")}`
-      : "no matches";
-    results.innerHTML = groups
-      .map((g) => {
-        const ok = g.status !== "failed";
-        const head =
-          `<a href="#" class="search-drv${
-            ok ? " ok" : ""
-          }" data-idx="${g.idx}">` +
-          `<span class="status-icon ${
-            ok ? "succeeded" : "failed"
-          }" aria-hidden="true"></span>` +
-          `<span class="search-name">${esc(g.name)}</span>` +
-          `<span class="search-badge">${g.lines.length} ${
-            pl(g.lines.length, "match", "es")
-          }</span></a>`;
-        const lines = g.lines
-          .map(
-            (ln) =>
-              `<li><a href="#" data-idx="${g.idx}" data-line="${ln}">` +
-              `<span class="search-line">${ln}</span></a></li>`,
-          )
-          .join("");
-        return `<li class="search-group">${head}<ul class="search-lines">${lines}</ul></li>`;
-      })
-      .join("");
-  }
-  let t = 0;
-  must("search-input").addEventListener("input", (e) => {
-    clearTimeout(t);
-    const v = /** @type {HTMLInputElement} */ (e.target).value;
-    t = setTimeout(() => search(v), 200);
   });
+
+  // Search results are server-rendered; the client only jumps into a
+  // card, waiting for htmx to load its rows when they aren't yet present.
   must("search-results").addEventListener("click", (e) => {
     const a = /** @type {HTMLElement} */ (e.target).closest("a[data-idx]");
     if (!a) return;
     e.preventDefault();
     const link = /** @type {HTMLElement} */ (a);
-    openAt(
-      Number(link.dataset.idx),
-      link.dataset.line ? Number(link.dataset.line) : null,
+    const idx = Number(link.dataset.idx);
+    const line = link.dataset.line ? Number(link.dataset.line) : null;
+    const card = /** @type {HTMLDetailsElement|null} */ (
+      list.querySelector(`.log-card[data-idx="${idx}"]`)
     );
-  });
-
-  /** @param {number} idx @param {number|null} line */
-  async function openAt(idx, line) {
-    const pos = posByIdx.get(idx);
-    if (pos == null) return;
-    let card = /** @type {HTMLDetailsElement|null} */ (
-      list.querySelector(`.log-card[data-pos="${pos}"]`)
-    );
-    if (!card && succeeded) {
-      succeeded.open = true;
-      drawOk(TOC[pos].name.toLowerCase());
-      card = /** @type {HTMLDetailsElement|null} */ (
-        list.querySelector(`.log-card[data-pos="${pos}"]`)
-      );
-    }
     if (!card) return;
-    card.open = true;
-    const handle = await showCard(card);
-    card.scrollIntoView({ block: "nearest" });
-    document
-      .querySelectorAll(".log-lines .logline.hit")
-      .forEach((x) => x.classList.remove("hit"));
-    if (line == null || !handle) return;
-    const row = document.getElementById(`d${idx}-L${line}`);
-    if (row) row.classList.add("hit");
-    handle.scrollToLine(line);
-  }
+    if (succeeded && succeeded.contains(card)) succeeded.open = true;
+    card.open = true; // triggers the htmx fetch if not yet loaded
+    const handle = drawn.get(card);
+    if (handle) jump(card, handle, idx, line);
+    else pending = { card, idx, line }; // afterSwap completes the jump
+  });
 
   // Live mode: build cards from the structured SSE (state burst + deltas),
   // in arrival order, the running one following its tail. The
@@ -325,37 +161,15 @@
     /** @param {string} s */
     const iconState = (s) =>
       s === "failed" ? "failed" : s === "running" ? "running" : "succeeded";
-    /** @param {number} idx @param {number} n @param {string} text */
-    const rowHTML = (idx, n, text) =>
-      `<span class="logline" id="d${idx}-L${n}">` +
-      `<a class="lineno" href="#d${idx}-L${n}">${n}</a>${
-        esc(stripAnsi(text))
-      }</span>`;
 
-    /** @param {Drv} d @returns {HTMLDetailsElement} */
-    function cardEl(d) {
-      const el = document.createElement("details");
-      el.className = "log-card" + (d.status === "failed" ? "" : " ok");
-      el.dataset.idx = String(d.idx);
-      if (d.status === "running" || d.status === "failed") el.open = true;
-      el.innerHTML = `<summary>
-          <span class="status-icon ${
-        iconState(d.status)
-      }" aria-hidden="true"></span>
-          <span class="card-text"><span class="card-name">${
-        esc(d.name)
-      }</span><span class="meta"></span></span>
-        </summary>
-        <div class="log-card-body"><div class="excerpt"></div>${phaseBarHTML}<div class="log-lines"></div></div>`;
-      return el;
-    }
-
-    /** @param {Drv} d @returns {HTMLDetailsElement} */
+    /** Insert the server-rendered card shell (same drv_card macro as the
+     * finished page) and wire its phase bar.
+     * @param {Drv} d @returns {HTMLDetailsElement} */
     function ensureCard(d) {
       const existing = cardOf.get(d.idx);
       if (existing) return existing;
-      const el = cardEl(d);
-      list.appendChild(el);
+      list.insertAdjacentHTML("beforeend", d.card ?? "");
+      const el = /** @type {HTMLDetailsElement} */ (list.lastElementChild);
       cardOf.set(d.idx, el);
       handleOf.set(
         d.idx,
@@ -375,20 +189,18 @@
       return el;
     }
 
-    /** @param {number} idx @param {number} from @param {string[]} texts */
-    function addLines(idx, from, texts) {
+    /** Append server-rendered rows (ANSI already applied).
+     * @param {number} idx @param {number} n @param {string} html */
+    function addLines(idx, n, html) {
       const d = byIdx.get(idx);
-      if (!d || !texts.length) return;
+      if (!d || !html) return;
       const el = ensureCard(d);
       const vp = pick(el, ".log-lines");
       // Follow the tail only when already at the bottom, so scrolling up
       // to read pauses following and scrolling back resumes it.
       const atBottom = vp.scrollHeight - vp.scrollTop - vp.clientHeight < 40;
-      vp.insertAdjacentHTML(
-        "beforeend",
-        texts.map((t, k) => rowHTML(idx, from + k, t)).join(""),
-      );
-      d.n = from + texts.length - 1;
+      vp.insertAdjacentHTML("beforeend", html);
+      d.n = n;
       if (el.open && atBottom) vp.scrollTop = vp.scrollHeight;
     }
 
@@ -402,11 +214,12 @@
           status: "running",
           /** @type {[string,number][]} */ ph: [],
           n: 0,
+          card: delta.card,
         };
         byIdx.set(nd.idx, nd);
         setMeta(nd);
       } else if (delta.t === "line") {
-        addLines(delta.idx, delta.from ?? 1, [delta.text ?? ""]);
+        addLines(delta.idx, delta.from ?? 1, delta.html ?? "");
       } else if (delta.t === "phase" && d) {
         if (!d.ph.length || d.ph[d.ph.length - 1][0] !== delta.phase) {
           d.ph.push([delta.phase ?? "", delta.line ?? 0]);
@@ -433,10 +246,11 @@
           status: e.status,
           ph: e.ph || [],
           n: e.n,
+          card: e.card,
         };
         byIdx.set(d.idx, d);
         setMeta(d);
-        addLines(d.idx, 1, e.lines || []);
+        addLines(d.idx, e.n, e.html || "");
       }
     }
 

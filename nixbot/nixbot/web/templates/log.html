@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import status_icon %}
+{% from "_macros.html" import status_icon, drv_card %}
 {% block title %}
   {{ attr }} log
 {% endblock title %}
@@ -52,18 +52,41 @@
           <section class="log-search">
             <input id="search-input"
                    type="search"
+                   name="q"
                    placeholder="Search this build's logs…"
                    aria-label="Search logs"
-                   autocomplete="off">
-            <p class="search-count" id="search-count" aria-live="polite"></p>
-            <ol class="search-results" id="search-results">
-            </ol>
+                   autocomplete="off"
+                   hx-get="{{ build_path(project, build.number) }}/search"
+                   hx-trigger="input changed delay:200ms"
+                   hx-target="#search-results"
+                   hx-swap="innerHTML">
+            <div class="search-results" id="search-results" aria-live="polite"></div>
           </section>
         {% endif %}
         <div id="drv-list"
-             data-base="{{ build_path(project, build.number) }}/logs/{{ attr | urlencode }}"
-             data-search="{{ build_path(project, build.number) }}/search"
              {% if live_structured %}data-stream="{{ build_path(project, build.number) }}/logs/{{ attr | urlencode }}/stream?format=structured"{% endif %}>
+          {% if toc %}
+            {% set base = build_path(project, build.number) ~ "/logs/" ~ (attr | urlencode) %}
+            {% set failed = toc | selectattr("status", "equalto", "failed") | list %}
+            {% set ok = toc | rejectattr("status", "equalto", "failed") | list %}
+            {% if failed %}<h2 class="section">Failures ({{ failed | length }})</h2>{% endif %}
+            {% for d in failed %}{{ drv_card(d, base, open=loop.first) }}{% endfor %}
+            {% if ok %}
+              <h2 class="section">Succeeded ({{ ok | length }})</h2>
+              <details class="succeeded-panel" id="succeeded-panel">
+                <summary>
+                  <span class="status-icon succeeded" aria-hidden="true"></span>
+                  <span class="card-text">
+                    <span class="card-name">{{ ok | length }} built</span>
+                    <span class="meta browse-hint"></span>
+                  </span>
+                </summary>
+                <div id="succeeded-list">
+                  {% for d in ok %}{{ drv_card(d, base) }}{% endfor %}
+                </div>
+              </details>
+            {% endif %}
+          {% endif %}
         </div>
       {% elif not content and not live %}
         <p class="muted">no output — everything was already built</p>
@@ -73,7 +96,6 @@
     </section>
   </main>
   {% if toc or live_structured %}
-    {% if toc %}<script id="toc-data" type="application/json">{{ toc | tojson }}</script>{% endif %}
     <script src="/static/structured-logs.js?v={{ static_v }}" defer></script>
   {% endif %}
   <script>
