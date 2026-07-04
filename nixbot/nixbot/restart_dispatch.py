@@ -14,7 +14,7 @@ from . import db
 from .db import BuildStatus
 from .db_gen import builds as builds_q
 from .db_gen import maintenance as q
-from .events import BuildResult, ChangeEvent
+from .events import BuildResult, ChangeEvent, EvalReport
 from .recovery import check_store_paths, find_unfinished_builds
 from .repos import repo_info
 
@@ -167,9 +167,7 @@ async def _report_interrupted(s: CIService, resumable: ResumableBuild) -> None:
     event = await change_event_for(s, resumable)
     if build is None or event is None:
         return
-    await s.orchestrator.reporter.eval_finished(
-        event, build, success=False, warnings=[]
-    )
+    await s.orchestrator.reporter.eval_finished(event, build, EvalReport(success=False))
     await s.orchestrator.reporter.build_finished(
         event, build, BuildResult(BuildStatus.FAILED, build.status_generation, [])
     )

@@ -25,7 +25,7 @@ from .build_scheduler import (
 )
 from .db import BuildStatus
 from .db_gen import builds as q
-from .events import BuildResult
+from .events import BuildResult, EvalReport
 from .executor import failure_excerpt
 from .live_warnings import LiveWarningAggregator
 from .memory import calculate_eval_workers
@@ -191,7 +191,9 @@ async def _settle_aborted(
     if status == BuildStatus.CANCELLED:
         await o.reporter.eval_cancelled(event, build)
     else:
-        await o.reporter.eval_finished(event, build, success=False, warnings=[])
+        await o.reporter.eval_finished(
+            event, build, EvalReport(success=False, error=error)
+        )
     await o.reporter.build_finished(
         event, build, BuildResult(status, build.status_generation, [])
     )
@@ -316,9 +318,11 @@ async def _run_build_inner(
         await o.reporter.eval_finished(
             event,
             build,
-            success=True,
-            warnings=[str(g["message"]) for g in live_warnings.snapshot()],
-            jobs=buildable,
+            EvalReport(
+                success=True,
+                warnings=[str(g["message"]) for g in live_warnings.snapshot()],
+                jobs=buildable,
+            ),
         )
 
         # Re-send the complete eval result: the scheduler dedupes
@@ -384,7 +388,7 @@ async def _try_reuse_eval(
     await record_attributes(o.pool, build.id, reused)
     await q.mark_eval_completed(o.pool, id_=build.id)
     await db.set_build_status(o.pool, build.id, BuildStatus.BUILDING)
-    await o.reporter.eval_finished(event, build, success=True, warnings=[], jobs=reused)
+    await o.reporter.eval_finished(event, build, EvalReport(success=True, jobs=reused))
     # cache_failures=False: see _ReadOnlyFailedBuildCache.
     status = await build_attributes(
         o, event, build, worktree_path, reused, cache_failures=False

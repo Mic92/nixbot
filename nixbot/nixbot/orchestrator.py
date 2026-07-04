@@ -38,6 +38,7 @@ from .effects_state import TaskTokens
 from .events import (
     BuildResult,
     ChangeEvent,
+    EvalReport,
     NullStatusReporter,
     RepoInfo,
     StatusReporter,
@@ -179,7 +180,9 @@ class Orchestrator:
                 pr_number=event.pr_number,
                 pr_author=event.pr_author,
             )
-            await self.reporter.eval_finished(event, build, success=False, warnings=[])
+            await self.reporter.eval_finished(
+                event, build, EvalReport(success=False, error=str(e))
+            )
             await self.reporter.build_finished(
                 event, build, BuildResult(BuildStatus.FAILED, 0, [])
             )

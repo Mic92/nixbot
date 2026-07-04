@@ -51,9 +51,8 @@ if TYPE_CHECKING:
 
     from .build_scheduler import AttributeResult
     from .db import BuildRecord
-    from .events import BuildResult, ChangeEvent
+    from .events import BuildResult, ChangeEvent, EvalReport
     from .forge import GiteaClient, GitHubAppClient, GitlabClient
-    from .models import NixEvalJobSuccess
 
 # GitHub caps output.text at 65535 chars.
 CHECK_RUN_TEXT_LIMIT = 60_000
@@ -491,31 +490,34 @@ class ForgeStatusReporter:
         )
 
     async def eval_finished(
-        self,
-        event: ChangeEvent,
-        build: BuildRecord,
-        *,
-        success: bool,
-        warnings: list[str],
-        jobs: Sequence[NixEvalJobSuccess] | None = None,
+        self, event: ChangeEvent, build: BuildRecord, report: EvalReport
     ) -> None:
+        # Failed evals show the error tail; successful ones the warnings.
+        if not report.success and report.error:
+            text: str | None = _fence(report.error)
+        elif report.warnings:
+            text = _fence("\n".join(report.warnings))
+        else:
+            text = None
         await self._post(
             event,
             build,
             f"{self.context_prefix}/nix-eval",
-            StatusState.success if success else StatusState.failure,
-            eval_description(success, warnings),
-            text=_fence("\n".join(warnings)) if warnings else None,
+            StatusState.success if report.success else StatusState.failure,
+            eval_description(report.success, report.warnings),
+            text=text,
         )
-        if success:
+        if report.success:
             await self._post(
                 event,
                 build,
                 f"{self.context_prefix}/nix-build",
                 StatusState.pending,
                 "building attributes",
-                text=_build_plan([j.attr for j in jobs], self.build_url(event, build))
-                if jobs
+                text=_build_plan(
+                    [j.attr for j in report.jobs], self.build_url(event, build)
+                )
+                if report.jobs
                 else None,
             )
 
