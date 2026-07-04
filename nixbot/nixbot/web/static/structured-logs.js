@@ -11,14 +11,12 @@
     s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
   const pl = (n, word, suffix = "s") => word + (n === 1 ? "" : suffix);
 
-  const TOC = JSON.parse($("toc-data").textContent);
   const list = $("drv-list");
   const BASE = list.dataset.base;
   const SEARCH = list.dataset.search;
-  TOC.forEach((d, i) => (d.pos = i));
-  const FAILED = TOC.filter((d) => d.status === "failed");
-  const OK = TOC.filter((d) => d.status !== "failed");
+  const STREAM = list.dataset.stream; // set only while the build runs
   const ROW_H = 20; // must match .log-lines .logline height in style.css
+  const stripAnsi = (s) => s.replace(/\x1b\[[0-9;]*m/g, "");
 
   const phaseBarHTML = `<div class="phasebar" hidden>
     <span class="phase-label"></span>
@@ -65,7 +63,7 @@
       bar.querySelector(".phase-next").addEventListener("click", () => jump(1));
       update();
     }
-    return { scrollToLine };
+    return { scrollToLine, refresh: update };
   }
 
   const bodyInnerHTML = (d) =>
@@ -123,6 +121,13 @@
       });
     }
   }
+
+  if (STREAM) return runLive();
+
+  const TOC = JSON.parse($("toc-data").textContent);
+  TOC.forEach((d, i) => (d.pos = i));
+  const FAILED = TOC.filter((d) => d.status === "failed");
+  const OK = TOC.filter((d) => d.status !== "failed");
 
   // failures first (first one open); successes collapsed behind a card.
   const okBlock = OK.length
@@ -238,5 +243,139 @@
     const row = document.getElementById(`d${idx}-L${line}`);
     if (row) row.classList.add("hit");
     handle.scrollToLine(line);
+  }
+
+  // Live mode: build cards from the structured SSE (state burst + deltas),
+  // in arrival order, the running one following its tail. The
+  // terminal-status reload swaps to the polished container page.
+  function runLive() {
+    const byIdx = new Map();
+    const cardOf = new Map();
+    const handleOf = new Map();
+    const iconState = (s) =>
+      s === "failed" ? "failed" : s === "running" ? "running" : "succeeded";
+    const rowHTML = (idx, n, text) =>
+      `<span class="logline" id="d${idx}-L${n}">` +
+      `<a class="lineno" href="#d${idx}-L${n}">${n}</a>${
+        esc(stripAnsi(text))
+      }</span>`;
+
+    function cardEl(d) {
+      const el = document.createElement("details");
+      el.className = "log-card" + (d.status === "failed" ? "" : " ok");
+      el.dataset.idx = d.idx;
+      if (d.status === "running" || d.status === "failed") el.open = true;
+      el.innerHTML = `<summary>
+          <span class="status-icon ${
+        iconState(d.status)
+      }" aria-hidden="true"></span>
+          <span class="card-text"><span class="card-name">${
+        esc(d.name)
+      }</span><span class="meta"></span></span>
+        </summary>
+        <div class="log-card-body"><div class="excerpt"></div>${phaseBarHTML}<div class="log-lines"></div></div>`;
+      return el;
+    }
+
+    function ensureCard(d) {
+      let el = cardOf.get(d.idx);
+      if (el) return el;
+      el = cardEl(d);
+      list.appendChild(el);
+      cardOf.set(d.idx, el);
+      const vp = el.querySelector(".log-lines");
+      handleOf.set(d.idx, wireLog(vp, d.ph, el.querySelector(".phasebar")));
+      return el;
+    }
+
+    function setMeta(d) {
+      const el = ensureCard(d);
+      el.querySelector(".status-icon").className = "status-icon " +
+        iconState(d.status);
+      el.classList.toggle("ok", d.status !== "failed");
+      el.querySelector(".meta").textContent = d.status === "running"
+        ? "building…"
+        : d.status;
+      return el;
+    }
+
+    function addLines(idx, from, texts) {
+      const d = byIdx.get(idx);
+      if (!d || !texts.length) return;
+      const el = ensureCard(d);
+      const vp = el.querySelector(".log-lines");
+      // Follow the tail only when already at the bottom, so scrolling up
+      // to read pauses following and scrolling back resumes it.
+      const atBottom = vp.scrollHeight - vp.scrollTop - vp.clientHeight < 40;
+      vp.insertAdjacentHTML(
+        "beforeend",
+        texts.map((t, k) => rowHTML(idx, from + k, t)).join(""),
+      );
+      d.n = from + texts.length - 1;
+      if (el.open && atBottom) vp.scrollTop = vp.scrollHeight;
+    }
+
+    function apply(delta) {
+      const d = byIdx.get(delta.idx);
+      if (delta.t === "drv") {
+        const nd = {
+          idx: delta.idx,
+          name: delta.name,
+          status: "running",
+          ph: [],
+          n: 0,
+        };
+        byIdx.set(nd.idx, nd);
+        setMeta(nd);
+      } else if (delta.t === "line") {
+        addLines(delta.idx, delta.from, [delta.text]);
+      } else if (delta.t === "phase" && d) {
+        if (!d.ph.length || d.ph[d.ph.length - 1][0] !== delta.phase) {
+          d.ph.push([delta.phase, delta.line]);
+        }
+        handleOf.get(d.idx)?.refresh();
+      } else if (delta.t === "status" && d) {
+        d.status = delta.status;
+        const el = setMeta(d);
+        if (delta.status === "failed") el.open = true;
+        else if (delta.status !== "running") el.open = false;
+      }
+    }
+
+    function reset(state) {
+      list.innerHTML = "";
+      byIdx.clear();
+      cardOf.clear();
+      handleOf.clear();
+      for (const e of state) {
+        const d = {
+          idx: e.idx,
+          name: e.name,
+          status: e.status,
+          ph: e.ph || [],
+          n: e.n,
+        };
+        byIdx.set(d.idx, d);
+        setMeta(d);
+        addLines(d.idx, 1, e.lines || []);
+      }
+    }
+
+    let errors = 0;
+    const src = new EventSource(STREAM);
+    src.addEventListener("state", (ev) => {
+      errors = 0;
+      reset(JSON.parse(ev.data));
+    });
+    src.addEventListener("delta", (ev) => apply(JSON.parse(ev.data)));
+    src.addEventListener("done", () => src.close());
+    // EventSource reconnects ~every 1s; if the server stays gone (engine
+    // restart) give up and reload so the finished log renders server-side.
+    src.onerror = () => {
+      if (++errors >= 5) {
+        src.close();
+        setTimeout(() => location.reload(), 3000);
+      }
+    };
   }
 })();

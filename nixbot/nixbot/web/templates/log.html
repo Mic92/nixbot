@@ -37,7 +37,7 @@
           {% endif %}
         </div>
       </div>
-      {% if live %}
+      {% if live and not live_structured %}
         <label>
           <input type="checkbox" id="follow" checked>
           follow tail
@@ -47,20 +47,24 @@
         <p class="muted">waiting for the build to start…</p>
       {% elif unavailable %}
         <p class="muted">no log available for this attribute ({{ attr_status }})</p>
-      {% elif toc %}
-        <section class="log-search">
-          <input id="search-input"
-                 type="search"
-                 placeholder="Search this build's logs…"
-                 aria-label="Search logs"
-                 autocomplete="off">
-          <p class="search-count" id="search-count" aria-live="polite"></p>
-          <ol class="search-results" id="search-results">
-          </ol>
-        </section>
+      {% elif toc or live_structured %}
+        {% if not live_structured %}
+          <section class="log-search">
+            <input id="search-input"
+                   type="search"
+                   placeholder="Search this build's logs…"
+                   aria-label="Search logs"
+                   autocomplete="off">
+            <p class="search-count" id="search-count" aria-live="polite"></p>
+            <ol class="search-results" id="search-results">
+            </ol>
+          </section>
+        {% endif %}
         <div id="drv-list"
              data-base="{{ build_path(project, build.number) }}/logs/{{ attr | urlencode }}"
-             data-search="{{ build_path(project, build.number) }}/search"></div>
+             data-search="{{ build_path(project, build.number) }}/search"
+             {% if live_structured %}data-stream="{{ build_path(project, build.number) }}/logs/{{ attr | urlencode }}/stream?format=structured"{% endif %}>
+        </div>
       {% elif not content and not live %}
         <p class="muted">no output — everything was already built</p>
       {% else %}
@@ -68,12 +72,13 @@
       {% endif %}
     </section>
   </main>
-  {% if toc %}
-    <script id="toc-data" type="application/json">{{ toc | tojson }}</script>
+  {% if toc or live_structured %}
+    {% if toc %}<script id="toc-data" type="application/json">{{ toc | tojson }}</script>{% endif %}
     <script src="/static/structured-logs.js?v={{ static_v }}" defer></script>
   {% endif %}
   <script>
     const LIVE = {{ live | tojson }};
+    const LIVE_STRUCTURED = {{ live_structured | tojson }};
     const RUNNING = {{ (attr_status in ("pending", "building")) | tojson }};
     const log = document.getElementById("log");
     /* Failures sit at the end; start there unless a line is linked. */
@@ -91,7 +96,7 @@
       if (e.attr !== {{ attr | tojson }}) return;
       if (!LIVE || !["pending", "building"].includes(e.status)) location.reload();
     };
-    if (LIVE) {
+    if (LIVE && !LIVE_STRUCTURED && log) {
       const follow = document.getElementById("follow");
       /* Scroll only the log pane so the header stays usable; scrolling
          up pauses following, scrolling back to the bottom resumes it. */

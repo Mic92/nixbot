@@ -24,6 +24,7 @@ from nixbot.db import BuildStatus
 from nixbot.effects_state import TaskTokens
 from nixbot.executor import (
     LogWriter,
+    StructuredCapture,
     attribute_log_path,
     container_path,
     effect_log_path,
@@ -1141,6 +1142,45 @@ def test_live_log_history_before_completion(client: WebHarness, tmp_path: Path) 
     assert "const LIVE = true" in viewer
     assert "early output" in stream
     assert "late output" in stream
+    assert "event: done" in stream
+
+
+def test_structured_live_stream(client: WebHarness, tmp_path: Path) -> None:
+    """A running attribute with a capture streams per-derivation deltas;
+    the viewer wires the structured client to that stream."""
+    ctx = client.ctx
+    ctx.state_dir = tmp_path
+    registry = client.app.state.log_registry
+
+    async def run() -> tuple[str, str]:
+        build_id = await ctx.pool.fetchval("SELECT id FROM builds WHERE number = 3")
+        writer = LogWriter(path=tmp_path / "logs" / "live" / "x86_64-linux.ok.zst")
+        cap = StructuredCapture(clock=lambda: 1.0)
+        writer.capture = cap
+        cap.start_build(1, "/nix/store/aaa-qtbase-5.0.drv")
+        cap.log_line(1, "CC main.o")
+        registry.register(build_id, "x86_64-linux.ok", writer)
+        try:
+            base = "/repos/github/acme/widget/builds/3/logs/x86_64-linux.ok"
+            viewer = (await client.http.get(base)).text
+            task = asyncio.ensure_future(
+                client.http.get(f"{base}/stream?format=structured")
+            )
+            await asyncio.sleep(0.1)
+            cap.phase(1, "build")
+            cap.close()
+            stream = (await task).text
+        finally:
+            registry.unregister(build_id, "x86_64-linux.ok")
+        return viewer, stream
+
+    viewer, stream = client.loop.run_until_complete(run())
+    assert "const LIVE_STRUCTURED = true" in viewer
+    assert "format=structured" in viewer  # data-stream on #drv-list
+    assert "event: state" in stream
+    assert '"name":"qtbase-5.0"' in stream  # snapshot burst
+    assert "event: delta" in stream
+    assert '"t":"phase"' in stream  # live delta after subscribe
     assert "event: done" in stream
 
 

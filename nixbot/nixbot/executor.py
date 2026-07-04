@@ -57,6 +57,7 @@ STREAM_LIMIT = 16 * 1024 * 1024
 # Cap per-subscriber backlog so a stalled SSE client cannot buffer the
 # whole build output in memory; the oldest chunks are dropped.
 SUBSCRIBER_QUEUE_MAXSIZE = 256
+STRUCTURED_QUEUE_MAXSIZE = 4096  # per-line deltas, chattier than byte chunks
 RECENT_BUFFER_SIZE = 4096
 
 # Batch log output into zstd frames of at least this size; one frame
@@ -202,6 +203,8 @@ class LogWriter:
     bytes_seen: int = 0
     truncated: bool = False
     closed: bool = False
+    # Live capture, so the web layer can stream per-derivation deltas.
+    capture: StructuredCapture | None = None
     _head_budget: int = field(init=False)
     _tail: deque[bytes] = field(default_factory=deque)
     _tail_size: int = 0
@@ -473,35 +476,144 @@ class StructuredCapture:
 
     DRIVER = "<driver>"
 
-    def __init__(self, clock: Callable[[], float] = time.time) -> None:
-        self._w = LogContainerWriter()
+    def __init__(
+        self, clock: Callable[[], float] = time.time, max_lines: int | None = None
+    ) -> None:
+        self._w = (
+            LogContainerWriter(max_lines=max_lines)
+            if max_lines is not None
+            else LogContainerWriter()
+        )
         self._clock = clock
         self._act: dict[int, str] = {}
+        self._idx: dict[str, int] = {self.DRIVER: 0}
+        # Monotonic per-derivation line counter for live delta numbering:
+        # the container's line count stops growing once a drv hits its
+        # retention cap, which would repeat delta "from" and collide row
+        # ids. Live ids are ephemeral (the finish reload renumbers).
+        self._seen: dict[str, int] = {}
+        self._running: set[str] = set()
+        self._subs: list[asyncio.Queue[dict | None]] = []
+        self._closed = False
         self._w.register(self.DRIVER, "driver")
 
     def _ts(self) -> int:
         return int(self._clock() * 1000)
 
+    @staticmethod
+    def _put(q: asyncio.Queue[dict | None], item: dict | None) -> None:
+        # Drop the oldest delta for a stalled subscriber rather than grow
+        # unbounded; the missing line is a cosmetic gap the finish reload
+        # heals. Matches LogWriter's stalled-subscriber policy.
+        while True:
+            try:
+                q.put_nowait(item)
+            except asyncio.QueueFull:
+                with contextlib.suppress(asyncio.QueueEmpty):
+                    q.get_nowait()
+            else:
+                return
+
+    def _emit(self, delta: dict) -> None:
+        for q in self._subs:
+            self._put(q, delta)
+
+    def subscribe(self) -> asyncio.Queue[dict | None]:
+        """Live deltas for a viewer; a full snapshot comes from state().
+        Subscribe then snapshot with no await between so no delta is lost
+        or duplicated (single event loop, atomic)."""
+        q: asyncio.Queue[dict | None] = asyncio.Queue(maxsize=STRUCTURED_QUEUE_MAXSIZE)
+        if self._closed:
+            q.put_nowait(None)
+        else:
+            self._subs.append(q)
+        return q
+
+    def unsubscribe(self, q: asyncio.Queue[dict | None]) -> None:
+        with contextlib.suppress(ValueError):
+            self._subs.remove(q)
+
+    def state(self) -> list[dict]:
+        st = self._w.state()
+        for e in st:
+            if e["idx"] in self._running_idx:
+                e["status"] = "running"
+        return st
+
+    @property
+    def _running_idx(self) -> set[int]:
+        return {self._idx[d] for d in self._running if d in self._idx}
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        for q in self._subs:
+            self._put(q, None)
+        self._subs.clear()
+
     def start_build(self, act_id: int, drv_path: str) -> None:
         self._act[act_id] = drv_path
-        self._w.register(drv_path, _drv_display_name(drv_path))
+        name = _drv_display_name(drv_path)
+        self._w.register(drv_path, name)
+        if drv_path not in self._idx:
+            self._idx[drv_path] = len(self._idx)
+        self._running.add(drv_path)
+        self._emit({"t": "drv", "idx": self._idx[drv_path], "name": name})
+
+    def _bump(self, drv: str) -> int:
+        self._seen[drv] = self._seen.get(drv, 0) + 1
+        return self._seen[drv]
 
     def log_line(self, act_id: int, text: str) -> None:
-        self._w.line(self._act.get(act_id, self.DRIVER), text, ts=self._ts())
+        drv = self._act.get(act_id, self.DRIVER)
+        self._w.line(drv, text, ts=self._ts())
+        self._emit(
+            {
+                "t": "line",
+                "idx": self._idx.get(drv, 0),
+                "from": self._bump(drv),
+                "text": text,
+            }
+        )
 
     def phase(self, act_id: int, name: str) -> None:
-        self._w.phase(self._act.get(act_id, self.DRIVER), name, ts=self._ts())
+        drv = self._act.get(act_id, self.DRIVER)
+        self._w.phase(drv, name, ts=self._ts())
+        self._emit(
+            {
+                "t": "phase",
+                "idx": self._idx.get(drv, 0),
+                "phase": name,
+                "line": self._seen.get(drv, 0),
+            }
+        )
 
     def stop(self, act_id: int) -> None:
         drv = self._act.get(act_id)
         if drv is not None:
             self._w.stop(drv, self._ts())
+            self._running.discard(drv)
+            self._emit({"t": "status", "idx": self._idx.get(drv, 0), "status": "built"})
 
     def driver_line(self, text: str) -> None:
         self._w.line(self.DRIVER, text, ts=self._ts())
+        self._emit(
+            {"t": "line", "idx": 0, "from": self._bump(self.DRIVER), "text": text}
+        )
 
     def set_status(self, drv_path: str, status: str) -> None:
+        if drv_path not in self._idx:
+            # Finalized with no build activity (e.g. substituted): register
+            # now so the live delta lands on a card. Appended last, so its
+            # index equals its container position.
+            name = _drv_display_name(drv_path)
+            self._w.register(drv_path, name)
+            self._idx[drv_path] = len(self._idx)
+            self._emit({"t": "drv", "idx": self._idx[drv_path], "name": name})
         self._w.status(drv_path, status)
+        self._running.discard(drv_path)
+        self._emit({"t": "status", "idx": self._idx[drv_path], "status": status})
 
     def finalize(self) -> bytes:
         return self._w.finalize()
@@ -674,6 +786,7 @@ class NixBuildExecutor:
 
         output_tail: deque[bytes] = deque(maxlen=100)
         capture = StructuredCapture()
+        log_writer.capture = capture
         pump_task = asyncio.create_task(
             _pump_output(proc.stdout, output_tail, log_writer, capture)
         )
@@ -712,6 +825,9 @@ class NixBuildExecutor:
             tail_text = b"".join(output_tail).decode(errors="replace")
             return BuildOutcome.failure, is_transient_error(tail_text)
         finally:
+            # Terminate live viewers even on the cancel/timeout paths;
+            # idempotent with the close in _finalize_container.
+            capture.close()
             cancel_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await cancel_task
@@ -737,6 +853,7 @@ async def _finalize_container(
     failed: bool,
 ) -> None:
     capture.set_status(drv_path, "failed" if failed else "built")
+    capture.close()
     blob = capture.finalize()
     await asyncio.to_thread(container_path(log_writer.path).write_bytes, blob)
 

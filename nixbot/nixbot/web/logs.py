@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import html
+import json
 from typing import TYPE_CHECKING, NamedTuple
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -39,7 +40,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
     from pathlib import Path
 
-    from ..executor import LogWriter  # noqa: TID252
+    from ..executor import LogWriter, StructuredCapture  # noqa: TID252
     from .app import WebContext
 
 
@@ -622,9 +623,17 @@ class _LogRoutes:
         number: int,
         attr: str,
     ) -> StreamingResponse:
-        """SSE: history from disk, then live chunks until completion."""
+        """SSE: history from disk, then live chunks until completion.
+
+        With ?format=structured, stream per-derivation deltas from the
+        live capture instead of rendered lines."""
         _, build, path = await self._resolve(request, forge, owner, name, number, attr)
         writer = self.registry.get(build["id"], attr)
+        if request.query_params.get("format") == "structured":
+            capture = writer.capture if writer else None
+            return StreamingResponse(
+                _structured_events(capture), media_type="text/event-stream"
+            )
         return StreamingResponse(
             _stream_events(writer, path), media_type="text/event-stream"
         )
@@ -646,7 +655,11 @@ class _LogRoutes:
         )
         # Live pages render no snapshot: the stream replays full
         # history on connect, the client would throw it away.
-        live = self.registry.get(build["id"], attr) is not None
+        writer = self.registry.get(build["id"], attr)
+        live = writer is not None
+        # A running attribute with a capture streams structured deltas;
+        # the client builds cards from the stream, so no server toc.
+        live_structured = writer is not None and writer.capture is not None
         content = ""
         toc: list[dict] | None = None
         waiting = False
@@ -683,6 +696,7 @@ class _LogRoutes:
             content=content,
             toc=toc,
             live=live,
+            live_structured=live_structured,
             waiting=waiting,
             unavailable=unavailable,
             prev_number=prev_number,
@@ -782,6 +796,33 @@ async def _stream_events(
     finally:
         if writer is not None:
             writer.unsubscribe(queue)
+
+
+async def _structured_events(
+    capture: StructuredCapture | None,
+) -> AsyncGenerator[str, None]:
+    """Live per-derivation stream: a full-state burst on connect, then
+    JSON deltas until the build finishes. A finished/absent capture just
+    signals done so the client reloads into the container page."""
+    if capture is None:
+        yield "event: done\ndata: \n\n"
+        return
+    queue = capture.subscribe()
+    state = capture.state()  # atomic with subscribe: no await between
+    yield f"event: state\ndata: {json.dumps(state, separators=(',', ':'))}\n\n"
+    try:
+        while True:
+            try:
+                delta = await asyncio.wait_for(queue.get(), timeout=30)
+            except TimeoutError:
+                yield ": keepalive\n\n"
+                continue
+            if delta is None:
+                yield "event: done\ndata: \n\n"
+                return
+            yield f"event: delta\ndata: {json.dumps(delta, separators=(',', ':'))}\n\n"
+    finally:
+        capture.unsubscribe(queue)
 
 
 def _sse(text: str) -> str:

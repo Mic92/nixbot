@@ -20,6 +20,7 @@ from nixbot.ansi import strip_ansi
 from nixbot.build_scheduler import BuildOutcome
 from nixbot.executor import (
     FRAME_FLUSH_THRESHOLD,
+    STRUCTURED_QUEUE_MAXSIZE,
     SUBSCRIBER_QUEUE_MAXSIZE,
     BuildSettings,
     FairScheduler,
@@ -590,6 +591,82 @@ def test_structured_capture_demux() -> None:
     assert r.lines(by_name["zlib-1.3"]) == ["building zlib"]
     # nix's own message lands in the synthetic driver bucket.
     assert r.lines(by_name["driver"]) == ["note: keeping going"]
+
+
+async def test_structured_capture_live_stream() -> None:
+    cap = StructuredCapture(clock=lambda: 1.0)
+    q = cap.subscribe()  # subscribe before mutating: no delta lost
+    cap.start_build(1, "/nix/store/aaa-qtbase-5.0.drv")
+    cap.phase(1, "build")
+    cap.log_line(1, "CC main.o")
+    cap.stop(1)
+    cap.set_status("/nix/store/aaa-qtbase-5.0.drv", "failed")
+    cap.close()
+
+    deltas = []
+    while not q.empty():
+        deltas.append(q.get_nowait())
+
+    assert deltas[0] == {"t": "drv", "idx": 1, "name": "qtbase-5.0"}
+    assert {"t": "phase", "idx": 1, "phase": "build", "line": 0} in deltas
+    assert {"t": "line", "idx": 1, "from": 1, "text": "CC main.o"} in deltas
+    # stop marks built, finalize status overrides to failed; both stream.
+    assert {"t": "status", "idx": 1, "status": "built"} in deltas
+    assert {"t": "status", "idx": 1, "status": "failed"} in deltas
+    assert deltas[-1] is None  # close signals done
+
+
+async def test_structured_capture_stalled_subscriber_bounded() -> None:
+    cap = StructuredCapture(clock=lambda: 1.0)
+    q = cap.subscribe()  # never drained: a stalled client
+    cap.start_build(1, "/nix/store/aaa-x.drv")
+    for i in range(STRUCTURED_QUEUE_MAXSIZE + 50):
+        cap.log_line(1, f"line {i}")
+    assert q.qsize() <= STRUCTURED_QUEUE_MAXSIZE
+    cap.close()
+    items = []
+    while not q.empty():
+        items.append(q.get_nowait())
+    assert items[-1] is None  # done sentinel delivered even to a full queue
+
+
+async def test_structured_capture_monotonic_line_from_past_cap() -> None:
+    # The container caps retained lines, so its line count plateaus; live
+    # delta "from" must stay monotonic anyway or row ids would collide.
+    cap = StructuredCapture(clock=lambda: 1.0, max_lines=4)
+    q = cap.subscribe()
+    cap.start_build(1, "/nix/store/aaa-qtbase-5.0.drv")
+    for _ in range(8):
+        cap.log_line(1, "x")
+    deltas = [q.get_nowait() for _ in range(q.qsize())]
+    lines = [d["from"] for d in deltas if d and d["t"] == "line"]
+    assert lines == [1, 2, 3, 4, 5, 6, 7, 8]
+
+
+async def test_structured_capture_status_without_start_build() -> None:
+    # Finalized without build activity: still emits a card, keeps its name.
+    cap = StructuredCapture(clock=lambda: 1.0)
+    q = cap.subscribe()
+    cap.set_status("/nix/store/aaa-qtbase-5.0.drv", "built")
+    deltas = [q.get_nowait() for _ in range(q.qsize())]
+    assert deltas[0] == {"t": "drv", "idx": 1, "name": "qtbase-5.0"}
+    assert deltas[1] == {"t": "status", "idx": 1, "status": "built"}
+    entry = next(e for e in cap.state() if e["idx"] == 1)
+    assert entry["name"] == "qtbase-5.0"
+
+
+async def test_structured_capture_state_snapshot() -> None:
+    cap = StructuredCapture(clock=lambda: 1.0)
+    cap.start_build(1, "/nix/store/aaa-qtbase-5.0.drv")
+    cap.log_line(1, "CC main.o")
+    state = cap.state()
+    qt = next(e for e in state if e["name"] == "qtbase-5.0")
+    assert qt["status"] == "running"  # in-flight, not yet stopped
+    assert qt["lines"] == ["CC main.o"]
+    assert qt["n"] == 1
+    # A subscriber after close gets an immediate done, not a hang.
+    cap.close()
+    assert cap.subscribe().get_nowait() is None
 
 
 # As written by render_log_event: the builder's own lines arrive as

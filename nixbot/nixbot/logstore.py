@@ -12,6 +12,7 @@ from __future__ import annotations
 import bisect
 import json
 import struct
+from collections import deque
 from dataclasses import dataclass, field
 
 import zstandard
@@ -20,16 +21,42 @@ MAGIC = b"NBL1"
 _MAGIC_LEN = len(MAGIC)
 _LEVEL = 12
 _GROUP_BYTES = 64 * 1024
+_MAX_LINES = 100_000  # per-derivation retention cap, keeps RAM bounded
 
 
 @dataclass
 class _Drv:
     name: str
     status: str = "built"
-    lines: list[str] = field(default_factory=list)
     phases: list[list] = field(default_factory=list)  # [name, first_line]
     t0: int | None = None
     t1: int | None = None
+    # Head + tail retention: a runaway log keeps its start and its end
+    # (where the failure is) and elides the middle, so RAM stays bounded
+    # without hiding the error.
+    head: list[str] = field(default_factory=list)
+    tail: deque[str] = field(default_factory=deque)
+    dropped: int = 0
+
+    def append(self, text: str, half: int) -> None:
+        if len(self.head) < half:
+            self.head.append(text)
+            return
+        self.tail.append(text)
+        if len(self.tail) > half:
+            self.tail.popleft()
+            self.dropped += 1
+
+    @property
+    def count(self) -> int:
+        return len(self.head) + (1 if self.dropped else 0) + len(self.tail)
+
+    @property
+    def lines(self) -> list[str]:
+        if not self.dropped:
+            return self.head + list(self.tail)
+        elided = f"… {self.dropped} lines elided (log too large) …"
+        return [*self.head, elided, *self.tail]
 
 
 class LogContainerWriter:
@@ -39,9 +66,15 @@ class LogContainerWriter:
     and laid out in first-seen order. Holds the size-capped log in memory.
     """
 
-    def __init__(self, level: int = _LEVEL, group_bytes: int = _GROUP_BYTES) -> None:
+    def __init__(
+        self,
+        level: int = _LEVEL,
+        group_bytes: int = _GROUP_BYTES,
+        max_lines: int = _MAX_LINES,
+    ) -> None:
         self._level = level
         self._group_bytes = group_bytes
+        self._half = max(1, max_lines // 2)
         self._drvs: dict[str, _Drv] = {}
 
     def _get(self, drv: str, name: str | None = None) -> _Drv:
@@ -64,12 +97,12 @@ class LogContainerWriter:
             if d.t0 is None:
                 d.t0 = ts
             d.t1 = ts
-        d.lines.append(text)
+        d.append(text, self._half)
 
     def phase(self, drv: str, phase: str, ts: int | None = None) -> None:
         d = self._get(drv)
         if not d.phases or d.phases[-1][0] != phase:
-            d.phases.append([phase, len(d.lines)])
+            d.phases.append([phase, d.count])
         if ts is not None:
             d.t1 = ts
 
@@ -78,6 +111,27 @@ class LogContainerWriter:
 
     def stop(self, drv: str, ts: int) -> None:
         self._get(drv).t1 = ts
+
+    def nlines(self, drv: str) -> int:
+        d = self._drvs.get(drv)
+        return d.count if d else 0
+
+    def state(self) -> list[dict]:
+        """Current per-derivation state for a live snapshot burst; mirrors
+        the finalized TOC plus the lines seen so far."""
+        return [
+            {
+                "idx": i,
+                "name": d.name,
+                "status": d.status,
+                "ph": d.phases,
+                "lines": d.lines,
+                "t0": d.t0,
+                "t1": d.t1,
+                "n": d.count,
+            }
+            for i, d in enumerate(self._drvs.values())
+        ]
 
     def finalize(self) -> bytes:
         c = zstandard.ZstdCompressor(level=self._level)
@@ -100,7 +154,8 @@ class LogContainerWriter:
             buf, members, bufbytes = [], [], 0
 
         for d in self._drvs.values():
-            txt = "".join(t + "\n" for t in d.lines).encode()
+            lines = d.lines
+            txt = "".join(t + "\n" for t in lines).encode()
             e = {
                 "name": d.name,
                 "status": d.status,
@@ -108,7 +163,7 @@ class LogContainerWriter:
                 "clen": 0,
                 "bs": bufbytes,
                 "bn": len(txt),
-                "n": len(d.lines),
+                "n": len(lines),
                 "ph": d.phases,
                 "t0": d.t0,
                 "t1": d.t1,

@@ -51,6 +51,20 @@ def test_toc_metadata() -> None:
     assert e["t1"] == 30
 
 
+def test_line_cap_keeps_head_and_tail() -> None:
+    w = LogContainerWriter(max_lines=4)  # half = 2
+    for i in range(10):
+        w.line("pkg", f"line {i}")
+    r = LogContainerReader(w.finalize())
+    lines = r.lines(0)
+    # First two, an elision marker, then the last two (the failure tail).
+    assert lines[0] == "line 0"
+    assert lines[1] == "line 1"
+    assert "6 lines elided" in lines[2]
+    assert lines[-2:] == ["line 8", "line 9"]
+    assert r.entry(0)["n"] == 5
+
+
 def test_phase_indices() -> None:
     w = LogContainerWriter()
     w.phase("pkg", "unpack")
