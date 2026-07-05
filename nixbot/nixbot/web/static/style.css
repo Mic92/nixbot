@@ -741,6 +741,7 @@ pre.log {
 .pipeline:hover {
 	border-color: var(--accent);
 	border-left-color: var(--status-color, var(--accent));
+	text-decoration: none;
 }
 .pipeline-info {
 	display: flex;
