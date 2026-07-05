@@ -900,18 +900,23 @@ details.webhook-setup summary {
 
 /* Structured log viewer: per-derivation cards, phase bar, lazy log.
    Disclosure is native <details>; only the summary chrome is styled. */
-.log-card {
+.log-card,
+.succeeded-panel {
 	background: var(--card);
 	border: 1px solid var(--border);
-	border-left: 3px solid var(--bad);
 	border-radius: 8px;
+}
+.log-card {
+	border-left: 3px solid var(--bad);
 	margin: 0.5rem 0;
 	overflow: hidden;
 }
-.log-card.ok {
+.log-card.ok,
+.search-drv.ok {
 	border-left-color: var(--ok);
 }
-.log-card > summary {
+.log-card > summary,
+.succeeded-panel > summary {
 	display: flex;
 	align-items: center;
 	gap: 0.6rem;
@@ -919,10 +924,12 @@ details.webhook-setup summary {
 	cursor: pointer;
 	list-style: none;
 }
-.log-card > summary::-webkit-details-marker {
+.log-card > summary::-webkit-details-marker,
+.succeeded-panel > summary::-webkit-details-marker {
 	display: none;
 }
-.log-card > summary:hover {
+.log-card > summary:hover,
+.succeeded-panel > summary:hover {
 	background: var(--hover);
 }
 .card-text {
@@ -930,7 +937,8 @@ details.webhook-setup summary {
 	flex-direction: column;
 	min-width: 0;
 }
-.card-name {
+.card-name,
+.search-name {
 	font-weight: 600;
 	overflow-wrap: anywhere;
 }
@@ -1108,12 +1116,6 @@ details.webhook-setup summary {
 .search-drv {
 	border-left: 3px solid var(--bad);
 }
-.search-drv.ok {
-	border-left-color: var(--ok);
-}
-.search-name {
-	font-weight: 600;
-}
 .search-badge {
 	color: var(--muted);
 	font-size: 0.75rem;
@@ -1130,25 +1132,6 @@ details.webhook-setup summary {
 	font-variant-numeric: tabular-nums;
 	width: 5ch;
 	text-align: right;
-}
-.succeeded-panel {
-	background: var(--card);
-	border: 1px solid var(--border);
-	border-radius: 8px;
-}
-.succeeded-panel > summary {
-	display: flex;
-	align-items: center;
-	gap: 0.6rem;
-	padding: 0.55rem 0.8rem;
-	cursor: pointer;
-	list-style: none;
-}
-.succeeded-panel > summary::-webkit-details-marker {
-	display: none;
-}
-.succeeded-panel > summary:hover {
-	background: var(--hover);
 }
 #succeeded-list {
 	border-top: 1px solid var(--border);
