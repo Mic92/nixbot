@@ -58,14 +58,15 @@
       if (!bar || !phases.length) return;
       const top = Math.round(vp.scrollTop / ROW_H);
       let cur = -1;
+      // first_line is 1-based, top 0-based: first phase shows at top=0.
       for (const [, start] of phases) {
-        if (start <= top) cur++;
+        if (start - 1 <= top) cur++;
         else break;
       }
       bar.hidden = cur < 0;
       if (cur < 0) return;
-      pick(bar, ".phase-label").innerHTML = `${esc(phases[cur][0])} phase ` +
-        `<span class="phase-pos">${cur + 1}/${phases.length}</span>`;
+      pick(bar, ".phase-label").innerHTML = `${esc(phases[cur][0])} ` +
+        `<span class="phase-pos">(${cur + 1}/${phases.length})</span>`;
       /** @type {HTMLButtonElement} */ (pick(bar, ".phase-prev")).disabled =
         cur <= 0;
       /** @type {HTMLButtonElement} */ (pick(bar, ".phase-next")).disabled =

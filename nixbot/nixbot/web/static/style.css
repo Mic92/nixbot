@@ -1050,8 +1050,6 @@ details.webhook-setup summary {
 	border-top: 1px solid var(--border);
 	border-bottom: 1px solid var(--border);
 	font-size: 0.7rem;
-	text-transform: uppercase;
-	letter-spacing: 0.07em;
 	color: var(--muted);
 }
 .phasebar[hidden] {
