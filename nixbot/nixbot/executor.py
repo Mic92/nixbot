@@ -37,7 +37,7 @@ from urllib.parse import quote
 import zstandard
 
 from .ansi import ANSI_TOKEN_RE, strip_ansi
-from .build_scheduler import BuildOutcome
+from .build_scheduler import BuildFailure, BuildOutcome, DrvFailure
 from .gcroots import safe_attr_filename
 from .logstore import LogContainerWriter
 from .proc import ProcessGroup
@@ -403,6 +403,18 @@ def build_nix_command(
 # nix names failures only in prose: "build of" (remote) / "builder for" (local).
 _BUILD_FAILED = re.compile(r"(?:build of|builder for) '([^']+\.drv)'.*?failed")
 _PHASE_MARKER = re.compile(r"Running phase: ")
+
+
+def _clean_tail(lines: list[str], max_lines: int) -> list[str]:
+    # Phase markers are stdenv chrome already shown in the phase bar.
+    kept = [
+        _limit_line(line)
+        for line in lines
+        if line.strip() and not _PHASE_MARKER.match(strip_ansi(line))
+    ]
+    return kept[-max_lines:]
+
+
 _QUOTED_LINE = re.compile(r"[^\s>]*> +(.*\S)")
 _EXCERPT_NOISE = re.compile(
     r"Output paths:|/nix/store/\S+$|Last \d+ log lines:"
@@ -624,31 +636,22 @@ class StructuredCapture:
         self._running.discard(drv_path)
         self._emit({"t": "status", "idx": self._idx[drv_path], "status": status})
 
-    def failure_excerpt(self, max_lines: int = 8, max_drvs: int = 3) -> str:
-        """Each failed derivation's own tail under a name header, capped
-        to `max_drvs` with the rest counted."""
+    def build_failure(
+        self, max_lines: int = 8, max_drvs: int = 3
+    ) -> BuildFailure | None:
         failing = self._w.failing()
         if not failing:
-            return ""
-        blocks = []
-        for name, lines in failing[-max_drvs:]:
-            # Phase markers are stdenv chrome already shown in the phase
-            # bar; keep the excerpt to real output.
-            kept = [
-                line
-                for line in lines
-                if line.strip() and not _PHASE_MARKER.match(strip_ansi(line))
-            ]
-            tail = kept[-max_lines:]
-            if tail:
-                body = "\n".join(_limit_line(line) for line in tail)
-                blocks.append(f"{name}:\n{body}")
-        dropped = max(0, len(failing) - max_drvs)
-        if dropped:
-            blocks.append(
-                f"… and {dropped} more failed derivation{'s' * (dropped > 1)}"
-            )
-        return "\n\n".join(blocks)
+            return None
+        drvs = [
+            DrvFailure(name, tail)
+            for name, lines in failing[-max_drvs:]
+            if (tail := _clean_tail(lines, max_lines))
+        ]
+        return BuildFailure(drvs=drvs, total=len(failing))
+
+    def failure_excerpt(self, max_lines: int = 8, max_drvs: int = 3) -> str:
+        failure = self.build_failure(max_lines, max_drvs)
+        return failure.as_text() if failure else ""
 
     def finalize(self) -> bytes:
         return self._w.finalize()

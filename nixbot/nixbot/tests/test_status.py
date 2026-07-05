@@ -16,7 +16,12 @@ if TYPE_CHECKING:
 import httpx
 import pytest
 
-from nixbot.build_scheduler import AttributeResult, AttributeStatus
+from nixbot.build_scheduler import (
+    AttributeResult,
+    AttributeStatus,
+    BuildFailure,
+    DrvFailure,
+)
 from nixbot.db_gen.models import Build as BuildRecord
 from nixbot.events import BuildResult, ChangeEvent, EvalReport, RepoInfo
 from nixbot.forge import GitlabClient
@@ -118,13 +123,17 @@ BUILD = BuildRecord(
 
 
 def attr_result(
-    attr: str, status: AttributeStatus, error: str | None = None
+    attr: str,
+    status: AttributeStatus,
+    error: str | None = None,
+    failure: BuildFailure | None = None,
 ) -> AttributeResult:
     return AttributeResult(
         attr=attr,
         status=status,
         job=NixEvalJobError(error=error or "", attr=attr, attr_path=[attr]),
         error=error,
+        failure=failure,
     )
 
 
@@ -415,6 +424,23 @@ async def test_failure_description_is_headline_not_full_excerpt() -> None:
     # The full excerpt still ships as fenced check-run text.
     idx = poster.posts.index(post)
     assert "pkg> configuring" in poster.extras[idx]["text"]
+
+
+async def test_failure_description_from_structured_failure() -> None:
+    reporter, poster, _ = make_reporter()
+    failure = BuildFailure(
+        drvs=[DrvFailure("pkg", ["configuring", "error: build failed: reason here"])],
+        total=1,
+    )
+    results = [
+        attr_result("pkg", AttributeStatus.failed, error="ignored", failure=failure)
+    ]
+
+    await reporter.build_finished(EVENT, BUILD, BuildResult("failed", 1, results))
+    post = next(p for p in poster.posts if p.context.startswith("nixbot/nix-build "))
+    # Headline comes from the last line of the last failed derivation,
+    # derived from structure, not re-parsed from the error string.
+    assert post.description == "error: build failed: reason here"
 
 
 async def test_success_flip_on_rebuild() -> None:

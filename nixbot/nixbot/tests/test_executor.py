@@ -703,6 +703,27 @@ def test_structured_failure_excerpt_skips_phase_markers() -> None:
     assert excerpt.splitlines()[-1] == "boom"
 
 
+def test_build_failure_returns_structured_drvs() -> None:
+    cap = StructuredCapture(clock=lambda: 1.0)
+    cap.start_build(1, "/nix/store/aaa-pkg.drv")
+    cap.log_line(1, "Running phase: buildPhase")
+    cap.log_line(1, "boom")
+    cap.set_status("/nix/store/aaa-pkg.drv", "failed")
+    failure = cap.build_failure()
+    assert failure is not None
+    assert failure.total == 1
+    assert failure.drvs[0].tail == ["boom"]
+    assert failure.headline() == "boom"
+
+
+def test_build_failure_none_when_all_built() -> None:
+    cap = StructuredCapture(clock=lambda: 1.0)
+    cap.start_build(1, "/nix/store/aaa-pkg.drv")
+    cap.log_line(1, "ok")
+    cap.set_status("/nix/store/aaa-pkg.drv", "built")
+    assert cap.build_failure() is None
+
+
 def test_structured_failure_excerpt_none_when_all_built() -> None:
     cap = StructuredCapture(clock=lambda: 1.0)
     cap.start_build(1, "/nix/store/aaa-qtbase-5.0.drv")

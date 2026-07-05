@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
     from datetime import datetime
 
+from .ansi import strip_ansi
 from .models import (
     CacheStatus,
     NixEvalJob,
@@ -41,6 +42,33 @@ from .models import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class DrvFailure:
+    name: str
+    tail: list[str]
+
+
+@dataclass
+class BuildFailure:
+    drvs: list[DrvFailure]
+    total: int  # includes drvs beyond the cap, for the "… N more" footer
+
+    def as_text(self) -> str:
+        blocks = [f"{d.name}:\n" + "\n".join(d.tail) for d in self.drvs]
+        extra = self.total - len(self.drvs)
+        if extra > 0:
+            blocks.append(f"… and {extra} more failed derivation{'s' * (extra > 1)}")
+        return "\n\n".join(blocks)
+
+    def headline(self, limit: int = 200) -> str:
+        for drv in reversed(self.drvs):
+            for line in reversed(drv.tail):
+                stripped = strip_ansi(line).strip()
+                if stripped:
+                    return stripped[:limit]
+        return ""
 
 
 class BuildOutcome(StrEnum):
@@ -104,6 +132,8 @@ class AttributeResult:
     status: AttributeStatus
     job: NixEvalJob
     error: str | None = None
+    # Structured, in-memory only; None for container-less failures.
+    failure: BuildFailure | None = None
     # Attr of the dependency whose failure propagated here.
     dependency_attr: str | None = None
     # Link to the first failing build for cached failures.
