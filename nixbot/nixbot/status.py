@@ -28,6 +28,7 @@ Target URLs point at the service's own URL scheme
 from __future__ import annotations
 
 import logging
+import re
 from collections import OrderedDict
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -682,7 +683,7 @@ class ForgeStatusReporter:
                         continue
                     reported += 1
                 await self.failed_statuses.mark_failed(revision, context)
-                description = result.error or result.status.value
+                description = _error_headline(result.error or "") or result.status.value
                 await self._post(
                     event,
                     build,
@@ -749,6 +750,21 @@ class ForgeStatusReporter:
 
 def _fence(text: str) -> str:
     return f"```\n{strip_ansi(text)}\n```"
+
+
+_DRV_PREFIX = re.compile(r"^[^\s>]+> +")
+# Mirrors executor.StructuredCapture.failure_excerpt's overflow line.
+_MORE_FAILURES = re.compile(r"^… and \d+ more failed derivation")
+
+
+def _error_headline(excerpt: str, limit: int = 200) -> str:
+    """The excerpt's last real error line, for a status blurb / check
+    summary; skips the multi-failure count."""
+    for raw in reversed(excerpt.splitlines()):
+        line = _DRV_PREFIX.sub("", strip_ansi(raw).strip())
+        if line and not _MORE_FAILURES.match(line):
+            return line[:limit]
+    return ""
 
 
 _STATUS_ICONS = {

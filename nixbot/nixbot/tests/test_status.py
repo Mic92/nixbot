@@ -402,6 +402,21 @@ async def test_per_attribute_failure_statuses_capped() -> None:
     assert "4 of 4" in combined.description
 
 
+async def test_failure_description_is_headline_not_full_excerpt() -> None:
+    reporter, poster, _ = make_reporter()
+    excerpt = "pkg> configuring\npkg> Error: build failed: reason here"
+    results = [attr_result("pkg", AttributeStatus.failed, error=excerpt)]
+
+    await reporter.build_finished(EVENT, BUILD, BuildResult("failed", 1, results))
+    post = next(p for p in poster.posts if p.context.startswith("nixbot/nix-build "))
+    # The blurb is the salient last line only, drv prefix stripped, so a
+    # length-capped commit status shows the failure, not the leading noise.
+    assert post.description == "Error: build failed: reason here"
+    # The full excerpt still ships as fenced check-run text.
+    idx = poster.posts.index(post)
+    assert "pkg> configuring" in poster.extras[idx]["text"]
+
+
 async def test_success_flip_on_rebuild() -> None:
     reporter, poster, store = make_reporter()
     context = attr_status_context("github", "acme/widget", "flaky")
