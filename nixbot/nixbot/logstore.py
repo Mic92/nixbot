@@ -217,6 +217,22 @@ class LogContainerReader:
         raw = self._frame(e["off"], e["clen"])
         return raw[e["bs"] : e["bs"] + e["bn"]].decode().splitlines()
 
+    def lines_with_phases(self, i: int) -> list[str]:
+        """Lines with `ph` markers reinjected, for readers without a phase bar."""
+        lines = self.lines(i)
+        ph = self.toc[i].get("ph") or []
+        if not ph:
+            return lines
+        at: dict[int, list[str]] = {}
+        for name, line in ph:
+            at.setdefault(line, []).append(name)
+        out: list[str] = []
+        for n in range(len(lines) + 1):
+            out.extend(f"Running phase: {name}" for name in at.get(n, []))
+            if n < len(lines):
+                out.append(lines[n])
+        return out
+
     def search(self, query: str, per_drv_cap: int = 100) -> list[dict]:
         """Case-insensitive scan, grouped by drv. Fast-rejects frames
         lacking the term; attributes matches by byte bisect. No index."""

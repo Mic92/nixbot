@@ -703,6 +703,30 @@ def test_structured_failure_excerpt_skips_phase_markers() -> None:
     assert excerpt.splitlines()[-1] == "boom"
 
 
+def test_phase_echo_suppressed_and_marker_is_zero_based() -> None:
+    cap = StructuredCapture(clock=lambda: 1.0)
+    q = cap.subscribe()
+    cap.start_build(1, "/nix/store/aaa-pkg.drv")
+    # stdenv order: echo line, then the structured phase event.
+    cap.log_line(1, "Running phase: buildPhase")
+    cap.phase(1, "buildPhase")
+    cap.log_line(1, "boom")
+    cap.close()
+
+    reader = LogContainerReader(cap.finalize())
+    # idx 0 is the setup bucket; the build is idx 1. The echo is not
+    # stored; the marker points at the first real line (0-based).
+    assert reader.lines(1) == ["boom"]
+    assert reader.entry(1)["ph"] == [["buildPhase", 0]]
+
+    deltas = []
+    while not q.empty():
+        deltas.append(q.get_nowait())
+    assert {"t": "phase", "idx": 1, "phase": "buildPhase", "line": 0} in deltas
+    # No line delta was emitted for the suppressed echo.
+    assert not any(d and d.get("text", "").startswith("Running phase") for d in deltas)
+
+
 def test_build_failure_returns_structured_drvs() -> None:
     cap = StructuredCapture(clock=lambda: 1.0)
     cap.start_build(1, "/nix/store/aaa-pkg.drv")

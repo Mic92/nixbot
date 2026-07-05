@@ -78,6 +78,23 @@ def test_phase_indices() -> None:
     assert r.entry(0)["ph"] == [["unpack", 0], ["build", 1], ["install", 3]]
 
 
+def test_lines_with_phases_reinjects_markers() -> None:
+    w = LogContainerWriter()
+    w.phase("pkg", "buildPhase")
+    w.line("pkg", "compiling")
+    w.phase("pkg", "installPhase")
+    w.line("pkg", "installing")
+    r = LogContainerReader(w.finalize())
+    # Markers reconstructed from `ph`; plain lines() stays unchanged.
+    assert r.lines(0) == ["compiling", "installing"]
+    assert r.lines_with_phases(0) == [
+        "Running phase: buildPhase",
+        "compiling",
+        "Running phase: installPhase",
+        "installing",
+    ]
+
+
 def test_phase_dedup() -> None:
     w = LogContainerWriter()
     w.phase("p", "build")

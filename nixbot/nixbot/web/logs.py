@@ -645,7 +645,7 @@ class _LogRoutes:
         reader = await _load_container(path)
         if reader is None or not (0 <= idx < len(reader)):
             raise HTTPException(status_code=404)
-        lines = await asyncio.to_thread(reader.lines, idx)
+        lines = await asyncio.to_thread(reader.lines_with_phases, idx)
         return PlainTextResponse(strip_ansi("\n".join(lines)))
 
     async def build_search(  # noqa: PLR0913

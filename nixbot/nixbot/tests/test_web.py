@@ -767,7 +767,8 @@ def test_structured_log_endpoints(client: WebHarness, tmp_path: Path) -> None:
 
     # Per-derivation raw: plain text, ANSI stripped.
     raw = client.get(f"{base}/logs/{attr}/drv/0/raw").text
-    assert raw == "CC main.o\nerror: boom undeclared"
+    # Phase markers reconstructed from `ph` so raw readers keep context.
+    assert raw == "Running phase: build\nCC main.o\nerror: boom undeclared"
     assert "\x1b" not in raw
     # A zero-line derivation still has a valid (empty) raw endpoint.
     assert client.get(f"{base}/logs/{attr}/drv/1/raw").text == ""

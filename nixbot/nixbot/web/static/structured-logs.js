@@ -58,9 +58,9 @@
       if (!bar || !phases.length) return;
       const top = Math.round(vp.scrollTop / ROW_H);
       let cur = -1;
-      // first_line is 1-based, top 0-based: first phase shows at top=0.
+      // first_line and top are 0-based: first phase shows at top=0.
       for (const [, start] of phases) {
-        if (start - 1 <= top) cur++;
+        if (start <= top) cur++;
         else break;
       }
       bar.hidden = cur < 0;

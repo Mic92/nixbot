@@ -402,16 +402,11 @@ def build_nix_command(
 
 # nix names failures only in prose: "build of" (remote) / "builder for" (local).
 _BUILD_FAILED = re.compile(r"(?:build of|builder for) '([^']+\.drv)'.*?failed")
-_PHASE_MARKER = re.compile(r"Running phase: ")
+_PHASE_ECHO = "Running phase: "
 
 
 def _clean_tail(lines: list[str], max_lines: int) -> list[str]:
-    # Phase markers are stdenv chrome already shown in the phase bar.
-    kept = [
-        _limit_line(line)
-        for line in lines
-        if line.strip() and not _PHASE_MARKER.match(strip_ansi(line))
-    ]
+    kept = [_limit_line(line) for line in lines if line.strip()]
     return kept[-max_lines:]
 
 
@@ -583,6 +578,9 @@ class StructuredCapture:
 
     def log_line(self, act_id: int, text: str) -> None:
         drv = self._act.get(act_id, self.SETUP)
+        if strip_ansi(text).startswith(_PHASE_ECHO):
+            # RES_SET_PHASE already records this; drop stdenv's echo.
+            return
         self._w.line(drv, text, ts=self._ts())
         self._emit(
             {
