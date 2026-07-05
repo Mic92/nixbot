@@ -31,6 +31,9 @@ logger = logging.getLogger(__name__)
 CHANNEL = "build_events"
 KEEPALIVE_SECONDS = 30.0
 RECONNECT_SECONDS = 5.0
+# A burst of status changes is one "refetch" cue to a subscriber; emit
+# at most one SSE write per this interval.
+COALESCE_SECONDS = 0.25
 # Long-lived streams must not keep a revoked viewer's visibility
 # snapshot forever; re-resolve it periodically.
 VISIBILITY_REFRESH_SECONDS = 300.0
@@ -161,7 +164,11 @@ async def event_stream(
             if payload is None:
                 yield ": keepalive\n\n"
                 continue
+            # Drop the rest of the burst; one refetch covers them all.
+            while not sub.queue.empty():
+                sub.queue.get_nowait()
             yield f"data: {payload}\n\n"
+            await asyncio.sleep(COALESCE_SECONDS)
     finally:
         broker.unsubscribe(sub)
 

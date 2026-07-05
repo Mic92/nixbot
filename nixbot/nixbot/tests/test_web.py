@@ -1359,6 +1359,32 @@ def test_event_broker_pushes_status_changes(
     assert build_event["status"] == "failed"
 
 
+def test_events_stream_coalesces_burst(client: WebHarness) -> None:
+    """A burst of status changes collapses to one SSE refetch signal."""
+    ctx = client.ctx
+    broker = client.app.state.event_broker
+    request = Request({"type": "http", "headers": [], "query_string": b""})
+
+    async def run() -> None:
+        sub = broker.subscribe(build_id=7, visible=None)
+        gen = events_module.event_stream(ctx, request, broker, sub)
+        assert (await anext(gen)).startswith("retry:")
+        for _ in range(5):
+            broker._on_notify(  # noqa: SLF001
+                None,
+                None,
+                None,
+                json.dumps({"build_id": 7, "project_id": 1, "status": "building"}),
+            )
+        async with asyncio.timeout(5):
+            line = await anext(gen)
+        assert line.startswith("data:")
+        assert sub.queue.empty()  # the rest of the burst was dropped
+        await gen.aclose()
+
+    client.loop.run_until_complete(run())
+
+
 def test_events_stream_refreshes_visibility(
     client: WebHarness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
