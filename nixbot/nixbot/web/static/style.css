@@ -898,8 +898,13 @@ details.webhook-setup summary {
 	padding: 0.15rem 0.5rem;
 }
 
-/* Structured log viewer: per-derivation cards, phase bar, lazy log.
-   Disclosure is native <details>; only the summary chrome is styled. */
+/* ======================================================================
+   Structured log viewer (log.html + _macros.html drv_card).
+   Native <details> disclosure; only the summary chrome is styled.
+   Sections below: Cards, Log body, Phase bar, Search, Succeeded panel.
+   ====================================================================== */
+
+/* Cards: the per-derivation card and the Succeeded panel share chrome. */
 .log-card,
 .succeeded-panel {
 	background: var(--card);
@@ -969,7 +974,8 @@ details.webhook-setup summary {
 .raw:hover {
 	text-decoration: underline;
 }
-/* Grow to fit, cap then scroll; smaller cap on phones. */
+/* Log body: the scrolling line list htmx fetches into .log-lines.
+   Grow to fit, cap then scroll; smaller cap on phones. */
 .log-lines {
 	max-height: 21rem;
 	overflow: auto;
@@ -1020,6 +1026,7 @@ details.webhook-setup summary {
 	border-block: 1px dashed var(--border);
 	text-align: center;
 }
+/* Phase bar: current-phase label + prev/next jump (structured-logs.js). */
 .phasebar {
 	display: flex;
 	align-items: center;
@@ -1075,6 +1082,7 @@ details.webhook-setup summary {
 		align-items: center;
 	}
 }
+/* Search: the query box and its server-rendered results (_search_results.html). */
 .log-search {
 	margin: 0 0 1rem;
 }
@@ -1136,6 +1144,7 @@ details.webhook-setup summary {
 	width: 5ch;
 	text-align: right;
 }
+/* Succeeded panel: collapsed list of built derivations (log.html). */
 #succeeded-list {
 	border-top: 1px solid var(--border);
 	padding: 0.4rem 0.6rem;
