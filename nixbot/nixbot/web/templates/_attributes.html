@@ -1,3 +1,4 @@
+{% from "_macros.html" import status_icon %}
 {% if group_counts.values() | sum == 0 %}
   <p class="muted">{{ "no matches" if q else "no attributes (yet)" }}</p>
 {% endif %}
@@ -12,7 +13,9 @@
              id="attrs-{{ group }}"
              data-group="{{ group }}"
              {% if eager %}open{% endif %}>
-      <summary>{{ count }} {{ "already built" if group == "skipped" else group }}</summary>
+      <summary>
+        {{ status_icon("skipped_local" if group == "skipped" else group, labelled=false) }}<span>{{ count }} {{ "already built" if group == "skipped" else group }}</span>
+      </summary>
       <div class="attr-scroll">
         <table class="attrs">
           <caption class="visually-hidden">{{ group }} attributes</caption>

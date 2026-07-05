@@ -399,9 +399,10 @@ details summary {
 details.attr-group {
 	margin: 0.75rem 0;
 }
-details.attr-group summary {
-	color: var(--muted);
+/* Chrome shared with the log viewer's summary selectors above. */
+.attr-group > summary {
 	font-size: 0.85rem;
+	color: var(--muted);
 }
 details.error summary {
 	color: var(--bad);
@@ -907,7 +908,8 @@ details.webhook-setup summary {
    Sections below: Cards, Log body, Phase bar, Search, Succeeded panel.
    ====================================================================== */
 
-/* Cards: the per-derivation card and the Succeeded panel share chrome. */
+/* Cards: the per-derivation card and the Succeeded panel share chrome;
+   the summary chrome below is reused by the build-page attribute groups. */
 .log-card,
 .succeeded-panel {
 	background: var(--card);
@@ -924,7 +926,8 @@ details.webhook-setup summary {
 	border-left-color: var(--ok);
 }
 .log-card > summary,
-.succeeded-panel > summary {
+.succeeded-panel > summary,
+.attr-group > summary {
 	display: flex;
 	align-items: center;
 	gap: 0.6rem;
@@ -933,11 +936,13 @@ details.webhook-setup summary {
 	list-style: none;
 }
 .log-card > summary::-webkit-details-marker,
-.succeeded-panel > summary::-webkit-details-marker {
+.succeeded-panel > summary::-webkit-details-marker,
+.attr-group > summary::-webkit-details-marker {
 	display: none;
 }
 .log-card > summary:hover,
-.succeeded-panel > summary:hover {
+.succeeded-panel > summary:hover,
+.attr-group > summary:hover {
 	background: var(--hover);
 }
 .card-text {
