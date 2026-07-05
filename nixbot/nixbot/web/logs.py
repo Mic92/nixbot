@@ -212,16 +212,39 @@ def render_log_lines(text: str) -> str:
     return "".join(lines)
 
 
+def phase_sep(name: str) -> str:
+    """Inline phase divider; CSS pins it as the current-phase header."""
+    safe = html.escape(name)
+    return (
+        f'<div class="phase-sep" data-phase="{safe}">'
+        f'<span class="phase-name">{safe}</span>'
+        '<span class="phase-nav">'
+        '<button type="button" class="phase-prev" aria-label="Previous phase">↑</button>'
+        '<button type="button" class="phase-next" aria-label="Next phase">↓</button>'
+        "</span></div>"
+    )
+
+
+def _phase_at(ph: list) -> dict[int, str]:
+    """0-based line -> phase name; empty phases collapse into the next."""
+    return {line: name for name, line in ph}
+
+
 def render_rows(
-    idx: int, start: int, lines: Iterable[str], style: _Style = _RESET
+    idx: int,
+    start: int,
+    lines: Iterable[str],
+    style: _Style = _RESET,
+    phases: dict[int, str] | None = None,
 ) -> tuple[str, _Style]:
-    """Anchored `d{idx}-L{n}` rows for a derivation, numbered from
-    ``start``. Returns the trailing SGR style so a live stream can carry
-    it into the next batch. Ids are prefixed with the derivation index so
-    anchors stay unique when many derivations share the page."""
+    """Anchored `d{idx}-L{n}` rows numbered from ``start``, with phase
+    dividers spliced in at their first line. Returns the trailing SGR
+    style so a live stream carries color into the next batch."""
     out = []
     n = start
     for line in lines:
+        if phases and (n - 1) in phases:
+            out.append(phase_sep(phases[n - 1]))
         rendered, style = _ansi_convert(line, style)
         out.append(
             f'<span class="logline" id="d{idx}-L{n}">'
@@ -265,17 +288,18 @@ def render_drv_window(
     gap; a range request renders lines [start, end) plus another marker
     if more of the gap remains before the tail."""
     lines = reader.lines(idx)
+    ph = _phase_at(reader.entry(idx)["ph"])
     n = len(lines)
     gap_end = n - _RENDER_TAIL  # tail starts here; never render past it
     if start is None:
         if n <= _RENDER_CAP:
-            return render_rows(idx, 1, lines)[0]
-        head = render_rows(idx, 1, lines[:_RENDER_HEAD])[0]
-        tail = render_rows(idx, gap_end + 1, lines[gap_end:])[0]
+            return render_rows(idx, 1, lines, phases=ph)[0]
+        head = render_rows(idx, 1, lines[:_RENDER_HEAD], phases=ph)[0]
+        tail = render_rows(idx, gap_end + 1, lines[gap_end:], phases=ph)[0]
         return head + _chunk_marker(idx, base, _RENDER_HEAD, gap_end) + tail
     start = max(0, start)
     end = min(end if end is not None else start + _RENDER_CHUNK, gap_end)
-    rows = render_rows(idx, start + 1, lines[start:end])[0]
+    rows = render_rows(idx, start + 1, lines[start:end], phases=ph)[0]
     if end < gap_end:
         rows += _chunk_marker(idx, base, end, gap_end)
     return rows
@@ -879,7 +903,9 @@ async def _structured_events(
     state = capture.state()  # atomic with subscribe: no await between
     styles: dict[int, _Style] = {}
     for e in state:
-        html_rows, styles[e["idx"]] = render_rows(e["idx"], 1, e.pop("lines"))
+        html_rows, styles[e["idx"]] = render_rows(
+            e["idx"], 1, e.pop("lines"), phases=_phase_at(e["ph"])
+        )
         e["html"] = html_rows
         e["card"] = card(e)
     yield f"event: state\ndata: {json.dumps(state, separators=(',', ':'))}\n\n"
@@ -902,6 +928,8 @@ async def _structured_events(
                 delta["html"], styles[idx] = render_rows(
                     idx, delta["from"], [delta.pop("text")], styles.get(idx, _RESET)
                 )
+            elif delta["t"] == "phase":
+                delta["html"] = phase_sep(delta["phase"])
             yield f"event: delta\ndata: {json.dumps(delta, separators=(',', ':'))}\n\n"
     finally:
         capture.unsubscribe(queue)

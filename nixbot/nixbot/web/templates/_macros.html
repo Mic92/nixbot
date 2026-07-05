@@ -60,13 +60,6 @@
               aria-label="copy {{ label }}">copy</button>
     {%- endmacro %}
     {# Phase-bar widget; scroll position drives it client-side. #}
-    {% macro phasebar() -%}
-      <div class="phasebar" hidden>
-        <span class="phase-label"></span>
-        <button type="button" class="phase-prev" aria-label="Previous phase">↑ prev</button>
-        <button type="button" class="phase-next" aria-label="Next phase">↓ next</button>
-      </div>
-    {%- endmacro %}
     {# Structured log card, shared by the finished page and the live SSE.
        On the finished page htmx fetches the rows into .log-lines on first
        open (or immediately for the open card); live cards omit htmx and
@@ -81,7 +74,6 @@
                data-pos="{{ d.idx }}"
                data-idx="{{ d.idx }}"
                data-n="{{ d.n }}"
-               data-ph='{{ d.ph | tojson }}'
                {% if open %}open{% endif %}
                {% if fetch %} hx-get="{{ base }}/drv/{{ d.idx }}" hx-trigger="{{ 'load' if open else 'toggle once' }}" hx-target="find .log-lines" hx-swap="innerHTML" {% endif %}>
         <summary>
@@ -101,7 +93,6 @@
           {% if d.n == 0 and d.status != "running" %}
             <p class="log-empty">no output</p>
           {% else %}
-            {{ phasebar() }}
             <div class="log-lines" aria-busy="true"></div>
           {% endif %}
         </div>

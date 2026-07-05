@@ -1,16 +1,14 @@
 // @ts-check
 // Structured per-derivation log viewer. Cards are server-rendered; htmx
-// fetches each card's rows (/drv/{idx}) lazily on first open. Rows are
-// fixed 20px + content-visibility, so the whole log stays in the DOM
-// (native Ctrl-F, anchors, selection, a11y) with off-screen layout skipped;
-// the phase bar maps scrollTop -> line via ROW_H. Disclosure is native
-// <details>, like the attr-group / error / menu widgets elsewhere.
+// fetches each card's rows (/drv/{idx}) lazily on first open. Phase
+// dividers are inline sticky elements the server splices in (see
+// phase_sep in logs.py); CSS pins them, so there is no scroll math here.
+// Disclosure is native <details>, like the attr-group / error widgets.
 "use strict";
 
 /**
- * @typedef {{idx:number,name:string,status:string,ph:[string,number][],n:number,t0?:number|null,t1?:number|null,html?:string,card?:string}} Drv
- * @typedef {{t:string,idx:number,name?:string,status?:string,phase?:string,line?:number,from?:number,html?:string,card?:string}} Delta
- * @typedef {{scrollToLine:(n:number)=>void,refresh:()=>void}} LogHandle
+ * @typedef {{idx:number,name:string,status:string,n:number,t0?:number|null,t1?:number|null,html?:string,card?:string}} Drv
+ * @typedef {{t:string,idx:number,name?:string,status?:string,from?:number,html?:string,card?:string}} Delta
  */
 
 (() => {
@@ -22,16 +20,8 @@
     if (!el) throw new Error(`missing #${id}`);
     return el;
   };
-  /** @param {string} s @returns {string} */
-  const esc = (s) =>
-    s.replace(
-      /[&<>]/g,
-      (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c] ?? c),
-    );
-
   const list = must("drv-list");
   const STREAM = list.dataset.stream; // set only while the build runs
-  const ROW_H = 20; // must match .log-lines .logline height in style.css
 
   /** @param {ParentNode} el @param {string} sel @returns {HTMLElement} */
   const pick = (el, sel) => {
@@ -40,76 +30,51 @@
     return /** @type {HTMLElement} */ (found);
   };
 
-  // ph is [[name, first_line], ...]; wire the bar to the rendered rows
-  // in vp. Returns a handle so search can scroll to a line.
-  /**
-   * @param {HTMLElement} vp
-   * @param {[string,number][]} phases
-   * @param {HTMLElement|null} bar
-   * @returns {LogHandle}
-   */
-  function wireLog(vp, phases, bar) {
-    /** @param {number} n */
-    const scrollToLine = (n) => {
-      vp.scrollTop = Math.max(0, (n - 1) * ROW_H - vp.clientHeight / 2);
-      update();
-    };
-    function update() {
-      if (!bar || !phases.length) return;
-      const top = Math.round(vp.scrollTop / ROW_H);
-      let cur = -1;
-      // first_line and top are 0-based: first phase shows at top=0.
-      for (const [, start] of phases) {
-        if (start <= top) cur++;
-        else break;
-      }
-      bar.hidden = cur < 0;
-      if (cur < 0) return;
-      pick(bar, ".phase-label").innerHTML = `${esc(phases[cur][0])} ` +
-        `<span class="phase-pos">(${cur + 1}/${phases.length})</span>`;
-      /** @type {HTMLButtonElement} */ (pick(bar, ".phase-prev")).disabled =
-        cur <= 0;
-      /** @type {HTMLButtonElement} */ (pick(bar, ".phase-next")).disabled =
-        cur >= phases.length - 1;
+  // Phase nav: prev/next scroll to the sibling divider. The clicked
+  // button lives in the sticky (current) divider, so no state to track.
+  list.addEventListener("click", (e) => {
+    const btn = /** @type {HTMLElement} */ (e.target).closest(
+      ".phase-prev, .phase-next",
+    );
+    if (!btn) return;
+    const sep = btn.closest(".phase-sep");
+    const vp = /** @type {HTMLElement|null} */ (btn.closest(".log-lines"));
+    if (!sep || !vp) return;
+    const seps = [...vp.querySelectorAll(".phase-sep")];
+    const next = btn.matches(".phase-next");
+    const to = seps[seps.indexOf(sep) + (next ? 1 : -1)];
+    // Target the phase's first line, not the divider: dividers are sticky
+    // (always pinned at top), so nothing scrolls to them. Past the last /
+    // before the first phase, fall through to the log's bottom / top.
+    const row = to?.nextElementSibling;
+    if (row) {
+      vp.scrollTop += row.getBoundingClientRect().top -
+        vp.getBoundingClientRect().top;
+    } else {
+      vp.scrollTop = next ? vp.scrollHeight : 0;
     }
-    if (bar && phases.length) {
-      /** @param {number} dir */
-      const jump = (dir) => {
-        const top = Math.round(vp.scrollTop / ROW_H);
-        const t = dir > 0
-          ? phases.find((p) => p[1] > top)
-          : phases.filter((p) => p[1] < top).pop();
-        if (t) scrollToLine(t[1] + 1);
-      };
-      vp.addEventListener("scroll", update);
-      pick(bar, ".phase-prev").addEventListener("click", () => jump(-1));
-      pick(bar, ".phase-next").addEventListener("click", () => jump(1));
-      update();
-    }
-    return { scrollToLine, refresh: update };
-  }
+  });
 
   if (STREAM) return runLive();
 
-  // htmx fetches each card's rows into .log-lines (on open, or on load for
-  // the first failure); here we wire the phase bar to the swapped-in rows.
-  /** @type {WeakMap<HTMLElement, LogHandle>} */
-  const drawn = new WeakMap();
+  // Track cards whose rows are loaded so a jump fires now or waits.
+  /** @type {WeakSet<HTMLElement>} */
+  const loaded = new WeakSet();
   const succeeded =
     /** @type {HTMLDetailsElement|null} */ ($("succeeded-panel"));
   /** @type {{card:HTMLElement, idx:number, line:number|null}|null} */
   let pending = null;
 
-  /** @param {HTMLElement} card @param {LogHandle} handle
-   * @param {number} idx @param {number|null} line */
-  function jump(card, handle, idx, line) {
+  /** @param {HTMLElement} card @param {number} idx @param {number|null} line */
+  function jump(card, idx, line) {
     card.scrollIntoView({ block: "nearest" });
     document
       .querySelectorAll(".log-lines .logline.hit")
       .forEach((x) => x.classList.remove("hit"));
     if (line == null) return;
-    document.getElementById(`d${idx}-L${line}`)?.classList.add("hit");
-    handle.scrollToLine(line);
+    const el = document.getElementById(`d${idx}-L${line}`);
+    el?.classList.add("hit");
+    el?.scrollIntoView({ block: "center" });
   }
 
   document.body.addEventListener("htmx:afterSwap", (e) => {
@@ -118,16 +83,12 @@
     vp.removeAttribute("aria-busy");
     const card = /** @type {HTMLElement|null} */ (vp.closest(".log-card"));
     if (!card) return;
-    // A capped (head+tail) log has a gap, so scrollTop->line math and its
-    // phase bar would be wrong; drop the phases for those.
-    const ph = /** @type {[string,number][]} */ (
-      vp.querySelector(".log-elided") ? [] : JSON.parse(card.dataset.ph || "[]")
-    );
-    const handle = wireLog(vp, ph, card.querySelector(".phasebar"));
-    drawn.set(card, handle);
+    loaded.add(card);
     if (pending && pending.card === card) {
-      jump(card, handle, pending.idx, pending.line);
+      jump(card, pending.idx, pending.line);
       pending = null;
+    } else if (!card.classList.contains("ok")) {
+      vp.scrollTop = vp.scrollHeight; // a failure's error is at the end
     }
   });
 
@@ -140,8 +101,7 @@
     if (!card) return;
     if (succeeded && succeeded.contains(card)) succeeded.open = true;
     card.open = true; // triggers the htmx fetch if not yet loaded
-    const handle = drawn.get(card);
-    if (handle) jump(card, handle, idx, line);
+    if (loaded.has(card)) jump(card, idx, line);
     else pending = { card, idx, line }; // afterSwap completes the jump
   }
 
@@ -180,14 +140,12 @@
     const byIdx = new Map();
     /** @type {Map<number, HTMLDetailsElement>} */
     const cardOf = new Map();
-    /** @type {Map<number, LogHandle>} */
-    const handleOf = new Map();
     /** @param {string} s */
     const iconState = (s) =>
       s === "failed" ? "failed" : s === "running" ? "running" : "succeeded";
 
     /** Insert the server-rendered card shell (same drv_card macro as the
-     * finished page) and wire its phase bar.
+     * finished page).
      * @param {Drv} d @returns {HTMLDetailsElement} */
     function ensureCard(d) {
       const existing = cardOf.get(d.idx);
@@ -195,10 +153,6 @@
       list.insertAdjacentHTML("beforeend", d.card ?? "");
       const el = /** @type {HTMLDetailsElement} */ (list.lastElementChild);
       cardOf.set(d.idx, el);
-      handleOf.set(
-        d.idx,
-        wireLog(pick(el, ".log-lines"), d.ph, el.querySelector(".phasebar")),
-      );
       return el;
     }
 
@@ -236,7 +190,6 @@
           idx: delta.idx,
           name: delta.name ?? "",
           status: "running",
-          /** @type {[string,number][]} */ ph: [],
           n: 0,
           card: delta.card,
         };
@@ -245,10 +198,11 @@
       } else if (delta.t === "line") {
         addLines(delta.idx, delta.from ?? 1, delta.html ?? "");
       } else if (delta.t === "phase" && d) {
-        if (!d.ph.length || d.ph[d.ph.length - 1][0] !== delta.phase) {
-          d.ph.push([delta.phase ?? "", delta.line ?? 0]);
-        }
-        handleOf.get(d.idx)?.refresh();
+        // The divider is a normal row appended before the phase's output.
+        pick(ensureCard(d), ".log-lines").insertAdjacentHTML(
+          "beforeend",
+          delta.html ?? "",
+        );
       } else if (delta.t === "status" && d) {
         d.status = delta.status ?? d.status;
         const el = setMeta(d);
@@ -262,13 +216,11 @@
       list.innerHTML = "";
       byIdx.clear();
       cardOf.clear();
-      handleOf.clear();
       for (const e of state) {
         const d = {
           idx: e.idx,
           name: e.name,
           status: e.status,
-          ph: e.ph || [],
           n: e.n,
           card: e.card,
         };

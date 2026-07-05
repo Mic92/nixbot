@@ -1040,54 +1040,48 @@ details.webhook-setup summary {
 	border-block: 1px dashed var(--border);
 	text-align: center;
 }
-/* Phase bar: current-phase label + prev/next jump (structured-logs.js). */
-.phasebar {
+/* Phase divider: inline separator the server splices in; sticky pins it
+   as the current-phase header. prev/next scroll siblings (see the JS). */
+.phase-sep {
+	position: sticky;
+	top: 0;
+	z-index: 1;
 	display: flex;
 	align-items: center;
-	gap: 0.4rem;
-	padding: 0.2rem 0.5rem 0.2rem 0.8rem;
+	gap: 0.5rem;
+	padding: 0.3rem 0.8rem;
 	background: var(--card);
 	border-top: 1px solid var(--border);
 	border-bottom: 1px solid var(--border);
-	font-size: 0.7rem;
-	color: var(--muted);
-}
-.phasebar[hidden] {
-	display: none;
-}
-.phase-label {
+	color: var(--accent);
+	font-size: 0.72rem;
 	font-weight: 600;
-	flex: 1;
+}
+.phase-name {
 	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
-.phase-pos {
-	font-weight: 400;
-	opacity: 0.7;
+.phase-nav {
+	margin-left: auto;
+	display: flex;
+	gap: 0.2rem;
 }
-.phasebar button {
+.phase-sep button {
 	all: unset;
 	cursor: pointer;
-	padding: 0.1rem 0.4rem;
+	padding: 0.1rem 0.5rem;
 	border-radius: 4px;
 	color: var(--muted);
 }
-.phasebar button:hover:not(:disabled) {
+.phase-sep button:hover {
 	background: var(--hover);
 	color: var(--fg);
 }
-.phasebar button:disabled {
-	opacity: 0.35;
-	cursor: default;
-}
 /* Touch: 44px tap targets (WCAG 2.5.5) without bloating desktop. */
 @media (pointer: coarse) {
-	.phasebar {
-		padding-block: 0;
-	}
-	.phasebar button {
+	.phase-sep button {
 		padding: 0 0.7rem;
 		min-height: 44px;
 		display: inline-flex;
