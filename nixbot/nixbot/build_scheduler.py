@@ -216,8 +216,12 @@ def get_failed_dependents(
 
 def compute_job_closures(
     jobs: list[NixEvalJobSuccess],
+    extra_drvs: frozenset[str] = frozenset(),
 ) -> dict[str, set[str]]:
-    job_set = {job.drv_path for job in jobs}
+    """Each job's in-flight dependencies, keyed by `jobs`. `extra_drvs`
+    (e.g. running builds) count as in-flight so a pending edge to one
+    survives, but get no entry of their own."""
+    job_set = {job.drv_path for job in jobs} | extra_drvs
     return {
         job.drv_path: (job_set & {*job.needed_builds, *job.needed_substitutes})
         - {job.drv_path}
@@ -517,8 +521,11 @@ class JobScheduler:
                     remaining.append(job)
             candidates = remaining
         state.pending = candidates
-        unfinished = state.pending + list(state.running.values())
-        state.job_closures = compute_job_closures(unfinished)
+        # Only pending jobs get closures; running builds (which can be in
+        # the thousands) merely stay in the intersection set. Keeps each
+        # batch O(pending), not O(pending + running).
+        running_drvs = frozenset(j.drv_path for j in state.running.values())
+        state.job_closures = compute_job_closures(state.pending, running_drvs)
         state.reverse_deps = compute_reverse_deps(state.job_closures)
         state.pending = sort_jobs_by_closures(state.pending, state.job_closures)
 
