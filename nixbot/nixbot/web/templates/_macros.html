@@ -97,11 +97,9 @@
             </span>
           </span>
         </summary>
-        <div class="log-card-body">
+        <div class="card-body">
           {% if d.n == 0 and d.status != "running" %}
-            <div class="excerpt">
-              <span class="meta">no output</span>
-            </div>
+            <p class="log-empty">no output</p>
           {% else %}
             {{ phasebar() }}
             <div class="log-lines" aria-busy="true"></div>

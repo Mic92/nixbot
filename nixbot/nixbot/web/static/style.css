@@ -952,11 +952,14 @@ details.webhook-setup summary {
 .succeeded-panel[open] > summary .browse-hint::after {
 	content: "collapse";
 }
-.log-card-body {
+.card-body {
 	border-top: 1px solid var(--border);
 }
-.excerpt {
+.log-empty {
+	margin: 0;
 	padding: 0.6rem 0.8rem;
+	color: var(--muted);
+	font-size: 0.8rem;
 }
 .raw {
 	color: var(--accent);
