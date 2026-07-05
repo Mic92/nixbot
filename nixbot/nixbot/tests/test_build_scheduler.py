@@ -59,6 +59,10 @@ async def test_topological_order() -> None:
     order = sort_jobs_by_closures([c, a, b], closures)
     assert [j.attr for j in order] == ["a", "b", "c"]
 
+    # A running build (b) is not keyed but keeps c's edge to it alive.
+    running = compute_job_closures([c], frozenset({b.drv_path}))
+    assert running == {c.drv_path: {b.drv_path}}
+
     executor = FakeExecutor()
     result = await run_scheduler(JobScheduler(executor, [SYSTEM]), [c, a, b])
     assert executor.built.index("a") < executor.built.index("b")

@@ -27,7 +27,7 @@ import graphlib
 import logging
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import TYPE_CHECKING, Protocol, cast
+from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -216,8 +216,12 @@ def get_failed_dependents(
 
 def compute_job_closures(
     jobs: list[NixEvalJobSuccess],
+    extra_drvs: frozenset[str] = frozenset(),
 ) -> dict[str, set[str]]:
-    job_set = {job.drv_path for job in jobs}
+    """Each job's in-flight dependencies, keyed by `jobs`. `extra_drvs`
+    (e.g. running builds) count as in-flight so a pending edge to one
+    survives, but get no entry of their own."""
+    job_set = {job.drv_path for job in jobs} | extra_drvs
     return {
         job.drv_path: (job_set & {*job.needed_builds, *job.needed_substitutes})
         - {job.drv_path}
@@ -285,6 +289,13 @@ class _State:
     result: ScheduleResult
     pending: list[NixEvalJobSuccess]
     job_closures: dict[str, set[str]]
+    # In-flight build tasks and the queue their done-callbacks feed.
+    running: dict[asyncio.Task[BuildOutcome], NixEvalJobSuccess] = field(
+        default_factory=dict
+    )
+    done_q: asyncio.Queue[asyncio.Task[BuildOutcome]] = field(
+        default_factory=asyncio.Queue
+    )
     # Static reverse edges from the initial closures: which jobs'
     # closures contain a given drv. Lets prune touch only actual
     # dependents instead of every closure (O(deps) vs O(jobs)).
@@ -365,11 +376,7 @@ class JobScheduler:
             # build nor block aggregation.
         return successful_jobs
 
-    async def _dispatch_ready(
-        self,
-        state: _State,
-        running: dict[asyncio.Task[BuildOutcome], NixEvalJobSuccess],
-    ) -> bool:
+    async def _dispatch_ready(self, state: _State) -> bool:
         """Start or skip all dependency-free jobs. Returns whether any
         job was ready. Loops until a fixpoint: skipping a job prunes it
         from the closures, which can free its dependents immediately."""
@@ -386,7 +393,8 @@ class JobScheduler:
                 action = await self._classify(job, state.result)
                 if action == "run":
                     task = asyncio.create_task(self.executor.build(job))
-                    running[task] = job
+                    state.running[task] = job
+                    task.add_done_callback(state.done_q.put_nowait)
                 else:
                     if action == "skip-failed":
                         # Cached failure counts as a failure: propagate to
@@ -427,7 +435,6 @@ class JobScheduler:
     async def _wait_for_progress(
         self,
         state: _State,
-        running: dict[asyncio.Task[BuildOutcome], NixEvalJobSuccess],
         queue: asyncio.Queue[list[NixEvalJob] | None],
         get_task: asyncio.Task[list[NixEvalJob] | None] | None,
         flush: Callable[[], Awaitable[None]],
@@ -436,24 +443,34 @@ class JobScheduler:
         finishes, then fold the outcome into the state. Returns the
         (possibly replaced) queue reader task; None after the
         end-of-input sentinel."""
-        waits: set[asyncio.Task[object]] = set(running)
+        waits: set[asyncio.Task[object]] = set()
         if get_task is not None:
             waits.add(get_task)
+        # One dequeue instead of a wait over every running task: O(1) per
+        # finished build, not O(N) re-armed after each completion.
+        done_get = asyncio.create_task(state.done_q.get()) if state.running else None
+        if done_get is not None:
+            waits.add(done_get)
+        if not waits:
+            return get_task
         done_tasks, _ = await asyncio.wait(waits, return_when=asyncio.FIRST_COMPLETED)
         if get_task is not None and get_task in done_tasks:
-            done_tasks.discard(get_task)
-            get_task = self._on_queue_item(state, running, queue, get_task.result())
-        for done in done_tasks:
-            # Only build tasks remain after the queue reader was discarded.
-            task = cast("asyncio.Task[BuildOutcome]", done)
-            await self._finish_job(state, running.pop(task), task.result())
-            await flush()
+            get_task = self._on_queue_item(state, queue, get_task.result())
+        if done_get is not None and done_get in done_tasks:
+            # Drain every build that finished, not just the first.
+            finished = [done_get.result()]
+            while not state.done_q.empty():
+                finished.append(state.done_q.get_nowait())
+            for task in finished:
+                await self._finish_job(state, state.running.pop(task), task.result())
+                await flush()
+        elif done_get is not None:
+            done_get.cancel()  # a batch arrived first; no build consumed
         return get_task
 
     def _on_queue_item(
         self,
         state: _State,
-        running: dict[asyncio.Task[BuildOutcome], NixEvalJobSuccess],
         queue: asyncio.Queue[list[NixEvalJob] | None],
         batch: list[NixEvalJob] | None,
     ) -> asyncio.Task[list[NixEvalJob] | None] | None:
@@ -461,13 +478,12 @@ class JobScheduler:
         on the end-of-input sentinel."""
         if batch is None:
             return None
-        self._ingest(state, running, batch)
+        self._ingest(state, batch)
         return asyncio.create_task(queue.get())
 
     def _ingest(
         self,
         state: _State,
-        running: dict[asyncio.Task[BuildOutcome], NixEvalJobSuccess],
         batch: list[NixEvalJob],
     ) -> None:
         """Merge a batch of eval results into the live scheduling state.
@@ -505,8 +521,11 @@ class JobScheduler:
                     remaining.append(job)
             candidates = remaining
         state.pending = candidates
-        unfinished = state.pending + list(running.values())
-        state.job_closures = compute_job_closures(unfinished)
+        # Only pending jobs get closures; running builds (which can be in
+        # the thousands) merely stay in the intersection set. Keeps each
+        # batch O(pending), not O(pending + running).
+        running_drvs = frozenset(j.drv_path for j in state.running.values())
+        state.job_closures = compute_job_closures(state.pending, running_drvs)
         state.reverse_deps = compute_reverse_deps(state.job_closures)
         state.pending = sort_jobs_by_closures(state.pending, state.job_closures)
 
@@ -524,34 +543,31 @@ class JobScheduler:
         sentinel marks the end of input."""
         result = ScheduleResult()
         state = _State(result=result, pending=[], job_closures={})
-        running: dict[asyncio.Task[BuildOutcome], NixEvalJobSuccess] = {}
         flush = _ResultEmitter(result, self.on_result).flush
         # get_task is None once the end-of-input sentinel arrived.
         get_task: asyncio.Task[list[NixEvalJob] | None] | None = asyncio.create_task(
             queue.get()
         )
         try:
-            while get_task is not None or state.pending or running:
-                any_ready = await self._dispatch_ready(state, running)
+            while get_task is not None or state.pending or state.running:
+                any_ready = await self._dispatch_ready(state)
                 await flush()
 
-                if not running and get_task is None:
+                if not state.running and get_task is None:
                     if state.pending and not any_ready:
                         _fail_unresolvable(state)
                     continue
 
-                get_task = await self._wait_for_progress(
-                    state, running, queue, get_task, flush
-                )
+                get_task = await self._wait_for_progress(state, queue, get_task, flush)
         finally:
             # On cancellation (eval failure, superseded build) stop the
             # in-flight executor tasks instead of orphaning them.
             if get_task is not None:
                 get_task.cancel()
-            for task in running:
+            for task in state.running:
                 task.cancel()
-            if running:
-                await asyncio.gather(*running, return_exceptions=True)
+            if state.running:
+                await asyncio.gather(*state.running, return_exceptions=True)
 
         await flush()
         return result
