@@ -28,20 +28,22 @@ import io
 import json
 import logging
 import re
+import time
 from collections import OrderedDict, deque
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
 import zstandard
 
 from .ansi import ANSI_TOKEN_RE, strip_ansi
-from .build_scheduler import BuildOutcome
+from .build_scheduler import BuildFailure, BuildOutcome, DrvFailure
 from .gcroots import safe_attr_filename
+from .logstore import LogContainerWriter
 from .proc import ProcessGroup
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Callable
     from pathlib import Path
 
     from .models import NixEvalJobSuccess
@@ -55,6 +57,7 @@ STREAM_LIMIT = 16 * 1024 * 1024
 # Cap per-subscriber backlog so a stalled SSE client cannot buffer the
 # whole build output in memory; the oldest chunks are dropped.
 SUBSCRIBER_QUEUE_MAXSIZE = 256
+STRUCTURED_QUEUE_MAXSIZE = 4096  # per-line deltas, chattier than byte chunks
 RECENT_BUFFER_SIZE = 4096
 
 # Batch log output into zstd frames of at least this size; one frame
@@ -200,6 +203,8 @@ class LogWriter:
     bytes_seen: int = 0
     truncated: bool = False
     closed: bool = False
+    # Live capture, so the web layer can stream per-derivation deltas.
+    capture: StructuredCapture | None = None
     _head_budget: int = field(init=False)
     _tail: deque[bytes] = field(default_factory=deque)
     _tail_size: int = 0
@@ -395,6 +400,16 @@ def build_nix_command(
     ]
 
 
+# nix names failures only in prose: "build of" (remote) / "builder for" (local).
+_BUILD_FAILED = re.compile(r"(?:build of|builder for) '([^']+\.drv)'.*?failed")
+_PHASE_ECHO = "Running phase: "
+
+
+def _clean_tail(lines: list[str], max_lines: int) -> list[str]:
+    kept = [_limit_line(line) for line in lines if line.strip()]
+    return kept[-max_lines:]
+
+
 _QUOTED_LINE = re.compile(r"[^\s>]*> +(.*\S)")
 _EXCERPT_NOISE = re.compile(
     r"Output paths:|/nix/store/\S+$|Last \d+ log lines:"
@@ -452,6 +467,7 @@ def failure_excerpt(tail: str, max_lines: int = 8) -> str:
 # nix activity/result types (nix/util/logging.hh).
 ACT_BUILD = 105
 RES_BUILD_LOG_LINE = 101
+RES_SET_PHASE = 104
 
 
 def _drv_display_name(drv_path: str) -> str:
@@ -460,19 +476,201 @@ def _drv_display_name(drv_path: str) -> str:
     return name or drv_path
 
 
-def render_log_event(line: bytes, activities: dict[int, str]) -> bytes | None:
-    """One line of `nix build --log-format internal-json` to log text.
+class StructuredCapture:
+    """Demux the internal-json stream into a per-derivation container.
 
-    Build-log lines get a `name> ` prefix from their build activity;
-    nix's own messages pass through with their ANSI colors. Returns
-    None for events with no log output (progress, stops, ...).
+    Activity ids map to full drv paths; log lines, phases and stop
+    timestamps attach to the owning derivation. Unattributed output (nix's
+    own evaluation/scheduling/copy messages) collects under a synthetic
+    ``setup`` entry.
     """
-    if not line.startswith(b"@nix "):
-        return line  # not an event: pass through (e.g. daemon chatter)
-    try:
-        event = json.loads(line[len(b"@nix ") :])
-    except ValueError:
-        return line
+
+    SETUP = "<setup>"
+
+    def __init__(
+        self, clock: Callable[[], float] = time.time, max_lines: int | None = None
+    ) -> None:
+        self._w = (
+            LogContainerWriter(max_lines=max_lines)
+            if max_lines is not None
+            else LogContainerWriter()
+        )
+        self._clock = clock
+        self._act: dict[int, str] = {}
+        self._idx: dict[str, int] = {self.SETUP: 0}
+        # Monotonic per-derivation line counter for live delta numbering:
+        # the container's line count stops growing once a drv hits its
+        # retention cap, which would repeat delta "from" and collide row
+        # ids. Live ids are ephemeral (the finish reload renumbers).
+        self._seen: dict[str, int] = {}
+        self._running: set[str] = set()
+        self._subs: list[asyncio.Queue[dict | None]] = []
+        self._closed = False
+        self._w.register(self.SETUP, "setup")
+
+    def _ts(self) -> int:
+        return int(self._clock() * 1000)
+
+    @staticmethod
+    def _put(q: asyncio.Queue[dict | None], item: dict | None) -> None:
+        # Drop the oldest delta for a stalled subscriber rather than grow
+        # unbounded; the missing line is a cosmetic gap the finish reload
+        # heals. Matches LogWriter's stalled-subscriber policy.
+        while True:
+            try:
+                q.put_nowait(item)
+            except asyncio.QueueFull:
+                with contextlib.suppress(asyncio.QueueEmpty):
+                    q.get_nowait()
+            else:
+                return
+
+    def _emit(self, delta: dict) -> None:
+        for q in self._subs:
+            self._put(q, delta)
+
+    def subscribe(self) -> asyncio.Queue[dict | None]:
+        """Live deltas for a viewer; a full snapshot comes from state().
+        Subscribe then snapshot with no await between so no delta is lost
+        or duplicated (single event loop, atomic)."""
+        q: asyncio.Queue[dict | None] = asyncio.Queue(maxsize=STRUCTURED_QUEUE_MAXSIZE)
+        if self._closed:
+            q.put_nowait(None)
+        else:
+            self._subs.append(q)
+        return q
+
+    def unsubscribe(self, q: asyncio.Queue[dict | None]) -> None:
+        with contextlib.suppress(ValueError):
+            self._subs.remove(q)
+
+    def state(self) -> list[dict]:
+        st = self._w.state()
+        for e in st:
+            if e["idx"] in self._running_idx:
+                e["status"] = "running"
+        return st
+
+    @property
+    def _running_idx(self) -> set[int]:
+        return {self._idx[d] for d in self._running if d in self._idx}
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        for q in self._subs:
+            self._put(q, None)
+        self._subs.clear()
+
+    def start_build(self, act_id: int, drv_path: str) -> None:
+        self._act[act_id] = drv_path
+        name = _drv_display_name(drv_path)
+        self._w.register(drv_path, name)
+        if drv_path not in self._idx:
+            self._idx[drv_path] = len(self._idx)
+        self._running.add(drv_path)
+        self._emit({"t": "drv", "idx": self._idx[drv_path], "name": name})
+
+    def _bump(self, drv: str) -> int:
+        self._seen[drv] = self._seen.get(drv, 0) + 1
+        return self._seen[drv]
+
+    def log_line(self, act_id: int, text: str) -> None:
+        drv = self._act.get(act_id, self.SETUP)
+        if strip_ansi(text).startswith(_PHASE_ECHO):
+            # RES_SET_PHASE already records this; drop stdenv's echo.
+            return
+        self._w.line(drv, text, ts=self._ts())
+        self._emit(
+            {
+                "t": "line",
+                "idx": self._idx.get(drv, 0),
+                "from": self._bump(drv),
+                "text": text,
+            }
+        )
+
+    def phase(self, act_id: int, name: str) -> None:
+        drv = self._act.get(act_id, self.SETUP)
+        self._w.phase(drv, name, ts=self._ts())
+        self._emit(
+            {
+                "t": "phase",
+                "idx": self._idx.get(drv, 0),
+                "phase": name,
+                "line": self._seen.get(drv, 0),
+            }
+        )
+
+    def stop(self, act_id: int) -> None:
+        drv = self._act.get(act_id)
+        if drv is not None:
+            self._w.stop(drv, self._ts())
+            self._running.discard(drv)
+            self._emit({"t": "status", "idx": self._idx.get(drv, 0), "status": "built"})
+
+    def setup_line(self, text: str) -> None:
+        self._w.line(self.SETUP, text, ts=self._ts())
+        self._emit(
+            {"t": "line", "idx": 0, "from": self._bump(self.SETUP), "text": text}
+        )
+        # --keep-going: mark every failed drv, not just the top-level one.
+        for m in _BUILD_FAILED.finditer(strip_ansi(text)):
+            drv = m.group(1)
+            if drv in self._idx:
+                self.set_status(drv, "failed")
+
+    def set_status(self, drv_path: str, status: str) -> None:
+        if drv_path not in self._idx:
+            # Finalized with no build activity (e.g. substituted): register
+            # now so the live delta lands on a card. Appended last, so its
+            # index equals its container position.
+            name = _drv_display_name(drv_path)
+            self._w.register(drv_path, name)
+            self._idx[drv_path] = len(self._idx)
+            self._emit({"t": "drv", "idx": self._idx[drv_path], "name": name})
+        self._w.status(drv_path, status)
+        self._running.discard(drv_path)
+        self._emit({"t": "status", "idx": self._idx[drv_path], "status": status})
+
+    def build_failure(
+        self, max_lines: int = 8, max_drvs: int = 3
+    ) -> BuildFailure | None:
+        failing = self._w.failing()
+        if not failing:
+            return None
+        drvs = [
+            DrvFailure(name, tail)
+            for name, lines in failing[-max_drvs:]
+            if (tail := _clean_tail(lines, max_lines))
+        ]
+        return BuildFailure(drvs=drvs, total=len(failing))
+
+    def failure_excerpt(self, max_lines: int = 8, max_drvs: int = 3) -> str:
+        failure = self.build_failure(max_lines, max_drvs)
+        return failure.as_text() if failure else ""
+
+    def finalize(self) -> bytes:
+        return self._w.finalize()
+
+
+def _feed_capture(event: Any, capture: StructuredCapture) -> None:
+    action, etype = event.get("action"), event.get("type")
+    fields = event.get("fields") or []
+    if action == "start" and etype == ACT_BUILD and fields:
+        capture.start_build(event["id"], str(fields[0]))
+    elif action == "result" and etype == RES_BUILD_LOG_LINE:
+        capture.log_line(event.get("id"), (fields or [""])[0])
+    elif action == "result" and etype == RES_SET_PHASE and fields and fields[0]:
+        capture.phase(event.get("id"), str(fields[0]))
+    elif action == "stop":
+        capture.stop(event.get("id"))
+    elif action == "msg" and event.get("msg"):
+        capture.setup_line(event["msg"])
+
+
+def _render_event(event: Any, activities: dict[int, str]) -> bytes | None:
     action = event.get("action")
     if action == "start" and event.get("type") == ACT_BUILD:
         fields = event.get("fields") or []
@@ -491,16 +689,45 @@ def render_log_event(line: bytes, activities: dict[int, str]) -> bytes | None:
     return None
 
 
+def render_log_event(
+    line: bytes,
+    activities: dict[int, str],
+    capture: StructuredCapture | None = None,
+) -> bytes | None:
+    """One line of `nix build --log-format internal-json` to log text.
+
+    Build-log lines get a `name> ` prefix from their build activity;
+    nix's own messages pass through with their ANSI colors. Returns
+    None for events with no log output (progress, stops, ...). When
+    `capture` is given, the same parsed event also feeds the structured
+    per-derivation container (phases and stop timestamps included).
+    """
+    if not line.startswith(b"@nix "):
+        if capture is not None and line.strip():
+            capture.setup_line(line.decode(errors="replace").rstrip("\n"))
+        return line  # not an event: pass through (e.g. daemon chatter)
+    try:
+        event = json.loads(line[len(b"@nix ") :])
+    except ValueError:
+        return line
+    if capture is not None:
+        _feed_capture(event, capture)
+    return _render_event(event, activities)
+
+
 def is_transient_error(output_tail: str) -> bool:
     return any(marker in output_tail for marker in TRANSIENT_ERROR_MARKERS)
 
 
 async def _pump_output(
-    stream: asyncio.StreamReader, output_tail: deque[bytes], log_writer: LogWriter
+    stream: asyncio.StreamReader,
+    output_tail: deque[bytes],
+    log_writer: LogWriter,
+    capture: StructuredCapture | None = None,
 ) -> None:
     activities: dict[int, str] = {}
     async for raw in iter_lines(stream):
-        line = render_log_event(raw, activities)
+        line = render_log_event(raw, activities, capture)
         if line is None:
             continue
         output_tail.append(line)
@@ -594,8 +821,10 @@ class NixBuildExecutor:
         assert proc.stdout is not None  # noqa: S101
 
         output_tail: deque[bytes] = deque(maxlen=100)
+        capture = StructuredCapture()
+        log_writer.capture = capture
         pump_task = asyncio.create_task(
-            _pump_output(proc.stdout, output_tail, log_writer)
+            _pump_output(proc.stdout, output_tail, log_writer, capture)
         )
         cancel_task = asyncio.create_task(cancel_event.wait())
         try:
@@ -614,17 +843,27 @@ class NixBuildExecutor:
                     f"\n\nnixbot: build timed out after "
                     f"{self.settings.timeout}s\n\n".encode()
                 )
+                await _finalize_container(
+                    capture, log_writer, job.drv_path, failed=True
+                )
                 # Timeouts are genuine failures (cached when enabled).
                 return BuildOutcome.failure, False
             if proc.returncode == 0:
                 # Even when the kill raced a clean exit: the build
                 # finished, the result is real.
+                await _finalize_container(
+                    capture, log_writer, job.drv_path, failed=False
+                )
                 return BuildOutcome.success, False
             if cancel_event.is_set():
                 return BuildOutcome.cancelled, False
+            await _finalize_container(capture, log_writer, job.drv_path, failed=True)
             tail_text = b"".join(output_tail).decode(errors="replace")
             return BuildOutcome.failure, is_transient_error(tail_text)
         finally:
+            # Terminate live viewers even on the cancel/timeout paths;
+            # idempotent with the close in _finalize_container.
+            capture.close()
             cancel_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await cancel_task
@@ -636,6 +875,23 @@ class NixBuildExecutor:
                 with contextlib.suppress(asyncio.CancelledError):
                     await pump_task
                 await group.reap()
+
+
+def container_path(log_path: Path) -> Path:
+    return log_path.with_name(log_path.name + ".nbl1")
+
+
+async def _finalize_container(
+    capture: StructuredCapture,
+    log_writer: LogWriter,
+    drv_path: str,
+    *,
+    failed: bool,
+) -> None:
+    capture.set_status(drv_path, "failed" if failed else "built")
+    capture.close()
+    blob = capture.finalize()
+    await asyncio.to_thread(container_path(log_writer.path).write_bytes, blob)
 
 
 def read_log(path: Path) -> bytes:

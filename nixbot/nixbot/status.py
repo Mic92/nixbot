@@ -28,6 +28,7 @@ Target URLs point at the service's own URL scheme
 from __future__ import annotations
 
 import logging
+import re
 from collections import OrderedDict
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -682,7 +683,12 @@ class ForgeStatusReporter:
                         continue
                     reported += 1
                 await self.failed_statuses.mark_failed(revision, context)
-                description = result.error or result.status.value
+                headline = (
+                    result.failure.headline()
+                    if result.failure
+                    else _error_headline(result.error or "")
+                )
+                description = headline or result.status.value
                 await self._post(
                     event,
                     build,
@@ -749,6 +755,21 @@ class ForgeStatusReporter:
 
 def _fence(text: str) -> str:
     return f"```\n{strip_ansi(text)}\n```"
+
+
+# Flat/effect excerpts prefix lines with "name> "; structured failures
+# skip this path entirely (they carry a BuildFailure).
+_DRV_PREFIX = re.compile(r"^[^\s>]+> +")
+
+
+def _error_headline(excerpt: str, limit: int = 200) -> str:
+    """The excerpt's last real error line, for a status blurb / check
+    summary."""
+    for raw in reversed(excerpt.splitlines()):
+        line = _DRV_PREFIX.sub("", strip_ansi(raw).strip())
+        if line:
+            return line[:limit]
+    return ""
 
 
 _STATUS_ICONS = {

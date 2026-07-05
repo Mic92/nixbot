@@ -20,11 +20,13 @@ from nixbot.ansi import strip_ansi
 from nixbot.build_scheduler import BuildOutcome
 from nixbot.executor import (
     FRAME_FLUSH_THRESHOLD,
+    STRUCTURED_QUEUE_MAXSIZE,
     SUBSCRIBER_QUEUE_MAXSIZE,
     BuildSettings,
     FairScheduler,
     LogWriter,
     NixBuildExecutor,
+    StructuredCapture,
     build_nix_command,
     failure_excerpt,
     is_transient_error,
@@ -32,6 +34,7 @@ from nixbot.executor import (
     read_log,
     render_log_event,
 )
+from nixbot.logstore import LogContainerReader
 
 from .support import mk_job
 
@@ -552,6 +555,235 @@ def test_render_log_event_attributes_and_colors() -> None:
     assert render_log_event(b'@nix {"action":"stop","id":7}', activities) is None
     # Non-event output passes through.
     assert render_log_event(b"plain line\n", activities) == b"plain line\n"
+
+
+def test_structured_capture_demux() -> None:
+    clock = iter(range(1000, 2000))
+    cap = StructuredCapture(clock=lambda: next(clock))
+    activities: dict[int, str] = {}
+
+    def feed(line: bytes) -> None:
+        render_log_event(line, activities, cap)
+
+    feed(
+        b'@nix {"action":"start","id":1,"type":105,'
+        b'"fields":["/nix/store/aaa-qtbase-5.0.drv"]}'
+    )
+    feed(
+        b'@nix {"action":"start","id":2,"type":105,'
+        b'"fields":["/nix/store/bbb-zlib-1.3.drv"]}'
+    )
+    feed(b'@nix {"action":"result","id":1,"type":104,"fields":["unpack"]}')
+    feed(b'@nix {"action":"result","id":1,"type":101,"fields":["unpacking qt"]}')
+    feed(b'@nix {"action":"result","id":2,"type":101,"fields":["building zlib"]}')
+    feed(b'@nix {"action":"result","id":1,"type":104,"fields":["build"]}')
+    feed(b'@nix {"action":"result","id":1,"type":101,"fields":["CC main.o"]}')
+    feed(b'@nix {"action":"msg","level":0,"msg":"note: keeping going"}')
+    feed(b'@nix {"action":"stop","id":1}')
+    cap.set_status("/nix/store/aaa-qtbase-5.0.drv", "failed")
+
+    r = LogContainerReader(cap.finalize())
+    by_name = {r.entry(i)["name"]: i for i in range(len(r))}
+    qt = by_name["qtbase-5.0"]
+    assert r.lines(qt) == ["unpacking qt", "CC main.o"]
+    assert r.entry(qt)["ph"] == [["unpack", 0], ["build", 1]]
+    assert r.entry(qt)["status"] == "failed"
+    assert r.lines(by_name["zlib-1.3"]) == ["building zlib"]
+    # nix's own message lands in the synthetic setup bucket.
+    assert r.lines(by_name["setup"]) == ["note: keeping going"]
+
+
+async def test_structured_capture_live_stream() -> None:
+    cap = StructuredCapture(clock=lambda: 1.0)
+    q = cap.subscribe()  # subscribe before mutating: no delta lost
+    cap.start_build(1, "/nix/store/aaa-qtbase-5.0.drv")
+    cap.phase(1, "build")
+    cap.log_line(1, "CC main.o")
+    cap.stop(1)
+    cap.set_status("/nix/store/aaa-qtbase-5.0.drv", "failed")
+    cap.close()
+
+    deltas = []
+    while not q.empty():
+        deltas.append(q.get_nowait())
+
+    assert deltas[0] == {"t": "drv", "idx": 1, "name": "qtbase-5.0"}
+    assert {"t": "phase", "idx": 1, "phase": "build", "line": 0} in deltas
+    assert {"t": "line", "idx": 1, "from": 1, "text": "CC main.o"} in deltas
+    # stop marks built, finalize status overrides to failed; both stream.
+    assert {"t": "status", "idx": 1, "status": "built"} in deltas
+    assert {"t": "status", "idx": 1, "status": "failed"} in deltas
+    assert deltas[-1] is None  # close signals done
+
+
+async def test_structured_capture_stalled_subscriber_bounded() -> None:
+    cap = StructuredCapture(clock=lambda: 1.0)
+    q = cap.subscribe()  # never drained: a stalled client
+    cap.start_build(1, "/nix/store/aaa-x.drv")
+    for i in range(STRUCTURED_QUEUE_MAXSIZE + 50):
+        cap.log_line(1, f"line {i}")
+    assert q.qsize() <= STRUCTURED_QUEUE_MAXSIZE
+    cap.close()
+    items = []
+    while not q.empty():
+        items.append(q.get_nowait())
+    assert items[-1] is None  # done sentinel delivered even to a full queue
+
+
+async def test_structured_capture_monotonic_line_from_past_cap() -> None:
+    # The container caps retained lines, so its line count plateaus; live
+    # delta "from" must stay monotonic anyway or row ids would collide.
+    cap = StructuredCapture(clock=lambda: 1.0, max_lines=4)
+    q = cap.subscribe()
+    cap.start_build(1, "/nix/store/aaa-qtbase-5.0.drv")
+    for _ in range(8):
+        cap.log_line(1, "x")
+    deltas = [q.get_nowait() for _ in range(q.qsize())]
+    lines = [d["from"] for d in deltas if d and d["t"] == "line"]
+    assert lines == [1, 2, 3, 4, 5, 6, 7, 8]
+
+
+async def test_structured_capture_status_without_start_build() -> None:
+    # Finalized without build activity: still emits a card, keeps its name.
+    cap = StructuredCapture(clock=lambda: 1.0)
+    q = cap.subscribe()
+    cap.set_status("/nix/store/aaa-qtbase-5.0.drv", "built")
+    deltas = [q.get_nowait() for _ in range(q.qsize())]
+    assert deltas[0] == {"t": "drv", "idx": 1, "name": "qtbase-5.0"}
+    assert deltas[1] == {"t": "status", "idx": 1, "status": "built"}
+    entry = next(e for e in cap.state() if e["idx"] == 1)
+    assert entry["name"] == "qtbase-5.0"
+
+
+def test_structured_failure_excerpt_uses_failed_derivation() -> None:
+    cap = StructuredCapture(clock=lambda: 1.0)
+    cap.start_build(1, "/nix/store/aaa-ghidra-cli-test.drv")
+    for line in ("configuring", "Starting Ghidra bridge...", "Error: exit status 1"):
+        cap.log_line(1, line)
+    cap.set_status("/nix/store/aaa-ghidra-cli-test.drv", "failed")
+    excerpt = cap.failure_excerpt()
+    # The failing derivation's own tail under a single name header; no
+    # per-line prefix, no nix re-quote.
+    assert excerpt.splitlines()[0] == "ghidra-cli-test:"
+    assert excerpt.splitlines()[-1] == "Error: exit status 1"
+    assert "configuring" in excerpt
+
+
+def test_structured_capture_marks_failures_from_nix_prose() -> None:
+    # nix names each failing derivation only in prose (never as a
+    # per-activity status), so --keep-going failures are recovered by
+    # scraping those messages. Covers remote ("build of") and local
+    # ("builder for") wording, ANSI included.
+    cap = StructuredCapture(clock=lambda: 1.0)
+    cap.start_build(1, "/nix/store/aaa-alpha.drv")
+    cap.log_line(1, "boom alpha")
+    cap.start_build(2, "/nix/store/bbb-beta.drv")
+    cap.log_line(2, "boom beta")
+    cap.setup_line(
+        "\x1b[31;1merror:\x1b[0m build of '/nix/store/aaa-alpha.drv' "
+        "on 'ssh-ng://h' failed: builder failed with exit code 1"
+    )
+    cap.setup_line(
+        "error: builder for '/nix/store/bbb-beta.drv' failed with exit code 1"
+    )
+    excerpt = cap.failure_excerpt()
+    assert "alpha:\nboom alpha" in excerpt
+    assert "beta:\nboom beta" in excerpt
+
+
+def test_structured_failure_excerpt_skips_phase_markers() -> None:
+    cap = StructuredCapture(clock=lambda: 1.0)
+    cap.start_build(1, "/nix/store/aaa-pkg.drv")
+    for line in ("Running phase: configurePhase", "Running phase: buildPhase", "boom"):
+        cap.log_line(1, line)
+    cap.set_status("/nix/store/aaa-pkg.drv", "failed")
+    excerpt = cap.failure_excerpt()
+    # Phase markers are stdenv chrome (shown in the phase bar), not output.
+    assert "Running phase" not in excerpt
+    assert excerpt.splitlines()[-1] == "boom"
+
+
+def test_phase_echo_suppressed_and_marker_is_zero_based() -> None:
+    cap = StructuredCapture(clock=lambda: 1.0)
+    q = cap.subscribe()
+    cap.start_build(1, "/nix/store/aaa-pkg.drv")
+    # stdenv order: echo line, then the structured phase event.
+    cap.log_line(1, "Running phase: buildPhase")
+    cap.phase(1, "buildPhase")
+    cap.log_line(1, "boom")
+    cap.close()
+
+    reader = LogContainerReader(cap.finalize())
+    # idx 0 is the setup bucket; the build is idx 1. The echo is not
+    # stored; the marker points at the first real line (0-based).
+    assert reader.lines(1) == ["boom"]
+    assert reader.entry(1)["ph"] == [["buildPhase", 0]]
+
+    deltas = []
+    while not q.empty():
+        deltas.append(q.get_nowait())
+    assert {"t": "phase", "idx": 1, "phase": "buildPhase", "line": 0} in deltas
+    # No line delta was emitted for the suppressed echo.
+    assert not any(d and d.get("text", "").startswith("Running phase") for d in deltas)
+
+
+def test_build_failure_returns_structured_drvs() -> None:
+    cap = StructuredCapture(clock=lambda: 1.0)
+    cap.start_build(1, "/nix/store/aaa-pkg.drv")
+    cap.log_line(1, "Running phase: buildPhase")
+    cap.log_line(1, "boom")
+    cap.set_status("/nix/store/aaa-pkg.drv", "failed")
+    failure = cap.build_failure()
+    assert failure is not None
+    assert failure.total == 1
+    assert failure.drvs[0].tail == ["boom"]
+    assert failure.headline() == "boom"
+
+
+def test_build_failure_none_when_all_built() -> None:
+    cap = StructuredCapture(clock=lambda: 1.0)
+    cap.start_build(1, "/nix/store/aaa-pkg.drv")
+    cap.log_line(1, "ok")
+    cap.set_status("/nix/store/aaa-pkg.drv", "built")
+    assert cap.build_failure() is None
+
+
+def test_structured_failure_excerpt_none_when_all_built() -> None:
+    cap = StructuredCapture(clock=lambda: 1.0)
+    cap.start_build(1, "/nix/store/aaa-qtbase-5.0.drv")
+    cap.log_line(1, "CC main.o")
+    cap.set_status("/nix/store/aaa-qtbase-5.0.drv", "built")
+    assert cap.failure_excerpt() == ""
+
+
+def test_structured_failure_excerpt_caps_many_failures() -> None:
+    cap = StructuredCapture(clock=lambda: 1.0)
+    for i in range(5):
+        drv = f"/nix/store/aaa-pkg-{i}.drv"
+        cap.start_build(i + 1, drv)
+        cap.log_line(i + 1, f"boom {i}")
+        cap.set_status(drv, "failed")
+    excerpt = cap.failure_excerpt(max_drvs=2)
+    # Only the last two failures are shown, each under its name; the
+    # rest are counted.
+    assert "pkg-4:\nboom 4" in excerpt
+    assert "pkg-3:\nboom 3" in excerpt
+    assert "pkg-0" not in excerpt
+    assert "3 more failed derivations" in excerpt
+
+
+async def test_structured_capture_state_snapshot() -> None:
+    cap = StructuredCapture(clock=lambda: 1.0)
+    cap.start_build(1, "/nix/store/aaa-qtbase-5.0.drv")
+    cap.log_line(1, "CC main.o")
+    state = cap.state()
+    qt = next(e for e in state if e["name"] == "qtbase-5.0")
+    assert qt["status"] == "running"  # in-flight, not yet stopped
+    assert qt["lines"] == ["CC main.o"]
+    assert qt["n"] == 1
+    # A subscriber after close gets an immediate done, not a hang.
+    cap.close()
+    assert cap.subscribe().get_nowait() is None
 
 
 # As written by render_log_event: the builder's own lines arrive as

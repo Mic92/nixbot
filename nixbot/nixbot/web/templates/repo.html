@@ -87,14 +87,18 @@
         <h2 class="section">Schedules</h2>
         <table class="attrs">
           <caption class="visually-hidden">scheduled effects</caption>
-          <thead class="visually-hidden">
+          <thead>
             <tr>
-              <th scope="col">status</th>
+              <th scope="col">
+                <span class="visually-hidden">status</span>
+              </th>
               <th scope="col">schedule</th>
               <th scope="col">when</th>
               <th scope="col">next run</th>
               <th scope="col">last run</th>
-              <th scope="col">actions</th>
+              <th scope="col">
+                <span class="visually-hidden">actions</span>
+              </th>
             </tr>
           </thead>
           {% for s in schedules %}

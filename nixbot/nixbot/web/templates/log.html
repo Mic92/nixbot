@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import status_icon %}
+{% from "_macros.html" import status_icon, drv_card %}
 {% block title %}
   {{ attr }} log
 {% endblock title %}
@@ -37,16 +37,51 @@
           {% endif %}
         </div>
       </div>
-      {% if live %}
-        <label>
-          <input type="checkbox" id="follow" checked>
-          follow tail
-        </label>
-      {% endif %}
       {% if waiting %}
         <p class="muted">waiting for the build to start…</p>
       {% elif unavailable %}
         <p class="muted">no log available for this attribute ({{ attr_status }})</p>
+      {% elif toc or live_structured %}
+        {% if not live_structured %}
+          <section class="log-search">
+            <input id="search-input"
+                   type="search"
+                   name="q"
+                   placeholder="Search this build's logs…"
+                   aria-label="Search logs"
+                   autocomplete="off"
+                   hx-get="{{ build_path(project, build.number) }}/search"
+                   hx-trigger="input changed delay:200ms"
+                   hx-target="#search-results"
+                   hx-swap="innerHTML">
+            <div class="search-results" id="search-results" aria-live="polite"></div>
+          </section>
+        {% endif %}
+        <div id="drv-list"
+             {% if live_structured %}data-stream="{{ build_path(project, build.number) }}/logs/{{ attr | urlencode }}/stream?format=structured"{% endif %}>
+          {% if toc %}
+            {% set base = build_path(project, build.number) ~ "/logs/" ~ (attr | urlencode) %}
+            {% set failed = toc | selectattr("status", "equalto", "failed") | list %}
+            {% set ok = toc | rejectattr("status", "equalto", "failed") | list %}
+            {% if failed %}<h2 class="section">Failures ({{ failed | length }})</h2>{% endif %}
+            {% for d in failed %}{{ drv_card(d, base, open=loop.first) }}{% endfor %}
+            {% if ok %}
+              <h2 class="section">Succeeded ({{ ok | length }})</h2>
+              <details class="succeeded-panel" id="succeeded-panel">
+                <summary>
+                  <span class="status-icon succeeded" aria-hidden="true"></span>
+                  <span class="card-text">
+                    <span class="card-name">{{ ok | length }} built</span>
+                    <span class="meta browse-hint"></span>
+                  </span>
+                </summary>
+                <div id="succeeded-list">
+                  {% for d in ok %}{{ drv_card(d, base) }}{% endfor %}
+                </div>
+              </details>
+            {% endif %}
+          {% endif %}
+        </div>
       {% elif not content and not live %}
         <p class="muted">no output — everything was already built</p>
       {% else %}
@@ -54,6 +89,9 @@
       {% endif %}
     </section>
   </main>
+  {% if toc or live_structured %}
+    <script src="/static/structured-logs.js?v={{ static_v }}" defer></script>
+  {% endif %}
   <script>
     const LIVE = {{ live | tojson }};
     const RUNNING = {{ (attr_status in ("pending", "building")) | tojson }};
@@ -73,38 +111,5 @@
       if (e.attr !== {{ attr | tojson }}) return;
       if (!LIVE || !["pending", "building"].includes(e.status)) location.reload();
     };
-    if (LIVE) {
-      const follow = document.getElementById("follow");
-      /* Scroll only the log pane so the header stays usable; scrolling
-         up pauses following, scrolling back to the bottom resumes it. */
-      const atBottom = () =>
-        log.scrollHeight - log.scrollTop - log.clientHeight < 4;
-      log.addEventListener("scroll", () => { follow.checked = atBottom(); });
-      const source = new EventSource(
-        "{{ build_path(project, build.number) }}/logs/{{ attr | urlencode }}/stream");
-      /* The stream replays full history on every (re)connect. */
-      let errors = 0;
-      source.onopen = () => {
-        errors = 0;
-        log.textContent = "";
-      };
-      /* EventSource reconnects every ~1s forever; if the server stays
-         gone (engine restart), give up and let a reload render the
-         finished log server-side. */
-      source.onerror = () => {
-        if (++errors >= 5) {
-          source.close();
-          setTimeout(() => location.reload(), 3000);
-        }
-      };
-      source.onmessage = (event) => {
-        // server-rendered HTML chunks, newlines included
-        log.insertAdjacentHTML("beforeend", event.data);
-        if (follow.checked) log.scrollTop = log.scrollHeight;
-      };
-      /* The terminal status event reloads the page; just stop the
-         dead stream from reconnecting. */
-      source.addEventListener("done", () => source.close());
-    }
   </script>
 {% endblock body %}

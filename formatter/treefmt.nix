@@ -39,6 +39,19 @@
     );
     includes = [ "*.css" ];
   };
+  # Lint + type-check the hand-written browser JS (deno fmt owns formatting).
+  # checkJs + DOM libs come from ./deno.json; vendored code is excluded.
+  settings.formatter.deno-check = {
+    command = lib.getExe (
+      pkgs.writeShellScriptBin "deno-check" ''
+        export DENO_DIR="''${DENO_DIR:-$(mktemp -d)}"
+        ${lib.getExe pkgs.deno} lint "$@"
+        exec ${lib.getExe pkgs.deno} check "$@"
+      ''
+    );
+    includes = [ "nixbot/nixbot/web/static/*.js" ];
+    excludes = [ "nixbot/nixbot/web/static/vendor/*" ];
+  };
   programs.ruff.check = true;
   programs.ruff.format = true;
   settings.formatter.shellcheck.options = [

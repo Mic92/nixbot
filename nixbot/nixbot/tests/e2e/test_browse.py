@@ -41,6 +41,60 @@ def test_build_prev_next_navigation(page: Page) -> None:
     page.wait_for_url("**/builds/2")
 
 
+def test_structured_log_viewer(page: Page) -> None:
+    page.goto("/repos/github/acme/widget/builds/2/logs/x86_64-linux.bad")
+    # Failing derivation card is open with inline phase dividers; log rows
+    # load lazily from /drv/{idx}.
+    card = page.locator('.log-card[data-pos="0"]')
+    card.get_by_text("hello-2.12").wait_for()
+    assert card.get_attribute("open") is not None
+    card.locator(".phase-sep").first.wait_for()
+    card.locator("text=error: build failed on the last step").wait_for()
+    # ANSI colors render as ansi-* spans, matching the flat log viewer.
+    assert card.locator(".log-lines .logline .ansi-red").count() >= 1
+
+    # A failure opens at the bottom, where the error is.
+    lines = card.locator(".log-lines")
+    assert lines.evaluate("el => el.scrollTop") > 0
+
+    # Phase nav scrolls between the inline dividers, both ways.
+    lines.evaluate("el => el.scrollTop = 0")
+    seps = card.locator(".phase-sep")
+    seps.nth(0).locator(".phase-next").click()
+    down = lines.evaluate("el => el.scrollTop")
+    assert down > 0
+    seps.nth(1).locator(".phase-prev").click()
+    assert lines.evaluate("el => el.scrollTop") < down
+    # Past the last phase falls through to the bottom; before the first
+    # falls through to the top.
+    lines.evaluate("el => el.scrollTop = 0")
+    seps.nth(1).locator(".phase-next").click()
+    assert lines.evaluate("el => el.scrollTop") > down
+    lines.evaluate("el => el.scrollTop = 0")
+    seps.nth(0).locator(".phase-prev").click()
+    assert lines.evaluate("el => el.scrollTop") == 0
+
+    # Successes hide behind a collapsed expand-to-browse panel.
+    assert page.locator("#succeeded-panel").get_attribute("open") is None
+    page.locator("#succeeded-panel > summary").click()
+    page.locator("#succeeded-list").get_by_text("zlib-1.3").wait_for()
+
+    # Build-scoped search groups hits and jumps to the matching line.
+    page.fill("#search-input", "error")
+    page.locator("#search-results a[data-line]").first.click()
+    hit = page.locator(".log-lines .logline.hit")
+    hit.wait_for()
+    assert hit.get_attribute("id") == "d0-L32"
+
+    # A #d{idx}-L{n} permalink expands the collapsed Succeeded panel, opens
+    # the toggle-loaded card, waits for its lazy rows, then highlights the
+    # line -- even though the row did not exist at page load.
+    page.goto("/repos/github/acme/widget/builds/2/logs/x86_64-linux.bad#d1-L1")
+    linked = page.locator(".log-lines .logline.hit")
+    linked.wait_for()
+    assert linked.get_attribute("id") == "d1-L1"
+
+
 def test_project_filter_form(page: Page) -> None:
     page.goto("/repos/github/acme/widget")
     # No filter button: the select applies itself, the ref input

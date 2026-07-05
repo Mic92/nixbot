@@ -606,13 +606,20 @@ class _OrchestratorExecutor:
         # answers "why" without a click into the log. ANSI stays: the
         # web layer renders it, the API strips it.
         error = None
+        failure = None
         if status == AttributeStatus.failed:
-            error = failure_excerpt(writer.tail_lines()) or None
+            failure = writer.capture.build_failure() if writer.capture else None
+            error = (
+                (failure.as_text() if failure else "")
+                or failure_excerpt(writer.tail_lines())
+                or None
+            )
         result = AttributeResult(
             attr=job.attr,
             status=status,
             job=job,
             error=error,
+            failure=failure,
             out_path=job.outputs.get("out"),
             drv_path=job.drv_path,
             system=job.system,

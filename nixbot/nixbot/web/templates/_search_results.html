@@ -1,0 +1,31 @@
+{# Grouped log-search hits (failures first); each line jumps into the
+   owning card. Rendered server-side and swapped into #search-results. #}
+{% if not groups %}
+  <p class="search-count">no matches</p>
+{% else %}
+  {% set total = groups | map(attribute="lines") | map("length") | sum %}
+  <p class="search-count">
+    {{ groups | length }} derivation{{ "" if groups | length == 1 else "s" }},
+    {{ total }} log match{{ "" if total == 1 else "es" }}
+  </p>
+  <ol class="search-results-list">
+    {% for g in groups %}
+      {% set ok = g.status != "failed" %}
+      <li class="search-group">
+        <a href="#" class="search-drv{{ ' ok' if ok }}" data-idx="{{ g.idx }}">
+          <span class="status-icon {{ 'succeeded' if ok else 'failed' }}"
+                aria-hidden="true"></span>
+          <span class="search-name">{{ g.name }}</span>
+          <span class="search-badge">{{ g.lines | length }} match{{ "" if g.lines | length == 1 else "es" }}</span>
+        </a>
+        <ul class="search-lines">
+          {% for ln in g.lines %}
+            <li>
+              <a href="#" data-idx="{{ g.idx }}" data-line="{{ ln }}"><span class="search-line">{{ ln }}</span></a>
+            </li>
+          {% endfor %}
+        </ul>
+      </li>
+    {% endfor %}
+  </ol>
+{% endif %}

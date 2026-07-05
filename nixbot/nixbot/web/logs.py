@@ -10,7 +10,8 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import html
-from typing import TYPE_CHECKING, NamedTuple
+import json
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import (
@@ -30,15 +31,16 @@ from ..build_scheduler import TERMINAL_FAILURES  # noqa: TID252
 from ..db_gen import maintenance as maint_gen  # noqa: TID252
 from ..db_gen import scheduled as sched_gen  # noqa: TID252
 from ..db_gen import web as gen  # noqa: TID252
-from ..executor import log_path_for_key, read_log  # noqa: TID252
+from ..executor import container_path, log_path_for_key, read_log  # noqa: TID252
+from ..logstore import LogContainerReader, is_container  # noqa: TID252
 from ..status import NO_LOG_STATUSES  # noqa: TID252
 from .api_routes import FailureSummary, clean_row
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
+    from collections.abc import AsyncGenerator, Callable, Iterable
     from pathlib import Path
 
-    from ..executor import LogWriter  # noqa: TID252
+    from ..executor import LogWriter, StructuredCapture  # noqa: TID252
     from .app import WebContext
 
 
@@ -208,6 +210,118 @@ def render_log_lines(text: str) -> str:
     # .logline is display:block; a joining "\n" inside <pre> would
     # render as an extra blank line.
     return "".join(lines)
+
+
+def phase_sep(name: str) -> str:
+    """Inline phase divider; CSS pins it as the current-phase header."""
+    safe = html.escape(name)
+    return (
+        f'<div class="phase-sep" data-phase="{safe}">'
+        f'<span class="phase-name">{safe}</span>'
+        '<span class="phase-nav">'
+        '<button type="button" class="phase-prev" aria-label="Previous phase">↑</button>'
+        '<button type="button" class="phase-next" aria-label="Next phase">↓</button>'
+        "</span></div>"
+    )
+
+
+def _phase_at(ph: list) -> dict[int, str]:
+    """0-based line -> phase name; empty phases collapse into the next."""
+    return {line: name for name, line in ph}
+
+
+def render_rows(
+    idx: int,
+    start: int,
+    lines: Iterable[str],
+    style: _Style = _RESET,
+    phases: dict[int, str] | None = None,
+) -> tuple[str, _Style]:
+    """Anchored `d{idx}-L{n}` rows numbered from ``start``, with phase
+    dividers spliced in at their first line. Returns the trailing SGR
+    style so a live stream carries color into the next batch."""
+    out = []
+    n = start
+    for line in lines:
+        if phases and (n - 1) in phases:
+            out.append(phase_sep(phases[n - 1]))
+        rendered, style = _ansi_convert(line, style)
+        out.append(
+            f'<span class="logline" id="d{idx}-L{n}">'
+            f'<a class="lineno" href="#d{idx}-L{n}">{n}</a>{rendered}</span>'
+        )
+        n += 1
+    return "".join(out), style
+
+
+# A single huge derivation would insert tens of thousands of DOM nodes in
+# one swap and hang the tab. Render only a head+tail window; the elided
+# middle auto-loads as the reader scrolls, one bounded chunk at a time.
+_RENDER_HEAD = 2000
+_RENDER_TAIL = 3000
+_RENDER_CAP = _RENDER_HEAD + _RENDER_TAIL
+_RENDER_CHUNK = 2000
+
+
+def _chunk_marker(idx: int, base: str, start: int, end: int) -> str:
+    """A marker that auto-loads lines [start, end) (0-based) once scrolled
+    into view, one bounded chunk at a time; htmx swaps the fetched rows
+    (and the next marker, if any) over it."""
+    nxt = min(start + _RENDER_CHUNK, end)
+    return (
+        f'<div class="log-elided" role="separator"'
+        f' hx-get="{base}/drv/{idx}?start={start}&end={nxt}"'
+        f' hx-trigger="revealed" hx-target="this" hx-swap="outerHTML">'
+        f"loading {end - start:,} hidden lines…</div>"
+    )
+
+
+def render_drv_window(
+    reader: LogContainerReader,
+    idx: int,
+    base: str,
+    start: int | None = None,
+    end: int | None = None,
+) -> str:
+    """A derivation's log as anchored rows. The initial view (no range)
+    is capped to a head+tail window with a load-more marker spanning the
+    gap; a range request renders lines [start, end) plus another marker
+    if more of the gap remains before the tail."""
+    lines = reader.lines(idx)
+    ph = _phase_at(reader.entry(idx)["ph"])
+    n = len(lines)
+    gap_end = n - _RENDER_TAIL  # tail starts here; never render past it
+    if start is None:
+        if n <= _RENDER_CAP:
+            return render_rows(idx, 1, lines, phases=ph)[0]
+        head = render_rows(idx, 1, lines[:_RENDER_HEAD], phases=ph)[0]
+        tail = render_rows(idx, gap_end + 1, lines[gap_end:], phases=ph)[0]
+        return head + _chunk_marker(idx, base, _RENDER_HEAD, gap_end) + tail
+    start = max(0, start)
+    end = min(end if end is not None else start + _RENDER_CHUNK, gap_end)
+    rows = render_rows(idx, start + 1, lines[start:end], phases=ph)[0]
+    if end < gap_end:
+        rows += _chunk_marker(idx, base, end, gap_end)
+    return rows
+
+
+def _toc_entries(reader: LogContainerReader) -> list[dict]:
+    fields = ("name", "status", "n", "ph", "t0", "t1")
+    return [
+        {"idx": i, **{k: reader.entry(i)[k] for k in fields}}
+        for i in range(len(reader))
+    ]
+
+
+async def _load_container(path: Path | None) -> LogContainerReader | None:
+    """The `.nbl1` sidecar if a finished build wrote one, else None."""
+    if path is None:
+        return None
+    cpath = container_path(path)
+    if not await asyncio.to_thread(cpath.exists):
+        return None
+    blob = await asyncio.to_thread(cpath.read_bytes)
+    return LogContainerReader(blob) if is_container(blob) else None
 
 
 async def _log_text(
@@ -500,6 +614,91 @@ class _LogRoutes:
         _, build = await self._build_or_404(request, forge, owner, name, number)
         return await _failure_summary(self.ctx, self.registry, build, tail)
 
+    async def log_toc(  # noqa: PLR0913
+        self,
+        request: Request,
+        forge: str,
+        owner: str,
+        name: str,
+        number: int,
+        attr: str,
+    ) -> dict:
+        """Per-derivation table of contents; `{format: "legacy"}` when no
+        container exists (old or running builds) so the client falls back."""
+        _, _, path = await self._resolve(request, forge, owner, name, number, attr)
+        reader = await _load_container(path)
+        if reader is None:
+            return {"format": "legacy"}
+        return {"format": "nbl1", "derivations": _toc_entries(reader)}
+
+    async def log_drv_lines(  # noqa: PLR0913
+        self,
+        request: Request,
+        forge: str,
+        owner: str,
+        name: str,
+        number: int,
+        attr: str,
+        idx: int,
+    ) -> HTMLResponse:
+        """One derivation's log as anchored HTML rows. ?start&end pulls a
+        bounded slice of the elided middle for the load-more marker."""
+        _, _, path = await self._resolve(request, forge, owner, name, number, attr)
+        reader = await _load_container(path)
+        if reader is None or not (0 <= idx < len(reader)):
+            raise HTTPException(status_code=404)
+        base = request.url.path.rsplit("/drv/", 1)[0]
+        qp = request.query_params
+        start = int(qp["start"]) if "start" in qp else None
+        end = int(qp["end"]) if "end" in qp else None
+        html = await asyncio.to_thread(render_drv_window, reader, idx, base, start, end)
+        return HTMLResponse(html)
+
+    async def log_drv_raw(  # noqa: PLR0913
+        self,
+        request: Request,
+        forge: str,
+        owner: str,
+        name: str,
+        number: int,
+        attr: str,
+        idx: int,
+    ) -> PlainTextResponse:
+        """One derivation's log as plain text (ANSI stripped)."""
+        _, _, path = await self._resolve(request, forge, owner, name, number, attr)
+        reader = await _load_container(path)
+        if reader is None or not (0 <= idx < len(reader)):
+            raise HTTPException(status_code=404)
+        lines = await asyncio.to_thread(reader.lines_with_phases, idx)
+        return PlainTextResponse(strip_ansi("\n".join(lines)))
+
+    async def build_search(  # noqa: PLR0913
+        self,
+        request: Request,
+        forge: str,
+        owner: str,
+        name: str,
+        number: int,
+        q: str = "",
+    ) -> HTMLResponse:
+        """Search every attribute's container; per-derivation hit groups
+        (attr, name, line numbers), failures first. No container -> skipped.
+        Returns rendered HTML the client swaps into #search-results."""
+        _, build = await self._build_or_404(request, forge, owner, name, number)
+        groups: list[dict] = []
+        if len(q.strip()) >= 2:  # noqa: PLR2004
+            for a in await self.ctx.queries.attributes(build["id"]):
+                path = log_path_for_key(self.ctx.state_dir, build["id"], a["attr"])
+                reader = await _load_container(path)
+                if reader is None:
+                    continue
+                for hit in await asyncio.to_thread(reader.search, q):
+                    hit["attr"] = a["attr"]
+                    hit["status"] = reader.entry(hit["idx"])["status"]
+                    groups.append(hit)
+            groups.sort(key=lambda h: (h["status"] != "failed", -len(h["lines"])))
+        return await self.ctx.render("_search_results.html", groups=groups)
+
     async def log_stream(  # noqa: PLR0913
         self,
         request: Request,
@@ -509,11 +708,16 @@ class _LogRoutes:
         number: int,
         attr: str,
     ) -> StreamingResponse:
-        """SSE: history from disk, then live chunks until completion."""
-        _, build, path = await self._resolve(request, forge, owner, name, number, attr)
+        """SSE: a per-derivation state burst then structured deltas from
+        the live capture until the build finishes."""
+        _, build, _ = await self._resolve(request, forge, owner, name, number, attr)
         writer = self.registry.get(build["id"], attr)
+        capture = writer.capture if writer else None
+        base = request.url.path.removesuffix("/stream")
+        macros: Any = self.ctx.env.get_template("_macros.html").module
         return StreamingResponse(
-            _stream_events(writer, path), media_type="text/event-stream"
+            _structured_events(capture, macros.drv_card, base),
+            media_type="text/event-stream",
         )
 
     async def log_viewer(  # noqa: PLR0913
@@ -533,12 +737,22 @@ class _LogRoutes:
         )
         # Live pages render no snapshot: the stream replays full
         # history on connect, the client would throw it away.
-        live = self.registry.get(build["id"], attr) is not None
+        writer = self.registry.get(build["id"], attr)
+        live = writer is not None
+        # A running attribute with a capture streams structured deltas;
+        # the client builds cards from the stream, so no server toc.
+        live_structured = writer is not None and writer.capture is not None
         content = ""
+        toc: list[dict] | None = None
         waiting = False
         unavailable = False
         if not live:
-            if path is not None and path.exists():
+            reader = await _load_container(path)
+            if reader is not None:
+                # Structured viewer: per-derivation cards render lazily
+                # from /toc + /drv/{idx}; no flat body needed.
+                toc = _toc_entries(reader)
+            elif path is not None and path.exists():
                 data = await asyncio.to_thread(read_log, path)
                 content = await asyncio.to_thread(
                     render_log_lines, data.decode(errors="replace")
@@ -562,7 +776,9 @@ class _LogRoutes:
             attr_status=attr_status,
             attr=attr,
             content=content,
+            toc=toc,
             live=live,
+            live_structured=live_structured,
             waiting=waiting,
             unavailable=unavailable,
             prev_number=prev_number,
@@ -581,9 +797,15 @@ def create_log_router(ctx: WebContext, registry: LogRegistry) -> APIRouter:
     # order matters — raw/stream/.txt are matched before the greedy
     # viewer catch-all. /logs/raw/{attr} is the unambiguous raw route;
     # the .txt suffix stays as a fallback for existing consumers.
+    router.get(f"{_BASE}/search")(routes.build_search)
     router.get(f"{_BASE}/logs/raw/{{attr:path}}")(routes.log_raw_text)
     router.get(f"{_BASE}/logs/{{attr}}.txt")(routes.log_raw_text_legacy)
     router.get(f"{_BASE}/logs/{{attr:path}}/stream")(routes.log_stream)
+    router.get(f"{_BASE}/logs/{{attr:path}}/toc")(routes.log_toc)
+    router.get(f"{_BASE}/logs/{{attr:path}}/drv/{{idx}}/raw")(routes.log_drv_raw)
+    router.get(f"{_BASE}/logs/{{attr:path}}/drv/{{idx}}", response_class=HTMLResponse)(
+        routes.log_drv_lines
+    )
     router.get(f"{_BASE}/logs/{{attr:path}}", response_class=HTMLResponse)(
         routes.log_viewer
     )
@@ -656,6 +878,61 @@ async def _stream_events(
     finally:
         if writer is not None:
             writer.unsubscribe(queue)
+
+
+async def _structured_events(
+    capture: StructuredCapture | None,
+    drv_card: Callable[..., str],
+    base: str,
+) -> AsyncGenerator[str, None]:
+    """Live per-derivation stream: a full-state burst on connect, then
+    JSON deltas until the build finishes. A finished/absent capture just
+    signals done so the client reloads into the container page.
+
+    Card shells (via the drv_card macro) and log rows are rendered here;
+    the client only inserts HTML. Each drv carries its trailing SGR style
+    so a later line delta continues the same color."""
+
+    def card(d: dict) -> str:
+        return str(drv_card(d, base, open=d["status"] in ("running", "failed")))
+
+    if capture is None:
+        yield "event: done\ndata: \n\n"
+        return
+    queue = capture.subscribe()
+    state = capture.state()  # atomic with subscribe: no await between
+    styles: dict[int, _Style] = {}
+    for e in state:
+        html_rows, styles[e["idx"]] = render_rows(
+            e["idx"], 1, e.pop("lines"), phases=_phase_at(e["ph"])
+        )
+        e["html"] = html_rows
+        e["card"] = card(e)
+    yield f"event: state\ndata: {json.dumps(state, separators=(',', ':'))}\n\n"
+    try:
+        while True:
+            try:
+                delta = await asyncio.wait_for(queue.get(), timeout=30)
+            except TimeoutError:
+                yield ": keepalive\n\n"
+                continue
+            if delta is None:
+                yield "event: done\ndata: \n\n"
+                return
+            if delta["t"] == "drv":
+                delta["card"] = card(
+                    {**delta, "status": "running", "n": 0, "ph": [], "t0": None}
+                )
+            elif delta["t"] == "line":
+                idx = delta["idx"]
+                delta["html"], styles[idx] = render_rows(
+                    idx, delta["from"], [delta.pop("text")], styles.get(idx, _RESET)
+                )
+            elif delta["t"] == "phase":
+                delta["html"] = phase_sep(delta["phase"])
+            yield f"event: delta\ndata: {json.dumps(delta, separators=(',', ':'))}\n\n"
+    finally:
+        capture.unsubscribe(queue)
 
 
 def _sse(text: str) -> str:

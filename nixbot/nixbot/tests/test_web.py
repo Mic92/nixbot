@@ -22,8 +22,15 @@ from nixbot.auth import User
 from nixbot.build_scheduler import AttributeStatus
 from nixbot.db import BuildStatus
 from nixbot.effects_state import TaskTokens
-from nixbot.executor import LogWriter, attribute_log_path, effect_log_path
+from nixbot.executor import (
+    LogWriter,
+    StructuredCapture,
+    attribute_log_path,
+    container_path,
+    effect_log_path,
+)
 from nixbot.forge_tokens import ForgeTokenStore
+from nixbot.logstore import LogContainerWriter
 from nixbot.web import events as events_module
 from nixbot.web.auth_routes import SESSION_COOKIE, create_auth_router
 from nixbot.web.events import EventBroker
@@ -726,6 +733,107 @@ def test_log_viewer_and_raw(client: WebHarness, tmp_path: Path) -> None:
     assert missing.status_code == 404
 
 
+def test_structured_log_endpoints(client: WebHarness, tmp_path: Path) -> None:
+    async def run() -> None:
+        ctx = client.ctx
+        ctx.state_dir = tmp_path
+        build_id = await ctx.pool.fetchval("SELECT id FROM builds WHERE number = 2")
+        log_file = attribute_log_path(tmp_path, build_id, "x86_64-linux.bad")
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        log_file.write_bytes(zstandard.ZstdCompressor().compress(b"flat\n"))
+        w = LogContainerWriter()
+        w.register("/nix/store/aaa-qtbase-5.0.drv", "qtbase-5.0")
+        w.phase("/nix/store/aaa-qtbase-5.0.drv", "build")
+        w.line("/nix/store/aaa-qtbase-5.0.drv", "\x1b[31mCC main.o\x1b[0m")
+        w.line("/nix/store/aaa-qtbase-5.0.drv", "error: boom undeclared")
+        w.status("/nix/store/aaa-qtbase-5.0.drv", "failed")
+        # A substituted dep with no build output.
+        w.register("/nix/store/bbb-zlib-1.3.drv", "zlib-1.3")
+        w.status("/nix/store/bbb-zlib-1.3.drv", "built")
+        container_path(log_file).write_bytes(w.finalize())
+
+    client.loop.run_until_complete(run())
+    base = "/repos/github/acme/widget/builds/2"
+    attr = "x86_64-linux.bad"
+
+    toc = client.get(f"{base}/logs/{attr}/toc").json()
+    assert toc["format"] == "nbl1"
+    assert toc["derivations"][0]["name"] == "qtbase-5.0"
+    assert toc["derivations"][0]["ph"] == [["build", 0]]
+
+    rows = client.get(f"{base}/logs/{attr}/drv/0").text
+    assert 'id="d0-L1"' in rows
+    assert "CC main.o" in rows
+
+    # Per-derivation raw: plain text, ANSI stripped.
+    raw = client.get(f"{base}/logs/{attr}/drv/0/raw").text
+    # Phase markers reconstructed from `ph` so raw readers keep context.
+    assert raw == "Running phase: build\nCC main.o\nerror: boom undeclared"
+    assert "\x1b" not in raw
+    # A zero-line derivation still has a valid (empty) raw endpoint.
+    assert client.get(f"{base}/logs/{attr}/drv/1/raw").text == ""
+    assert toc["derivations"][1]["n"] == 0
+    assert client.get(f"{base}/logs/{attr}/drv/9/raw").status_code == 404
+
+    # Search now returns rendered HTML the client swaps in.
+    hits = client.get(f"{base}/search?q=undeclared").text
+    assert 'class="search-name">qtbase-5.0<' in hits
+    assert 'data-idx="0" data-line="2"' in hits
+    assert "1 derivation," in hits
+    assert "1 log match" in hits
+    assert "no matches" in client.get(f"{base}/search?q=zzznope").text
+    assert "no matches" in client.get(f"{base}/search").text  # empty query
+
+
+def test_structured_log_window_caps_huge_derivation(
+    client: WebHarness, tmp_path: Path
+) -> None:
+    """A derivation larger than the render cap serves a head+tail window
+    with a load-more marker; ?start&end pulls a bounded middle chunk."""
+    drv = "/nix/store/aaa-huge.drv"
+
+    async def run() -> None:
+        ctx = client.ctx
+        ctx.state_dir = tmp_path
+        build_id = await ctx.pool.fetchval("SELECT id FROM builds WHERE number = 2")
+        log_file = attribute_log_path(tmp_path, build_id, "x86_64-linux.bad")
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        w = LogContainerWriter()
+        w.register(drv, "huge")
+        for i in range(12000):
+            w.line(drv, f"line{i:05d}")
+        w.status(drv, "built")
+        container_path(log_file).write_bytes(w.finalize())
+
+    client.loop.run_until_complete(run())
+    base = "/repos/github/acme/widget/builds/2/logs/x86_64-linux.bad"
+
+    capped = client.get(f"{base}/drv/0").text
+    assert 'id="d0-L1"' in capped  # head
+    assert "line00000" in capped
+    assert 'id="d0-L12000"' in capped  # tail
+    assert "line11999" in capped
+    assert "line05000" not in capped  # elided middle
+    # The marker auto-loads the gap in bounded chunks.
+    assert 'hx-trigger="revealed"' in capped
+    assert "start=2000&end=4000" in capped
+
+    chunk = client.get(f"{base}/drv/0?start=2000&end=4000").text
+    assert 'id="d0-L2001"' in chunk
+    assert "line02000" in chunk
+    assert 'id="d0-L4000"' in chunk
+    assert "line03999" in chunk
+    assert "start=4000" in chunk  # next marker for the remaining gap
+
+
+def test_log_toc_legacy_without_container(client: WebHarness, tmp_path: Path) -> None:
+    seed_log(client, tmp_path)
+    toc = client.get(
+        "/repos/github/acme/widget/builds/2/logs/x86_64-linux.bad/toc"
+    ).json()
+    assert toc["format"] == "legacy"
+
+
 def test_attr_named_dot_txt_not_shadowed_by_raw_route(
     client: WebHarness, tmp_path: Path
 ) -> None:
@@ -882,16 +990,6 @@ def test_log_viewer_unavailable_for_logless_status(client: WebHarness) -> None:
         client.loop.run_until_complete(restore())
 
 
-def test_log_sse_stream_finished(client: WebHarness, tmp_path: Path) -> None:
-    seed_log(client, tmp_path)
-    response = client.get(
-        "/repos/github/acme/widget/builds/2/logs/x86_64-linux.bad/stream"
-    )
-    assert response.status_code == 200
-    assert "build exploded" in response.text
-    assert "event: done" in response.text
-
-
 # --- JSON API ----------------------------------------------------------
 
 
@@ -1045,39 +1143,48 @@ def test_openapi_docs(client: WebHarness) -> None:
 # --- live logs ---------------------------------------------------------
 
 
-def test_live_log_history_before_completion(client: WebHarness, tmp_path: Path) -> None:
-    """Running attributes have no logs DB row yet: viewer/raw/stream
-    must fall back to the registered LogWriter's on-disk file."""
+def test_structured_live_stream(client: WebHarness, tmp_path: Path) -> None:
+    """A running attribute with a capture streams per-derivation deltas;
+    the viewer wires the structured client to that stream."""
     ctx = client.ctx
     ctx.state_dir = tmp_path
     registry = client.app.state.log_registry
 
-    async def run() -> tuple[str, str, str]:
+    async def run() -> tuple[str, str]:
         build_id = await ctx.pool.fetchval("SELECT id FROM builds WHERE number = 3")
         writer = LogWriter(path=tmp_path / "logs" / "live" / "x86_64-linux.ok.zst")
-        await writer.write(b"early output\n")
+        cap = StructuredCapture(clock=lambda: 1.0)
+        writer.capture = cap
+        cap.start_build(1, "/nix/store/aaa-qtbase-5.0.drv")
+        cap.log_line(1, "CC main.o")
         registry.register(build_id, "x86_64-linux.ok", writer)
         try:
             base = "/repos/github/acme/widget/builds/3/logs/x86_64-linux.ok"
-            raw = (await client.http.get(f"{base}.txt")).text
             viewer = (await client.http.get(base)).text
-            # The stream must replay history; close the writer so the
-            # SSE generator terminates.
-            stream_task = asyncio.ensure_future(client.http.get(f"{base}/stream"))
+            task = asyncio.ensure_future(
+                client.http.get(f"{base}/stream?format=structured")
+            )
             await asyncio.sleep(0.1)
-            await writer.write(b"late output\n")
-            await writer.close()
-            stream = (await stream_task).text
+            cap.phase(1, "build")
+            cap.log_line(1, "\x1b[31mCC failed\x1b[0m")
+            cap.close()
+            stream = (await task).text
         finally:
             registry.unregister(build_id, "x86_64-linux.ok")
-        return raw, viewer, stream
+        return viewer, stream
 
-    raw, viewer, stream = client.loop.run_until_complete(run())
-    assert "early output" in raw
-    # The live viewer renders no snapshot; the stream replays history.
+    viewer, stream = client.loop.run_until_complete(run())
     assert "const LIVE = true" in viewer
-    assert "early output" in stream
-    assert "late output" in stream
+    assert "format=structured" in viewer  # data-stream on #drv-list
+    assert "event: state" in stream
+    assert '"name":"qtbase-5.0"' in stream  # snapshot burst
+    # Rows are rendered server-side (ANSI applied), not shipped as raw text.
+    assert "d1-L1" in stream
+    assert '"text"' not in stream
+    assert "event: delta" in stream
+    assert '"t":"phase"' in stream  # live delta after subscribe
+    assert '"t":"line"' in stream  # rendered delta
+    assert "ansi-red" in stream
     assert "event: done" in stream
 
 
@@ -1091,21 +1198,23 @@ def test_log_sse_stream_caps_history_backlog(
     registry = client.app.state.log_registry
 
     async def run() -> str:
-        build_id = await ctx.pool.fetchval("SELECT id FROM builds WHERE number = 3")
-        writer = LogWriter(path=tmp_path / "logs" / "live" / "big.zst")
+        project_id = await ctx.pool.fetchval(
+            "SELECT id FROM projects WHERE forge_repo_id = 'web-1'"
+        )
+        run_id = await _insert_scheduled_run(
+            ctx.pool, project_id, effect="big", status="running"
+        )
+        writer = LogWriter(path=tmp_path / "logs" / "scheduled" / f"{run_id}.zst")
         await writer.write("".join(f"line{i:05d}\n" for i in range(3000)).encode())
-        registry.register(build_id, "x86_64-linux.ok", writer)
+        registry.register_scheduled(run_id, writer)
         try:
-            stream_task = asyncio.ensure_future(
-                client.http.get(
-                    "/repos/github/acme/widget/builds/3/logs/x86_64-linux.ok/stream"
-                )
-            )
+            url = f"/repos/github/acme/widget/schedules/runs/{run_id}/stream"
+            stream_task = asyncio.ensure_future(client.http.get(url))
             await asyncio.sleep(0.1)
             await writer.close()
             return (await stream_task).text
         finally:
-            registry.unregister(build_id, "x86_64-linux.ok")
+            registry.unregister_scheduled(run_id)
 
     stream = client.loop.run_until_complete(run())
     assert "line02999" in stream
@@ -1124,21 +1233,23 @@ def test_log_sse_stream_neutralizes_carriage_returns(
     registry = client.app.state.log_registry
 
     async def run() -> str:
-        build_id = await ctx.pool.fetchval("SELECT id FROM builds WHERE number = 3")
-        writer = LogWriter(path=tmp_path / "logs" / "live" / "cr.zst")
+        project_id = await ctx.pool.fetchval(
+            "SELECT id FROM projects WHERE forge_repo_id = 'web-1'"
+        )
+        run_id = await _insert_scheduled_run(
+            ctx.pool, project_id, effect="cr", status="running"
+        )
+        writer = LogWriter(path=tmp_path / "logs" / "scheduled" / f"{run_id}.zst")
         await writer.write(b"progress 1%\rprogress 2%\r\nevent: done\rtail\n")
-        registry.register(build_id, "x86_64-linux.ok", writer)
+        registry.register_scheduled(run_id, writer)
         try:
-            stream_task = asyncio.ensure_future(
-                client.http.get(
-                    "/repos/github/acme/widget/builds/3/logs/x86_64-linux.ok/stream"
-                )
-            )
+            url = f"/repos/github/acme/widget/schedules/runs/{run_id}/stream"
+            stream_task = asyncio.ensure_future(client.http.get(url))
             await asyncio.sleep(0.1)
             await writer.close()
             return (await stream_task).text
         finally:
-            registry.unregister(build_id, "x86_64-linux.ok")
+            registry.unregister_scheduled(run_id)
 
     stream = client.loop.run_until_complete(run())
     body_lines = stream.split("\n")

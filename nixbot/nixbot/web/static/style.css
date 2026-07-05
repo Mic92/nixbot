@@ -167,12 +167,15 @@ table.attrs tr:hover td,
 table.builds tr:hover td {
 	background: var(--hover);
 }
+table.attrs th,
 table.builds th {
 	padding: 0.5rem 0.75rem;
 	border-bottom: 1px solid var(--border);
 	font-size: 0.75rem;
 	text-transform: uppercase;
 	letter-spacing: 0.05em;
+	text-align: left;
+	color: var(--muted);
 }
 td.attr-name {
 	width: 100%;
@@ -196,6 +199,7 @@ td.attr-duration {
 	border-radius: 50%;
 	margin-right: 0.5rem;
 	background: var(--status-color, var(--muted));
+	user-select: none;
 }
 /* Radar ping: an expanding ring fades out while the icon stays solid. */
 @keyframes ping {
@@ -254,6 +258,7 @@ td.attr-duration {
 	font-size: 0.7rem;
 	line-height: 1;
 	vertical-align: text-bottom;
+	user-select: none; /* selection must not box the round icon */
 }
 td.attr-status .status-icon {
 	margin-right: 0;
@@ -396,9 +401,10 @@ details summary {
 details.attr-group {
 	margin: 0.75rem 0;
 }
-details.attr-group summary {
-	color: var(--muted);
+/* Chrome shared with the log viewer's summary selectors above. */
+.attr-group > summary {
 	font-size: 0.85rem;
+	color: var(--muted);
 }
 details.error summary {
 	color: var(--bad);
@@ -516,6 +522,7 @@ details.menu .menu-label {
 	border-top-color: var(--run);
 	border-radius: 50%;
 	animation: spin 0.9s linear infinite;
+	user-select: none;
 }
 @keyframes spin {
 	to {
@@ -537,6 +544,7 @@ details.menu .menu-label {
 	overflow: hidden;
 	border-radius: 0.3rem;
 	background: var(--border);
+	user-select: none;
 }
 .progress-track .seg {
 	transition: width 0.6s ease;
@@ -733,6 +741,7 @@ pre.log {
 .pipeline:hover {
 	border-color: var(--accent);
 	border-left-color: var(--status-color, var(--accent));
+	text-decoration: none;
 }
 .pipeline-info {
 	display: flex;
@@ -757,6 +766,7 @@ pre.log {
 	gap: 3px;
 	height: 2.2rem;
 	width: 12rem;
+	user-select: none; /* selection skips the decorative bars and gaps */
 }
 .spark-bar {
 	flex: 1;
@@ -896,4 +906,255 @@ details.webhook-setup summary {
 .copy-btn {
 	font-size: 0.75rem;
 	padding: 0.15rem 0.5rem;
+}
+
+/* ======================================================================
+   Structured log viewer (log.html + _macros.html drv_card).
+   Native <details> disclosure; only the summary chrome is styled.
+   Sections below: Cards, Log body, Phase bar, Search, Succeeded panel.
+   ====================================================================== */
+
+/* Cards: the per-derivation card and the Succeeded panel share chrome;
+   the summary chrome below is reused by the build-page attribute groups. */
+.log-card,
+.succeeded-panel {
+	background: var(--card);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+}
+.log-card {
+	border-left: 3px solid var(--bad);
+	margin: 0.5rem 0;
+	overflow: hidden;
+}
+.log-card.ok,
+.search-drv.ok {
+	border-left-color: var(--ok);
+}
+.log-card > summary,
+.succeeded-panel > summary,
+.attr-group > summary {
+	display: flex;
+	align-items: center;
+	gap: 0.6rem;
+	padding: 0.55rem 0.8rem;
+	cursor: pointer;
+	list-style: none;
+}
+.log-card > summary::-webkit-details-marker,
+.succeeded-panel > summary::-webkit-details-marker,
+.attr-group > summary::-webkit-details-marker {
+	display: none;
+}
+.log-card > summary:hover,
+.succeeded-panel > summary:hover,
+.attr-group > summary:hover {
+	background: var(--hover);
+}
+.card-text {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+}
+.card-name,
+.search-name {
+	font-weight: 600;
+	overflow-wrap: anywhere;
+}
+.card-text .meta {
+	color: var(--muted);
+	font-size: 0.8rem;
+}
+.browse-hint::after {
+	content: "expand to browse";
+}
+.succeeded-panel[open] > summary .browse-hint::after {
+	content: "collapse";
+}
+.card-body {
+	border-top: 1px solid var(--border);
+}
+.log-empty {
+	margin: 0;
+	padding: 0.6rem 0.8rem;
+	color: var(--muted);
+	font-size: 0.8rem;
+}
+.raw {
+	color: var(--accent);
+	text-decoration: none;
+	white-space: nowrap;
+}
+.raw:hover {
+	text-decoration: underline;
+}
+/* Log body: the scrolling line list htmx fetches into .log-lines.
+   Grow to fit, cap then scroll; smaller cap on phones. */
+.log-lines {
+	max-height: 21rem;
+	overflow: auto;
+	overscroll-behavior: contain;
+	border-top: 1px solid var(--border);
+	background: var(--card);
+	font-family: var(--mono);
+	font-size: 0.8125rem;
+}
+@media (max-width: 40rem) {
+	.log-lines {
+		max-height: 14rem;
+	}
+}
+/* Whole log stays in the DOM (Ctrl-F, anchors, selection, a11y);
+   content-visibility skips off-screen layout/paint. Fixed 20px row +
+   matching contain-intrinsic-size keeps the scrollbar honest and lets
+   the phase bar map scrollTop -> line by ROW_H (see structured-logs.js). */
+.log-lines .logline {
+	display: flex;
+	height: 20px;
+	line-height: 20px;
+	white-space: pre;
+	content-visibility: auto;
+	contain-intrinsic-size: auto 20px;
+	scroll-margin-top: 2rem;
+}
+/* Space the gutter with margin, not flex gap: ANSI colors split a line
+   into several span children and gap would space them apart mid-line. */
+.log-lines .lineno {
+	width: 5ch;
+	margin: 0 1ch 0 0;
+	padding: 0;
+	color: var(--muted);
+	text-decoration: none;
+	text-align: right;
+	flex: none;
+}
+.log-lines .logline:target,
+.log-lines .logline.hit {
+	background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.log-lines .log-elided {
+	padding: 0.4rem 1ch;
+	color: var(--muted);
+	font-style: italic;
+	background: color-mix(in srgb, var(--muted) 12%, transparent);
+	border-block: 1px dashed var(--border);
+	text-align: center;
+}
+/* Phase divider: inline separator the server splices in; sticky pins it
+   as the current-phase header. prev/next scroll siblings (see the JS). */
+.phase-sep {
+	position: sticky;
+	top: 0;
+	z-index: 1;
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	padding: 0.3rem 0.8rem;
+	background: var(--card);
+	border-top: 1px solid var(--border);
+	border-bottom: 1px solid var(--border);
+	color: var(--accent);
+	font-size: 0.72rem;
+	font-weight: 600;
+}
+.phase-name {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.phase-nav {
+	margin-left: auto;
+	display: flex;
+	gap: 0.2rem;
+}
+.phase-sep button {
+	all: unset;
+	cursor: pointer;
+	padding: 0.1rem 0.5rem;
+	border-radius: 4px;
+	color: var(--muted);
+}
+.phase-sep button:hover {
+	background: var(--hover);
+	color: var(--fg);
+}
+/* Touch: 44px tap targets (WCAG 2.5.5) without bloating desktop. */
+@media (pointer: coarse) {
+	.phase-sep button {
+		padding: 0 0.7rem;
+		min-height: 44px;
+		display: inline-flex;
+		align-items: center;
+	}
+}
+/* Search: the query box and its server-rendered results (_search_results.html). */
+.log-search {
+	margin: 0 0 1rem;
+}
+.log-search input {
+	width: 100%;
+	box-sizing: border-box;
+	border-radius: 8px;
+	padding: 0.55rem 0.8rem;
+	font: inherit;
+}
+.search-count {
+	margin: 0.4rem 0 0;
+	font-size: 0.8rem;
+	color: var(--muted);
+}
+.search-results-list {
+	list-style: none;
+	margin: 0.3rem 0 0;
+	padding: 0;
+}
+.search-group {
+	margin: 0.15rem 0;
+}
+.search-results a {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	padding: 0.35rem 0.5rem;
+	border-radius: 6px;
+	text-decoration: none;
+	color: inherit;
+	font-size: 0.8125rem;
+}
+.search-results a:hover,
+.search-results a:focus-visible {
+	background: var(--hover);
+	outline: none;
+}
+.search-results a:focus-visible {
+	box-shadow: inset 0 0 0 2px var(--accent);
+}
+.search-drv {
+	border-left: 3px solid var(--bad);
+}
+.search-badge {
+	color: var(--muted);
+	font-size: 0.75rem;
+	margin-left: auto;
+}
+.search-lines {
+	list-style: none;
+	margin: 0;
+	padding: 0 0 0 1.6rem;
+}
+.search-line {
+	color: var(--muted);
+	flex: none;
+	font-variant-numeric: tabular-nums;
+	width: 5ch;
+	text-align: right;
+}
+/* Succeeded panel: collapsed list of built derivations (log.html). */
+#succeeded-list {
+	border-top: 1px solid var(--border);
+	padding: 0.4rem 0.6rem;
+}
+#succeeded-list .log-card {
+	margin: 0.35rem 0;
 }
