@@ -167,12 +167,15 @@ table.attrs tr:hover td,
 table.builds tr:hover td {
 	background: var(--hover);
 }
+table.attrs th,
 table.builds th {
 	padding: 0.5rem 0.75rem;
 	border-bottom: 1px solid var(--border);
 	font-size: 0.75rem;
 	text-transform: uppercase;
 	letter-spacing: 0.05em;
+	text-align: left;
+	color: var(--muted);
 }
 td.attr-name {
 	width: 100%;
