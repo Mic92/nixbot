@@ -400,6 +400,9 @@ def build_nix_command(
     ]
 
 
+# nix names failures only in prose: "build of" (remote) / "builder for" (local).
+_BUILD_FAILED = re.compile(r"(?:build of|builder for) '([^']+\.drv)'.*?failed")
+_PHASE_MARKER = re.compile(r"Running phase: ")
 _QUOTED_LINE = re.compile(r"[^\s>]*> +(.*\S)")
 _EXCERPT_NOISE = re.compile(
     r"Output paths:|/nix/store/\S+$|Last \d+ log lines:"
@@ -602,6 +605,11 @@ class StructuredCapture:
         self._emit(
             {"t": "line", "idx": 0, "from": self._bump(self.SETUP), "text": text}
         )
+        # --keep-going: mark every failed drv, not just the top-level one.
+        for m in _BUILD_FAILED.finditer(strip_ansi(text)):
+            drv = m.group(1)
+            if drv in self._idx:
+                self.set_status(drv, "failed")
 
     def set_status(self, drv_path: str, status: str) -> None:
         if drv_path not in self._idx:
@@ -615,6 +623,32 @@ class StructuredCapture:
         self._w.status(drv_path, status)
         self._running.discard(drv_path)
         self._emit({"t": "status", "idx": self._idx[drv_path], "status": status})
+
+    def failure_excerpt(self, max_lines: int = 8, max_drvs: int = 3) -> str:
+        """Each failed derivation's own tail under a name header, capped
+        to `max_drvs` with the rest counted."""
+        failing = self._w.failing()
+        if not failing:
+            return ""
+        blocks = []
+        for name, lines in failing[-max_drvs:]:
+            # Phase markers are stdenv chrome already shown in the phase
+            # bar; keep the excerpt to real output.
+            kept = [
+                line
+                for line in lines
+                if line.strip() and not _PHASE_MARKER.match(strip_ansi(line))
+            ]
+            tail = kept[-max_lines:]
+            if tail:
+                body = "\n".join(_limit_line(line) for line in tail)
+                blocks.append(f"{name}:\n{body}")
+        dropped = max(0, len(failing) - max_drvs)
+        if dropped:
+            blocks.append(
+                f"… and {dropped} more failed derivation{'s' * (dropped > 1)}"
+            )
+        return "\n\n".join(blocks)
 
     def finalize(self) -> bytes:
         return self._w.finalize()

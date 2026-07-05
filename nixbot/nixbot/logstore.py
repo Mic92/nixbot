@@ -116,6 +116,10 @@ class LogContainerWriter:
         d = self._drvs.get(drv)
         return d.count if d else 0
 
+    def failing(self) -> list[tuple[str, list[str]]]:
+        """(name, lines) for derivations left in a failed status."""
+        return [(d.name, d.lines) for d in self._drvs.values() if d.status == "failed"]
+
     def state(self) -> list[dict]:
         """Current per-derivation state for a live snapshot burst; mirrors
         the finalized TOC plus the lines seen so far."""

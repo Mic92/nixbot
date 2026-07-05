@@ -655,6 +655,78 @@ async def test_structured_capture_status_without_start_build() -> None:
     assert entry["name"] == "qtbase-5.0"
 
 
+def test_structured_failure_excerpt_uses_failed_derivation() -> None:
+    cap = StructuredCapture(clock=lambda: 1.0)
+    cap.start_build(1, "/nix/store/aaa-ghidra-cli-test.drv")
+    for line in ("configuring", "Starting Ghidra bridge...", "Error: exit status 1"):
+        cap.log_line(1, line)
+    cap.set_status("/nix/store/aaa-ghidra-cli-test.drv", "failed")
+    excerpt = cap.failure_excerpt()
+    # The failing derivation's own tail under a single name header; no
+    # per-line prefix, no nix re-quote.
+    assert excerpt.splitlines()[0] == "ghidra-cli-test:"
+    assert excerpt.splitlines()[-1] == "Error: exit status 1"
+    assert "configuring" in excerpt
+
+
+def test_structured_capture_marks_failures_from_nix_prose() -> None:
+    # nix names each failing derivation only in prose (never as a
+    # per-activity status), so --keep-going failures are recovered by
+    # scraping those messages. Covers remote ("build of") and local
+    # ("builder for") wording, ANSI included.
+    cap = StructuredCapture(clock=lambda: 1.0)
+    cap.start_build(1, "/nix/store/aaa-alpha.drv")
+    cap.log_line(1, "boom alpha")
+    cap.start_build(2, "/nix/store/bbb-beta.drv")
+    cap.log_line(2, "boom beta")
+    cap.setup_line(
+        "\x1b[31;1merror:\x1b[0m build of '/nix/store/aaa-alpha.drv' "
+        "on 'ssh-ng://h' failed: builder failed with exit code 1"
+    )
+    cap.setup_line(
+        "error: builder for '/nix/store/bbb-beta.drv' failed with exit code 1"
+    )
+    excerpt = cap.failure_excerpt()
+    assert "alpha:\nboom alpha" in excerpt
+    assert "beta:\nboom beta" in excerpt
+
+
+def test_structured_failure_excerpt_skips_phase_markers() -> None:
+    cap = StructuredCapture(clock=lambda: 1.0)
+    cap.start_build(1, "/nix/store/aaa-pkg.drv")
+    for line in ("Running phase: configurePhase", "Running phase: buildPhase", "boom"):
+        cap.log_line(1, line)
+    cap.set_status("/nix/store/aaa-pkg.drv", "failed")
+    excerpt = cap.failure_excerpt()
+    # Phase markers are stdenv chrome (shown in the phase bar), not output.
+    assert "Running phase" not in excerpt
+    assert excerpt.splitlines()[-1] == "boom"
+
+
+def test_structured_failure_excerpt_none_when_all_built() -> None:
+    cap = StructuredCapture(clock=lambda: 1.0)
+    cap.start_build(1, "/nix/store/aaa-qtbase-5.0.drv")
+    cap.log_line(1, "CC main.o")
+    cap.set_status("/nix/store/aaa-qtbase-5.0.drv", "built")
+    assert cap.failure_excerpt() == ""
+
+
+def test_structured_failure_excerpt_caps_many_failures() -> None:
+    cap = StructuredCapture(clock=lambda: 1.0)
+    for i in range(5):
+        drv = f"/nix/store/aaa-pkg-{i}.drv"
+        cap.start_build(i + 1, drv)
+        cap.log_line(i + 1, f"boom {i}")
+        cap.set_status(drv, "failed")
+    excerpt = cap.failure_excerpt(max_drvs=2)
+    # Only the last two failures are shown, each under its name; the
+    # rest are counted.
+    assert "pkg-4:\nboom 4" in excerpt
+    assert "pkg-3:\nboom 3" in excerpt
+    assert "pkg-0" not in excerpt
+    assert "3 more failed derivations" in excerpt
+
+
 async def test_structured_capture_state_snapshot() -> None:
     cap = StructuredCapture(clock=lambda: 1.0)
     cap.start_build(1, "/nix/store/aaa-qtbase-5.0.drv")

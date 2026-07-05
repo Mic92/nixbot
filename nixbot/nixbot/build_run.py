@@ -607,7 +607,8 @@ class _OrchestratorExecutor:
         # web layer renders it, the API strips it.
         error = None
         if status == AttributeStatus.failed:
-            error = failure_excerpt(writer.tail_lines()) or None
+            structured = writer.capture.failure_excerpt() if writer.capture else ""
+            error = structured or failure_excerpt(writer.tail_lines()) or None
         result = AttributeResult(
             attr=job.attr,
             status=status,
