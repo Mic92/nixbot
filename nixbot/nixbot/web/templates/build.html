@@ -11,7 +11,9 @@
   {# sseOpen re-checks state rendered before the stream connected; a
      status change in that gap (eval start, attr restart) would
      otherwise be lost. #}
-  {% set trigger = "sse:message delay:300ms, htmx:sseOpen from:body" %}
+  {# throttle, not delay: delay debounces, so a busy build's event
+     stream keeps resetting it and the refetch never fires. #}
+  {% set trigger = "sse:message throttle:1s, htmx:sseOpen from:body" %}
   {# hx-disinherit: the lazy attribute-row fetches inside would
      otherwise inherit hx-select="#main" and swap in nothing. #}
   <main id="main"
