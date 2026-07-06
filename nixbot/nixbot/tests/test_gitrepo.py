@@ -340,17 +340,80 @@ async def test_submodules_fetched_without_credentials(
     monkeypatch.setattr(gitrepo, "run_git", spy_run_git)
 
     # Default: no credentials reach the submodule checkout.
-    wt = await manager.checkout_for_build(KEY, "sub-creds", base_commit=sha)
+    wt = await manager.checkout_for_build(
+        KEY, "sub-creds", base_commit=sha, credentials=creds
+    )
     await manager.remove_worktree(wt)
     # Explicit opt-in forwards them.
     wt = await manager.checkout_for_build(
-        KEY, "sub-creds-2", base_commit=sha, submodule_credentials=creds
+        KEY,
+        "sub-creds-2",
+        base_commit=sha,
+        credentials=creds,
+        submodule_credentials=creds,
     )
     await manager.remove_worktree(wt)
     submodule_calls = [c for c in calls if c[0][0] == "submodule"]
     assert len(submodule_calls) == 2  # noqa: PLR2004 — one call per checkout
     assert submodule_calls[0][1] is None
     assert submodule_calls[1][1] is creds
+
+
+async def test_checkout_lazy_fetch_needs_credentials(
+    manager: RepoManager,
+    upstream: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A blob-less clone lazy-fetches missing objects from origin during
+    worktree checkout and merge. When origin needs authentication, those
+    fetches only succeed if the primary repo's credentials are
+    forwarded, reproducing the private-repo build failure.
+
+    A fake `ssh` gates on the `-i <key>` flag that
+    FetchCredentials.git_ssh_command emits: no credentials means no key
+    means the promisor fetch fails just like the real bug."""
+    git(upstream, "config", "uploadpack.allowFilter", "true")
+    base = git(upstream, "rev-parse", "HEAD")
+    git(upstream, "checkout", "-b", "pr")
+    (upstream / "feature.txt").write_text("feature\n")
+    git(upstream, "add", ".")
+    git(upstream, "commit", "-m", "feature")
+    head = git(upstream, "rev-parse", "HEAD")
+    git(upstream, "checkout", "main")
+
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    fake_ssh = bindir / "ssh"
+    fake_ssh.write_text(
+        "#!/bin/sh\n"
+        'case " $* " in *" -i "*) ;; *) echo "no key" >&2; exit 255;; esac\n'
+        'for a in "$@"; do last=$a; done\n'
+        'exec sh -c "$last"\n'
+    )
+    fake_ssh.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bindir}:{os.environ['PATH']}")
+
+    key = tmp_path / "id"
+    key.write_text("dummy\n")
+    creds = FetchCredentials(ssh_private_key_file=key)
+    # ssh://fake<abs-path> routes through the fake ssh, which runs
+    # git-upload-pack against the local upstream repo.
+    url = f"ssh://fake{upstream}"
+    await manager.fetch(KEY, url, ["+refs/heads/*:refs/heads/*"], credentials=creds)
+
+    with pytest.raises(GitError, match="promisor remote"):
+        await manager.checkout_for_build(
+            KEY, "no-creds", base_commit=base, head_commit=head
+        )
+
+    wt = await manager.checkout_for_build(
+        KEY, "with-creds", base_commit=base, head_commit=head, credentials=creds
+    )
+    try:
+        assert (wt.path / "feature.txt").read_text() == "feature\n"
+    finally:
+        await manager.remove_worktree(wt)
 
 
 async def test_static_credentials_provider(tmp_path: Path) -> None:

@@ -83,6 +83,7 @@ async def refresh_schedules(s: CIService, project_id: int, rev: str) -> None:
         info.key,
         f"schedules-{project_id}",
         base_commit=rev,
+        credentials=credentials,
     )
     try:
         ctx = EffectsContext(
@@ -134,6 +135,7 @@ async def _run_scheduled_inner(
         info.key,
         scheduled_worktree_id(due, run_id),
         base_commit=info.default_branch,
+        credentials=credentials,
     )
     task_token = s.orchestrator.task_tokens.issue(due.project_id)
     log_dir = s.config.state_dir / "logs" / "scheduled"
