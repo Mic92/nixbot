@@ -772,6 +772,39 @@ def test_structured_failure_excerpt_caps_many_failures() -> None:
     assert "3 more failed derivations" in excerpt
 
 
+def test_scrapes_cannot_build_reason_wording() -> None:
+    # Newer nix spreads a failure over "Cannot build '<drv>'." + "Reason:".
+    # Flag the leaf that carries the output, not the cascade parents that
+    # only report "1 dependency failed".
+    cap = StructuredCapture(clock=lambda: 1.0)
+    leaf = "/nix/store/x0w-closure-info.drv"
+    top = "/nix/store/195-vm-test-run-nixbot-gitlab.drv"
+    cap.start_build(1, leaf)
+    cap.log_line(1, "tribuchet worker error: build execution panicked")
+    cap.setup_line(f"error: Cannot build '{leaf}'.")
+    cap.setup_line("       Reason: builder failed with exit code 1.")
+    cap.setup_line(f"error: Cannot build '{top}'.")
+    cap.setup_line("       Reason: 1 dependency failed.")
+    cap.mark_failed(top)
+    state = {e["name"]: e["status"] for e in cap.state()}
+    # Leaf flagged with its output; no phantom top-level card, setup neutral.
+    assert state["closure-info"] == "failed"
+    assert "vm-test-run-nixbot-gitlab" not in state
+    assert state["setup"] == "built"
+    failure = cap.build_failure()
+    assert failure is not None
+    assert failure.drvs[0].name == "closure-info"
+
+
+def test_finalize_marks_setup_failed_on_pure_setup_error() -> None:
+    # No build activity: the failure lands on the setup card.
+    cap = StructuredCapture(clock=lambda: 1.0)
+    cap.setup_line("error: cannot download foo from any mirror")
+    cap.mark_failed("/nix/store/aaa-top.drv")
+    setup = next(e for e in cap.state() if e["name"] == "setup")
+    assert setup["status"] == "failed"
+
+
 async def test_structured_capture_state_snapshot() -> None:
     cap = StructuredCapture(clock=lambda: 1.0)
     cap.start_build(1, "/nix/store/aaa-qtbase-5.0.drv")
