@@ -837,6 +837,10 @@ def _build_plan(
     if not attrs:
         return None
     lines = [header, "", head, sep]
+    # +1 per line for the newline join() inserts; undercounting lets the
+    # joined text exceed the budget, and _check_run_output then chops it
+    # mid-row into invalid markdown.
+    used = sum(len(line) + 1 for line in lines)
     for i, attr in enumerate(attrs):
         live = f"{build_url}/logs/{quote(attr)}"
         raw = f"{build_url}/logs/raw/{quote(attr)}"
@@ -849,8 +853,11 @@ def _build_plan(
         else:
             cell = _status_cell(status or "unknown")
             line = f"| {attr_cell} | {cell} | {raw_cell} |"
-        if sum(map(len, lines)) + len(line) > CHECK_RUN_TEXT_LIMIT:
-            lines.append(f"| … {len(attrs) - i} more {trunc.format(build_url)}")
+        trunc_line = f"| … {len(attrs) - i} more {trunc.format(build_url)}"
+        # Reserve room for the trailing row so it always fits.
+        if used + len(line) + 1 + len(trunc_line) + 1 > CHECK_RUN_TEXT_LIMIT:
+            lines.append(trunc_line)
             break
         lines.append(line)
+        used += len(line) + 1
     return "\n".join(lines)
