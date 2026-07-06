@@ -400,8 +400,11 @@ def build_nix_command(
     ]
 
 
-# nix names failures only in prose: "build of" (remote) / "builder for" (local).
+# nix names failures only in prose: "build of" (remote) / "builder for"
+# (local). Newer nix also uses a two-line "Cannot build '<drv>'." /
+# "Reason:" form (see setup_line).
 _BUILD_FAILED = re.compile(r"(?:build of|builder for) '([^']+\.drv)'.*?failed")
+_CANNOT_BUILD = re.compile(r"Cannot build '([^']+\.drv)'")
 _PHASE_ECHO = "Running phase: "
 
 
@@ -504,6 +507,7 @@ class StructuredCapture:
         # ids. Live ids are ephemeral (the finish reload renumbers).
         self._seen: dict[str, int] = {}
         self._running: set[str] = set()
+        self._pending_cannot: str | None = None
         self._subs: list[asyncio.Queue[dict | None]] = []
         self._closed = False
         self._w.register(self.SETUP, "setup")
@@ -615,10 +619,19 @@ class StructuredCapture:
         self._emit(
             {"t": "line", "idx": 0, "from": self._bump(self.SETUP), "text": text}
         )
+        stripped = strip_ansi(text)
         # --keep-going: mark every failed drv, not just the top-level one.
-        for m in _BUILD_FAILED.finditer(strip_ansi(text)):
+        for m in _BUILD_FAILED.finditer(stripped):
             drv = m.group(1)
             if drv in self._idx:
+                self.set_status(drv, "failed")
+        # Two-line form: flag the drv only once its "Reason:" says the
+        # builder failed, not a dependency (a cascade parent).
+        if m := _CANNOT_BUILD.search(stripped):
+            self._pending_cannot = m.group(1)
+        elif self._pending_cannot and "Reason:" in stripped:
+            drv, self._pending_cannot = self._pending_cannot, None
+            if "builder failed" in stripped and drv in self._idx:
                 self.set_status(drv, "failed")
 
     def set_status(self, drv_path: str, status: str) -> None:
@@ -633,6 +646,18 @@ class StructuredCapture:
         self._w.status(drv_path, status)
         self._running.discard(drv_path)
         self._emit({"t": "status", "idx": self._idx[drv_path], "status": status})
+
+    def mark_failed(self, drv_path: str) -> None:
+        if drv_path in self._idx:
+            self.set_status(drv_path, "failed")
+        elif not self._w.failing():
+            # Top-level never ran and no leaf failed: the failure was in
+            # setup (eval, scheduling, remote-builder). Attribute it there,
+            # else the setup bucket keeps its default "built" (succeeded).
+            self._w.status(self.SETUP, "failed")
+            self._emit({"t": "status", "idx": 0, "status": "failed"})
+        # else: a leaf drv already carries the failure; adding the
+        # top-level as a phantom "no output" card only duplicates it.
 
     def build_failure(
         self, max_lines: int = 8, max_drvs: int = 3
@@ -888,7 +913,10 @@ async def _finalize_container(
     *,
     failed: bool,
 ) -> None:
-    capture.set_status(drv_path, "failed" if failed else "built")
+    if failed:
+        capture.mark_failed(drv_path)
+    else:
+        capture.set_status(drv_path, "built")
     capture.close()
     blob = capture.finalize()
     await asyncio.to_thread(container_path(log_writer.path).write_bytes, blob)
