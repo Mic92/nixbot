@@ -34,6 +34,7 @@ from nixbot.status import (
     GitHubCheckRunPoster,
     GitlabStatusPoster,
     StatusState,
+    _build_plan,
     _check_run_output,
     attr_status_context,
     effect_status_context,
@@ -724,6 +725,18 @@ def test_check_run_output_title_and_truncate() -> None:
     out = _check_run_output("ctx", "s", "x" * (CHECK_RUN_TEXT_LIMIT + 100))
     assert "truncated" in out["text"]
     assert "text" not in _check_run_output("ctx", "s", None)
+
+
+def test_build_plan_truncation_stays_within_check_run_budget() -> None:
+    """A huge attribute table must fit the check-run budget itself; if it
+    overshoots, _check_run_output chops it mid-row into invalid markdown."""
+    attrs = [f"a{i:05d}" for i in range(20000)]
+    statuses = dict.fromkeys(attrs, "succeeded")
+    table = _build_plan(attrs, "https://ci/b/1", statuses)
+    assert table is not None
+    assert len(table) <= CHECK_RUN_TEXT_LIMIT
+    assert _check_run_output("c", "s", table)["text"] == table
+    assert table.rstrip().endswith("|")
 
 
 # --- GitHub check-run poster -----------------------------------------------
