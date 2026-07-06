@@ -627,8 +627,8 @@ class StructuredCapture:
                 self.set_status(drv, "failed")
         # Two-line form: flag the drv only once its "Reason:" says the
         # builder failed, not a dependency (a cascade parent).
-        if m := _CANNOT_BUILD.search(stripped):
-            self._pending_cannot = m.group(1)
+        if cannot := _CANNOT_BUILD.search(stripped):
+            self._pending_cannot = cannot.group(1)
         elif self._pending_cannot and "Reason:" in stripped:
             drv, self._pending_cannot = self._pending_cannot, None
             if "builder failed" in stripped and drv in self._idx:

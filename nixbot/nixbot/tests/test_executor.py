@@ -791,7 +791,9 @@ def test_scrapes_cannot_build_reason_wording() -> None:
     assert state["closure-info"] == "failed"
     assert "vm-test-run-nixbot-gitlab" not in state
     assert state["setup"] == "built"
-    assert cap.build_failure().drvs[0].name == "closure-info"
+    failure = cap.build_failure()
+    assert failure is not None
+    assert failure.drvs[0].name == "closure-info"
 
 
 def test_finalize_marks_setup_failed_on_pure_setup_error() -> None:
