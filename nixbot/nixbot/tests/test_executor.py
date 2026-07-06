@@ -773,7 +773,8 @@ def test_structured_failure_excerpt_caps_many_failures() -> None:
 
 
 def test_scrapes_cannot_build_reason_wording() -> None:
-    # Newer nix spreads a failure over "Cannot build '<drv>'." + "Reason:".
+    # Newer nix spreads a failure over "Cannot build '<drv>'." + "Reason:",
+    # emitted as a single multiline `msg` event (one setup_line call).
     # Flag the leaf that carries the output, not the cascade parents that
     # only report "1 dependency failed".
     cap = StructuredCapture(clock=lambda: 1.0)
@@ -781,10 +782,13 @@ def test_scrapes_cannot_build_reason_wording() -> None:
     top = "/nix/store/195-vm-test-run-nixbot-gitlab.drv"
     cap.start_build(1, leaf)
     cap.log_line(1, "tribuchet worker error: build execution panicked")
-    cap.setup_line(f"error: Cannot build '{leaf}'.")
-    cap.setup_line("       Reason: builder failed with exit code 1.")
-    cap.setup_line(f"error: Cannot build '{top}'.")
-    cap.setup_line("       Reason: 1 dependency failed.")
+    cap.setup_line(
+        f"error: Cannot build '{leaf}'.\n"
+        "       Reason: builder failed with exit code 1.\n"
+        "       Output paths:\n"
+        "         /nix/store/7bs-closure-info"
+    )
+    cap.setup_line(f"error: Cannot build '{top}'.\n       Reason: 1 dependency failed.")
     cap.mark_failed(top)
     state = {e["name"]: e["status"] for e in cap.state()}
     # Leaf flagged with its output; no phantom top-level card, setup neutral.

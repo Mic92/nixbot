@@ -619,19 +619,24 @@ class StructuredCapture:
         self._emit(
             {"t": "line", "idx": 0, "from": self._bump(self.SETUP), "text": text}
         )
-        stripped = strip_ansi(text)
+        # A nix error block arrives as one multiline msg event; scrape per
+        # line so the "Cannot build" and its "Reason:" line pair up.
+        for line in strip_ansi(text).splitlines():
+            self._scrape_failure(line)
+
+    def _scrape_failure(self, line: str) -> None:
         # --keep-going: mark every failed drv, not just the top-level one.
-        for m in _BUILD_FAILED.finditer(stripped):
+        for m in _BUILD_FAILED.finditer(line):
             drv = m.group(1)
             if drv in self._idx:
                 self.set_status(drv, "failed")
         # Two-line form: flag the drv only once its "Reason:" says the
         # builder failed, not a dependency (a cascade parent).
-        if cannot := _CANNOT_BUILD.search(stripped):
+        if cannot := _CANNOT_BUILD.search(line):
             self._pending_cannot = cannot.group(1)
-        elif self._pending_cannot and "Reason:" in stripped:
+        elif self._pending_cannot and "Reason:" in line:
             drv, self._pending_cannot = self._pending_cannot, None
-            if "builder failed" in stripped and drv in self._idx:
+            if "builder failed" in line and drv in self._idx:
                 self.set_status(drv, "failed")
 
     def set_status(self, drv_path: str, status: str) -> None:
