@@ -54,7 +54,10 @@ async def maybe_run_effects(
     config_text = None
     for filename in CONFIG_FILENAMES:
         config_text = await o.repos.show_file(
-            repo.key, f"refs/heads/{repo.default_branch}", filename
+            repo.key,
+            f"refs/heads/{repo.default_branch}",
+            filename,
+            credentials=credentials,
         )
         if config_text is not None:
             break

@@ -193,7 +193,9 @@ class Worktree:
     async def commit_message(self, rev: str = "HEAD") -> str:
         return await run_git(["log", "-1", "--format=%B", rev], cwd=self.path)
 
-    async def merge(self, head_sha: str) -> None:
+    async def merge(
+        self, head_sha: str, credentials: FetchCredentials | None = None
+    ) -> None:
         """Merge `head_sha` into the currently checked-out base branch.
 
         Raises MergeConflictError on conflict; the caller fails the
@@ -213,6 +215,7 @@ class Worktree:
                     head_sha,
                 ],
                 cwd=self.path,
+                credentials=credentials,
             )
         except GitError as e:
             # Only a genuine content conflict (unmerged index entries)
@@ -316,18 +319,30 @@ class RepoManager:
             credentials=credentials,
         )
 
-    async def show_file(self, project_key: str, ref: str, file_path: str) -> str | None:
+    async def show_file(
+        self,
+        project_key: str,
+        ref: str,
+        file_path: str,
+        credentials: FetchCredentials | None = None,
+    ) -> str | None:
         """Read one file from a ref of the bare clone (no worktree).
         Returns None when the ref or file does not exist."""
         try:
             return await run_git(
-                ["show", f"{ref}:{file_path}"], cwd=self.clone_path(project_key)
+                ["show", f"{ref}:{file_path}"],
+                cwd=self.clone_path(project_key),
+                credentials=credentials,
             )
         except GitError:
             return None
 
     async def create_worktree(
-        self, project_key: str, worktree_id: str, commit: str
+        self,
+        project_key: str,
+        worktree_id: str,
+        commit: str,
+        credentials: FetchCredentials | None = None,
     ) -> Worktree:
         """Create a detached worktree for one build at `commit`."""
         clone = self.clone_path(project_key)
@@ -335,7 +350,11 @@ class RepoManager:
         if path.exists():
             await self.remove_worktree(Worktree(path=path, clone_path=clone))
         path.parent.mkdir(parents=True, exist_ok=True)
-        await run_git(["worktree", "add", "--detach", str(path), commit], cwd=clone)
+        await run_git(
+            ["worktree", "add", "--detach", str(path), commit],
+            cwd=clone,
+            credentials=credentials,
+        )
         self._active_worktrees.add(path.resolve())
         return Worktree(path=path, clone_path=clone)
 
@@ -415,13 +434,14 @@ class RepoManager:
             with contextlib.suppress(GitError):
                 await run_git(["gc", "--auto"], cwd=clone)
 
-    async def checkout_for_build(
+    async def checkout_for_build(  # noqa: PLR0913
         self,
         project_key: str,
         worktree_id: str,
         *,
         base_commit: str,
         head_commit: str | None = None,
+        credentials: FetchCredentials | None = None,
         submodule_credentials: FetchCredentials | None = None,
     ) -> Worktree:
         """Create the build worktree: base commit, optionally merging a
@@ -429,10 +449,12 @@ class RepoManager:
         bare clone does not carry submodule objects) WITHOUT the fetch
         credentials unless explicitly opted in. Returns the worktree;
         identity is its tree hash."""
-        worktree = await self.create_worktree(project_key, worktree_id, base_commit)
+        worktree = await self.create_worktree(
+            project_key, worktree_id, base_commit, credentials
+        )
         try:
             if head_commit is not None and head_commit != base_commit:
-                await worktree.merge(head_commit)
+                await worktree.merge(head_commit, credentials)
             if (worktree.path / ".gitmodules").exists():
                 # .gitmodules is PR-controlled: with the primary repo's
                 # credentials a malicious PR could exfiltrate any other

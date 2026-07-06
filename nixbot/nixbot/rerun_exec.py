@@ -50,6 +50,7 @@ async def rerun_worktree(
         info.key,
         f"{prefix}-{build.id}",
         base_commit=build.commit_sha,
+        credentials=credentials,
     )
     try:
         yield event, worktree.path
