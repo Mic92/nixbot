@@ -353,13 +353,14 @@ async def test_build_finished_table_groups_by_status_then_alpha() -> None:
     text = poster.extras[summary_idx]["text"]
     assert text.index("`a`") < text.index("`b`") < text.index("`x`")
     assert text.index("`x`") < text.index("`y`")
-    # succeeded ranks above skipped_local despite alphabetical order.
-    assert text.index("`y`") < text.index("`s`")
+    # skipped_local attributes are omitted from the table entirely.
+    assert "`s`" not in text
 
 
 async def test_build_finished_table_omits_links_for_logless_statuses() -> None:
-    """failed_eval and skipped_local attributes never produce a log, so
-    their viewer/raw links would 404; render them without links."""
+    """failed_eval attributes never produce a log, so their viewer/raw
+    links would 404; render them without links. skipped_local rows are
+    dropped entirely."""
     reporter, poster, _ = make_reporter()
     await reporter.build_finished(
         EVENT,
@@ -387,9 +388,11 @@ async def test_build_finished_table_omits_links_for_logless_statuses() -> None:
     assert "/builds/42/logs/raw/e" not in text
     assert "/builds/42/logs/s" not in text
     assert "/builds/42/logs/raw/s" not in text
-    # Attributes still listed, just without links.
+    # failed_eval attribute still listed, just without links; readable label.
     assert "`e`" in text
-    assert "`s`" in text
+    assert "| ❌ failed eval |" in text
+    # skipped_local attribute is not listed at all.
+    assert "`s`" not in text
     # Successful attribute keeps its links.
     assert "/builds/42/logs/ok" in text
 
