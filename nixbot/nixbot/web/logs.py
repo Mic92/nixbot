@@ -614,23 +614,6 @@ class _LogRoutes:
         _, build = await self._build_or_404(request, forge, owner, name, number)
         return await _failure_summary(self.ctx, self.registry, build, tail)
 
-    async def log_toc(  # noqa: PLR0913
-        self,
-        request: Request,
-        forge: str,
-        owner: str,
-        name: str,
-        number: int,
-        attr: str,
-    ) -> dict:
-        """Per-derivation table of contents; `{format: "legacy"}` when no
-        container exists (old or running builds) so the client falls back."""
-        _, _, path = await self._resolve(request, forge, owner, name, number, attr)
-        reader = await _load_container(path)
-        if reader is None:
-            return {"format": "legacy"}
-        return {"format": "nbl1", "derivations": _toc_entries(reader)}
-
     async def log_drv_lines(  # noqa: PLR0913
         self,
         request: Request,
@@ -800,7 +783,7 @@ class _LogRoutes:
             reader = await _load_container(path)
             if reader is not None:
                 # Structured viewer: per-derivation cards render lazily
-                # from /toc + /drv/{idx}; no flat body needed.
+                # from /drv/{idx}; no flat body needed.
                 toc = _toc_entries(reader)
             elif path is not None and path.exists():
                 data = await asyncio.to_thread(read_log, path)
@@ -851,7 +834,6 @@ def create_log_router(ctx: WebContext, registry: LogRegistry) -> APIRouter:
     router.get(f"{_BASE}/logs/raw/{{attr:path}}")(routes.log_raw_text)
     router.get(f"{_BASE}/logs/{{attr}}.txt")(routes.log_raw_text_legacy)
     router.get(f"{_BASE}/logs/{{attr:path}}/stream")(routes.log_stream)
-    router.get(f"{_BASE}/logs/{{attr:path}}/toc")(routes.log_toc)
     router.get(
         f"{_BASE}/logs/{{attr:path}}/drv/{{idx}}/view", response_class=HTMLResponse
     )(routes.log_drv_viewer)

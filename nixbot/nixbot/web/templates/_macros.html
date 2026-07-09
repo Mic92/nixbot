@@ -71,7 +71,6 @@
       {%- set meta = "failed" if failed else (["built", dur] | select | join(" · ")) -%}
       {%- set fetch = (not live) and d.n > 0 -%}
       <details class="log-card{{ '' if failed else ' ok' }}"
-               data-pos="{{ d.idx }}"
                data-idx="{{ d.idx }}"
                data-n="{{ d.n }}"
                {% if open %}open{% endif %}
