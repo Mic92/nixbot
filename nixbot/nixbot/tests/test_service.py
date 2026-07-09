@@ -73,6 +73,33 @@ async def service(make_service: ServiceFactory) -> CIService:
     return service
 
 
+def capture_run_build(service: CIService) -> list[int]:
+    """Replace orchestrator.run_build with a stub recording build ids."""
+    build_ids: list[int] = []
+
+    async def fake_run_build(
+        event: Any, build: Any, worktree_path: Path, credentials: Any = None
+    ) -> None:
+        build_ids.append(build.id)
+
+    service.orchestrator.run_build = fake_run_build  # type: ignore[method-assign]
+    return build_ids
+
+
+def capture_resume(service: CIService) -> list[int]:
+    """Replace orchestrator.rerun_pending_attributes with a stub
+    recording build ids."""
+    build_ids: list[int] = []
+
+    async def fake_resume(
+        info: Any, build: Any, jobs: Any, credentials: Any = None
+    ) -> None:
+        build_ids.append(build.id)
+
+    service.orchestrator.rerun_pending_attributes = fake_resume  # type: ignore[method-assign, assignment]
+    return build_ids
+
+
 # --- pure helpers ------------------------------------------------------
 
 
@@ -232,17 +259,7 @@ async def test_restart_gitlab_mr_build_fetches_mr_refs(
             error="eval boom",
         )
 
-        reevals: list[int] = []
-
-        async def fake_run_build(
-            event: Any,
-            build: Any,
-            worktree_path: Path,
-            credentials: Any = None,
-        ) -> None:
-            reevals.append(build.id)
-
-        service.orchestrator.run_build = fake_run_build  # type: ignore[method-assign]
+        reevals = capture_run_build(service)
         await service.restart_build(build_id)
         await service.drain_work()
         await asyncio.gather(*service._tasks)  # noqa: SLF001
@@ -309,15 +326,7 @@ async def test_restart_clears_stale_error_and_warnings(
         build_id,
     )
 
-    async def fake_run_build(
-        event: Any,
-        build: Any,
-        worktree_path: Path,
-        credentials: Any = None,
-    ) -> None:
-        pass
-
-    service.orchestrator.run_build = fake_run_build  # type: ignore[method-assign]
+    capture_run_build(service)
     await service.restart_build(build_id)
     await service.drain_work()
     await asyncio.gather(*service._tasks)  # noqa: SLF001
@@ -347,17 +356,7 @@ async def test_restart_unknown_attribute_is_a_noop(
         build_id,
     )
 
-    reruns: list[int] = []
-
-    async def fake_run_build(
-        event: Any,
-        build: Any,
-        worktree_path: Path,
-        credentials: Any = None,
-    ) -> None:
-        reruns.append(build.id)
-
-    service.orchestrator.run_build = fake_run_build  # type: ignore[method-assign]
+    reruns = capture_run_build(service)
     await service.restart_attribute(build_id, "ghost")
     await service.drain_work()
     await asyncio.gather(*service._tasks)  # noqa: SLF001
@@ -389,17 +388,7 @@ async def test_restart_failed_eval_attribute_reevaluates(
         build_id,
     )
 
-    reevals: list[int] = []
-
-    async def fake_run_build(
-        event: Any,
-        build: Any,
-        worktree_path: Path,
-        credentials: Any = None,
-    ) -> None:
-        reevals.append(build.id)
-
-    service.orchestrator.run_build = fake_run_build  # type: ignore[method-assign]
+    reevals = capture_run_build(service)
     await service.restart_build(build_id)
     status = await pool.fetchval("SELECT status FROM builds WHERE id = $1", build_id)
     assert status == "pending"
@@ -488,21 +477,8 @@ async def test_restart_cancelled_mid_eval_reevaluates(
         build_id,
     )
 
-    reevals: list[int] = []
-    resumes: list[int] = []
-
-    async def fake_run_build(
-        event: Any, build: Any, worktree_path: Path, credentials: Any = None
-    ) -> None:
-        reevals.append(build.id)
-
-    async def fake_resume(
-        info: Any, build: Any, jobs: Any, credentials: Any = None
-    ) -> None:
-        resumes.append(build.id)
-
-    service.orchestrator.run_build = fake_run_build  # type: ignore[method-assign]
-    service.orchestrator.rerun_pending_attributes = fake_resume  # type: ignore[method-assign, assignment]
+    reevals = capture_run_build(service)
+    resumes = capture_resume(service)
     await restart_dispatch.rerun(service, build_id)
 
     assert resumes == []
@@ -828,17 +804,7 @@ async def test_startup_reevaluates_interrupted_eval(
     project_id = await seed_project(pool, str(repo))
     build_id = await insert_build(pool, project_id, commit_sha=sha, status="evaluating")
 
-    reevals: list[int] = []
-
-    async def fake_run_build(
-        event: Any,
-        build: Any,
-        worktree_path: Path,
-        credentials: Any = None,
-    ) -> None:
-        reevals.append(build.id)
-
-    service.orchestrator.run_build = fake_run_build  # type: ignore[method-assign]
+    reevals = capture_run_build(service)
     await _startup(service)
     await service.drain_work()
     await asyncio.gather(*service._tasks)  # noqa: SLF001
@@ -867,24 +833,8 @@ async def test_rerun_of_interrupted_eval_reevaluates(
         build_id,
     )
 
-    reevals: list[int] = []
-    resumes: list[int] = []
-
-    async def fake_run_build(
-        event: Any,
-        build: Any,
-        worktree_path: Path,
-        credentials: Any = None,
-    ) -> None:
-        reevals.append(build.id)
-
-    async def fake_resume(
-        info: Any, build: Any, jobs: Any, credentials: Any = None
-    ) -> None:
-        resumes.append(build.id)
-
-    service.orchestrator.run_build = fake_run_build  # type: ignore[method-assign]
-    service.orchestrator.rerun_pending_attributes = fake_resume  # type: ignore[method-assign, assignment]
+    reevals = capture_run_build(service)
+    resumes = capture_resume(service)
     await restart_dispatch.rerun(service, build_id)
 
     assert resumes == []
@@ -914,23 +864,14 @@ async def test_rerun_resumes_building_rows_and_keeps_finished(
         build_id,
     )
 
-    reevals: list[int] = []
+    reevals = capture_run_build(service)
     resumed_attrs: list[str] = []
-
-    async def fake_run_build(
-        event: Any,
-        build: Any,
-        worktree_path: Path,
-        credentials: Any = None,
-    ) -> None:
-        reevals.append(build.id)
 
     async def fake_resume(
         info: Any, build: Any, jobs: Any, credentials: Any = None
     ) -> None:
         resumed_attrs.extend(job.attr for job in jobs)
 
-    service.orchestrator.run_build = fake_run_build  # type: ignore[method-assign]
     service.orchestrator.rerun_pending_attributes = fake_resume  # type: ignore[method-assign, assignment]
     await restart_dispatch.rerun(service, build_id)
 
@@ -961,24 +902,8 @@ async def test_rerun_reevaluates_when_drv_paths_were_garbage_collected(
         build_id,
     )
 
-    reevals: list[int] = []
-    resumes: list[int] = []
-
-    async def fake_run_build(
-        event: Any,
-        build: Any,
-        worktree_path: Path,
-        credentials: Any = None,
-    ) -> None:
-        reevals.append(build.id)
-
-    async def fake_resume(
-        info: Any, build: Any, jobs: Any, credentials: Any = None
-    ) -> None:
-        resumes.append(build.id)
-
-    service.orchestrator.run_build = fake_run_build  # type: ignore[method-assign]
-    service.orchestrator.rerun_pending_attributes = fake_resume  # type: ignore[method-assign, assignment]
+    reevals = capture_run_build(service)
+    resumes = capture_resume(service)
     # The real path checker: /nix/store/gcd.drv does not exist.
     await restart_dispatch.rerun(service, build_id)
 
