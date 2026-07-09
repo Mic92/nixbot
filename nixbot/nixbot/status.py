@@ -808,7 +808,8 @@ def _status_rank(status: str | None) -> int:
 
 def _status_cell(status: str) -> str:
     icon = _STATUS_ICONS.get(status)
-    return f"{icon} {status}" if icon else status
+    label = status.replace("_", " ")
+    return f"{icon} {label}" if icon else label
 
 
 def _build_plan(
@@ -824,6 +825,8 @@ def _build_plan(
         header = f"Building {len(attrs)} attribute(s):"
         head, sep, trunc = "| attribute | raw |", "| --- | --- |", "| [all]({0}) |"
     else:
+        # Locally-skipped attributes were not built here; drop them.
+        attrs = [a for a in attrs if statuses.get(a) != "skipped_local"]
         # Group by status (see _STATUS_ORDER), then alphabetically within
         # each status.
         attrs = sorted(
