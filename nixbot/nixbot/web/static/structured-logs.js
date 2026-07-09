@@ -144,15 +144,40 @@
     const iconState = (s) =>
       s === "failed" ? "failed" : s === "running" ? "running" : "succeeded";
 
+    // Cards live in the status groups the template renders (Failures /
+    // Building / Succeeded panel), mirroring the finished page.
+    /** @param {string} s @returns {HTMLElement} */
+    const groupFor = (s) =>
+      must(
+        s === "failed"
+          ? "failed-cards"
+          : s === "running"
+          ? "building-cards"
+          : "succeeded-list",
+      );
+
+    function updateGroups() {
+      for (const id of ["failed", "building", "succeeded"]) {
+        const group = must(`group-${id}`);
+        const n = pick(group, ".group-cards").childElementCount;
+        group.hidden = n === 0;
+        for (const c of group.querySelectorAll(".count")) {
+          c.textContent = `${n}`;
+        }
+      }
+    }
+
     /** Insert the server-rendered card shell (same drv_card macro as the
      * finished page).
      * @param {Drv} d @returns {HTMLDetailsElement} */
     function ensureCard(d) {
       const existing = cardOf.get(d.idx);
       if (existing) return existing;
-      list.insertAdjacentHTML("beforeend", d.card ?? "");
-      const el = /** @type {HTMLDetailsElement} */ (list.lastElementChild);
+      const target = groupFor(d.status);
+      target.insertAdjacentHTML("beforeend", d.card ?? "");
+      const el = /** @type {HTMLDetailsElement} */ (target.lastElementChild);
       cardOf.set(d.idx, el);
+      updateGroups();
       return el;
     }
 
@@ -161,9 +186,14 @@
       const el = ensureCard(d);
       pick(el, ".status-icon").className = "status-icon " + iconState(d.status);
       el.classList.toggle("ok", d.status !== "failed");
-      pick(el, ".meta").textContent = d.status === "running"
+      pick(el, ".meta-status").textContent = d.status === "running"
         ? "building…"
         : d.status;
+      const target = groupFor(d.status);
+      if (el.parentElement !== target) {
+        target.appendChild(el);
+        updateGroups();
+      }
       return el;
     }
 
@@ -213,9 +243,10 @@
 
     /** @param {Drv[]} state */
     function reset(state) {
-      list.innerHTML = "";
+      for (const el of list.querySelectorAll(".log-card")) el.remove();
       byIdx.clear();
       cardOf.clear();
+      updateGroups();
       for (const e of state) {
         const d = {
           idx: e.idx,

@@ -654,6 +654,56 @@ class _LogRoutes:
         html = await asyncio.to_thread(render_drv_window, reader, idx, base, start, end)
         return HTMLResponse(html)
 
+    async def log_drv_viewer(  # noqa: PLR0913
+        self,
+        request: Request,
+        forge: str,
+        owner: str,
+        name: str,
+        number: int,
+        attr: str,
+        idx: int,
+    ) -> HTMLResponse:
+        """Standalone, shareable page for one derivation's log. The
+        embedded card view caps its height; this page shows the same
+        rows full-width with working line permalinks. While the attribute
+        is still running the rows come from the live capture (the client
+        follows the structured stream); once finished, from the container.
+        Capture and container assign indices in the same registration
+        order, so a link shared during the build stays valid after it."""
+        project, build, path = await self._resolve(
+            request, forge, owner, name, number, attr
+        )
+        base = request.url.path.removesuffix("/view").rsplit("/drv/", 1)[0]
+        writer = self.registry.get(build["id"], attr)
+        capture = writer.capture if writer else None
+        if capture is not None:
+            entry = next((e for e in capture.state() if e["idx"] == idx), None)
+            if entry is None:
+                raise HTTPException(status_code=404)
+            content = render_rows(
+                idx, 1, entry["lines"], phases=_phase_at(entry["ph"])
+            )[0]
+            live = True
+        else:
+            reader = await _load_container(path)
+            if reader is None or not (0 <= idx < len(reader)):
+                raise HTTPException(status_code=404)
+            entry = reader.entry(idx)
+            content = await asyncio.to_thread(render_drv_window, reader, idx, base)
+            live = False
+        return await self.ctx.render(
+            "drv.html",
+            request=request,
+            project=project,
+            build=build,
+            attr=attr,
+            idx=idx,
+            live=live,
+            drv={k: entry[k] for k in ("name", "status", "n", "t0", "t1")},
+            content=content,
+        )
+
     async def log_drv_raw(  # noqa: PLR0913
         self,
         request: Request,
@@ -802,6 +852,9 @@ def create_log_router(ctx: WebContext, registry: LogRegistry) -> APIRouter:
     router.get(f"{_BASE}/logs/{{attr}}.txt")(routes.log_raw_text_legacy)
     router.get(f"{_BASE}/logs/{{attr:path}}/stream")(routes.log_stream)
     router.get(f"{_BASE}/logs/{{attr:path}}/toc")(routes.log_toc)
+    router.get(
+        f"{_BASE}/logs/{{attr:path}}/drv/{{idx}}/view", response_class=HTMLResponse
+    )(routes.log_drv_viewer)
     router.get(f"{_BASE}/logs/{{attr:path}}/drv/{{idx}}/raw")(routes.log_drv_raw)
     router.get(f"{_BASE}/logs/{{attr:path}}/drv/{{idx}}", response_class=HTMLResponse)(
         routes.log_drv_lines
@@ -894,7 +947,11 @@ async def _structured_events(
     so a later line delta continues the same color."""
 
     def card(d: dict) -> str:
-        return str(drv_card(d, base, open=d["status"] in ("running", "failed")))
+        # live=True: rows arrive over the SSE, so no htmx fetch attrs and
+        # no raw link (the container behind it does not exist yet).
+        return str(
+            drv_card(d, base, open=d["status"] in ("running", "failed"), live=True)
+        )
 
     if capture is None:
         yield "event: done\ndata: \n\n"

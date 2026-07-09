@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% from "_macros.html" import status_icon %}
+{% block title %}
+  {{ drv.name }} log
+{% endblock title %}
+{% block body %}
+  <main id="main">
+    <section class="content">
+      <div class="build-header">
+        <h2>
+          {{ status_icon(drv.status if drv.status in ("failed", "running") else "succeeded") }}
+          <code>{{ drv.name }}</code>
+          <small>
+            <a href="{{ build_path(project, build.number) }}/logs/{{ attr | urlencode }}"><code>{{ attr }}</code></a>
+            · <a href="{{ build_path(project, build.number) }}">build #{{ build.number }}</a>
+            · <a href="{{ build_path(project, build.number) }}/logs/{{ attr | urlencode }}/drv/{{ idx }}/raw">raw</a>
+          </small>
+        </h2>
+      </div>
+      {% if drv.n == 0 and not live %}
+        <p class="muted">no output</p>
+      {% else %}
+        <div class="drv-page">
+          <div class="log-lines" id="drv-lines">{{ content | safe }}</div>
+        </div>
+      {% endif %}
+    </section>
+  </main>
+  {% if live %}
+    {# Follow the running derivation over the attribute's structured
+       stream, filtered to this idx; a terminal status reloads into the
+       finished (container-backed) page. #}
+    {% set stream_url = build_path(project, build.number) ~ "/logs/" ~ (attr | urlencode) ~ "/stream?format=structured" %}
+    <script>
+      const IDX = {{ idx | tojson }};
+      const vp = document.getElementById("drv-lines");
+      const src = new EventSource({{ stream_url | tojson }});
+      const append = (html) => {
+        if (!html) return;
+        const follow = innerHeight + scrollY >= document.body.scrollHeight - 40;
+        vp.insertAdjacentHTML("beforeend", html);
+        if (follow) scrollTo(0, document.body.scrollHeight);
+      };
+      src.addEventListener("state", (ev) => {
+        const e = JSON.parse(ev.data).find((d) => d.idx === IDX);
+        vp.innerHTML = "";
+        append(e?.html ?? "");
+      });
+      src.addEventListener("delta", (ev) => {
+        const d = JSON.parse(ev.data);
+        if (d.idx !== IDX) return;
+        if (d.t === "line" || d.t === "phase") append(d.html);
+        else if (d.t === "status" && d.status !== "running") location.reload();
+      });
+      src.addEventListener("done", () => {
+        src.close();
+        location.reload();
+      });
+    </script>
+  {% endif %}
+{% endblock body %}
