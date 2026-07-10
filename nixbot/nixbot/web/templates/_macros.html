@@ -71,7 +71,6 @@
       {%- set meta = "failed" if failed else (["built", dur] | select | join(" · ")) -%}
       {%- set fetch = (not live) and d.n > 0 -%}
       <details class="log-card{{ '' if failed else ' ok' }}"
-               data-pos="{{ d.idx }}"
                data-idx="{{ d.idx }}"
                data-n="{{ d.n }}"
                {% if open %}open{% endif %}
@@ -80,31 +79,37 @@
           <span class="status-icon {{ state }}" aria-hidden="true"></span>
           <span class="card-text">
             <span class="card-name">{{ d.name }}</span>
-            <span class="meta">{{ meta }}
-              {% if d.n > 0 %}
-                · <a href="{{ base }}/drv/{{ d.idx }}/raw"
+            {# .meta-status is what the live JS rewrites; the links stay. #}
+            <span class="meta"><span class="meta-status">{{ meta }}</span>
+            {% if live or d.n > 0 %}
+              · <a href="{{ base }}/drv/{{ d.idx }}/view"
+    class="raw"
+    onclick="event.stopPropagation()">open&nbsp;↗</a>
+            {% endif %}
+            {% if not live and d.n > 0 %}
+              · <a href="{{ base }}/drv/{{ d.idx }}/raw"
     class="raw"
     onclick="event.stopPropagation()">raw&nbsp;↗</a>
-              {% endif %}
-            </span>
+            {% endif %}
           </span>
-        </summary>
-        <div class="card-body">
-          {% if d.n == 0 and d.status != "running" %}
-            <p class="log-empty">no output</p>
-          {% else %}
-            <div class="log-lines" aria-busy="true"></div>
-          {% endif %}
-        </div>
-      </details>
-    {%- endmacro %}
-    {% macro error_row(error, colspan=3) -%}
-      <tr>
-        <td colspan="{{ colspan }}">
-          <details class="error">
-            <summary>{{ error | plain | excerpt(160) }}</summary>
-            <pre class="error">{{ error | ansi }}</pre>
-          </details>
-        </td>
-      </tr>
-    {%- endmacro %}
+        </span>
+      </summary>
+      <div class="card-body">
+        {% if d.n == 0 and d.status != "running" %}
+          <p class="log-empty">no output</p>
+        {% else %}
+          <div class="log-lines" aria-busy="true"></div>
+        {% endif %}
+      </div>
+    </details>
+  {%- endmacro %}
+  {% macro error_row(error, colspan=3) -%}
+    <tr>
+      <td colspan="{{ colspan }}">
+        <details class="error">
+          <summary>{{ error | plain | excerpt(160) }}</summary>
+          <pre class="error">{{ error | ansi }}</pre>
+        </details>
+      </td>
+    </tr>
+  {%- endmacro %}

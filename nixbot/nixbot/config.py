@@ -15,7 +15,7 @@ import re
 from collections.abc import Callable, Mapping  # noqa: TC003
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field, GetCoreSchemaHandler, field_validator
 from pydantic_core import CoreSchema, core_schema
@@ -71,62 +71,55 @@ class Interpolate(BaseModel):
         super().__init__(nix_type="interpolate", value=value)
 
 
-class GiteaConfig(BaseModel):
-    instance_url: str
+class TokenForgeConfig(BaseModel):
+    """Shared token/OAuth/SSH options for token-authenticated forges
+    (Gitea, GitLab); subclasses only differ in defaults and the config
+    key used in error messages."""
+
+    _config_key: ClassVar[str]
+
     filters: RepoFilters = Field(default_factory=RepoFilters)
 
+    token_file: Path
+
+    oauth_id: str | None = None
+    oauth_secret_file: Path | None = None
+
+    ssh_private_key_file: Path | None = None
+    ssh_known_hosts_file: Path | None = None
+
+    @property
+    def token(self) -> str:
+        return read_secret_file(self.token_file)
+
+    @property
+    def oauth_secret(self) -> str:
+        if self.oauth_secret_file is None:
+            msg = (
+                f"{self._config_key}.oauth_id is set but "
+                f"{self._config_key}.oauth_secret_file is missing"
+            )
+            raise ConfigError(msg)
+        return read_secret_file(self.oauth_secret_file)
+
+    model_config = ConfigDict(
+        extra="forbid",
+        ignored_types=(property,),
+    )
+
+
+class GiteaConfig(TokenForgeConfig):
+    _config_key: ClassVar[str] = "gitea"
+
+    instance_url: str
     token_file: Path = Field(default=Path("gitea-token"))
 
-    oauth_id: str | None = None
-    oauth_secret_file: Path | None = None
 
-    ssh_private_key_file: Path | None = None
-    ssh_known_hosts_file: Path | None = None
+class GitlabConfig(TokenForgeConfig):
+    _config_key: ClassVar[str] = "gitlab"
 
-    @property
-    def token(self) -> str:
-        return read_secret_file(self.token_file)
-
-    @property
-    def oauth_secret(self) -> str:
-        if self.oauth_secret_file is None:
-            msg = "gitea.oauth_id is set but gitea.oauth_secret_file is missing"
-            raise ConfigError(msg)
-        return read_secret_file(self.oauth_secret_file)
-
-    model_config = ConfigDict(
-        extra="forbid",
-        ignored_types=(property,),
-    )
-
-
-class GitlabConfig(BaseModel):
     instance_url: str = "https://gitlab.com"
-    filters: RepoFilters = Field(default_factory=RepoFilters)
-
     token_file: Path = Field(default=Path("gitlab-token"))
-
-    oauth_id: str | None = None
-    oauth_secret_file: Path | None = None
-
-    ssh_private_key_file: Path | None = None
-    ssh_known_hosts_file: Path | None = None
-
-    @property
-    def token(self) -> str:
-        return read_secret_file(self.token_file)
-
-    @property
-    def oauth_secret(self) -> str:
-        if self.oauth_secret_file is None:
-            msg = "gitlab.oauth_id is set but gitlab.oauth_secret_file is missing"
-            raise ConfigError(msg)
-        return read_secret_file(self.oauth_secret_file)
-
-    model_config = ConfigDict(
-        extra="forbid",
-        ignored_types=(property,),
-    )
 
 
 class PullBasedRepository(BaseModel):

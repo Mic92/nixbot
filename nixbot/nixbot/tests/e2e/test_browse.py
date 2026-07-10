@@ -45,7 +45,7 @@ def test_structured_log_viewer(page: Page) -> None:
     page.goto("/repos/github/acme/widget/builds/2/logs/x86_64-linux.bad")
     # Failing derivation card is open with inline phase dividers; log rows
     # load lazily from /drv/{idx}.
-    card = page.locator('.log-card[data-pos="0"]')
+    card = page.locator('.log-card[data-idx="0"]')
     card.get_by_text("hello-2.12").wait_for()
     assert card.get_attribute("open") is not None
     card.locator(".phase-sep").first.wait_for()

@@ -1,0 +1,3 @@
+{
+  "ignore": ["**/nixbot/db_gen/**"]
+}

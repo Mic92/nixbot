@@ -756,14 +756,19 @@ def test_structured_log_endpoints(client: WebHarness, tmp_path: Path) -> None:
     base = "/repos/github/acme/widget/builds/2"
     attr = "x86_64-linux.bad"
 
-    toc = client.get(f"{base}/logs/{attr}/toc").json()
-    assert toc["format"] == "nbl1"
-    assert toc["derivations"][0]["name"] == "qtbase-5.0"
-    assert toc["derivations"][0]["ph"] == [["build", 0]]
-
     rows = client.get(f"{base}/logs/{attr}/drv/0").text
     assert 'id="d0-L1"' in rows
     assert "CC main.o" in rows
+
+    # Standalone, shareable page for one derivation, linked from the viewer.
+    viewer = client.get(f"{base}/logs/{attr}").text
+    assert f"/logs/{attr}/drv/0/view" in viewer
+    page = client.get(f"{base}/logs/{attr}/drv/0/view")
+    assert page.status_code == 200
+    assert "qtbase-5.0" in page.text
+    assert 'id="d0-L1"' in page.text
+    assert f"/logs/{attr}/drv/0/raw" in page.text
+    assert client.get(f"{base}/logs/{attr}/drv/9/view").status_code == 404
 
     # Per-derivation raw: plain text, ANSI stripped.
     raw = client.get(f"{base}/logs/{attr}/drv/0/raw").text
@@ -772,7 +777,6 @@ def test_structured_log_endpoints(client: WebHarness, tmp_path: Path) -> None:
     assert "\x1b" not in raw
     # A zero-line derivation still has a valid (empty) raw endpoint.
     assert client.get(f"{base}/logs/{attr}/drv/1/raw").text == ""
-    assert toc["derivations"][1]["n"] == 0
     assert client.get(f"{base}/logs/{attr}/drv/9/raw").status_code == 404
 
     # Search now returns rendered HTML the client swaps in.
@@ -824,14 +828,6 @@ def test_structured_log_window_caps_huge_derivation(
     assert 'id="d0-L4000"' in chunk
     assert "line03999" in chunk
     assert "start=4000" in chunk  # next marker for the remaining gap
-
-
-def test_log_toc_legacy_without_container(client: WebHarness, tmp_path: Path) -> None:
-    seed_log(client, tmp_path)
-    toc = client.get(
-        "/repos/github/acme/widget/builds/2/logs/x86_64-linux.bad/toc"
-    ).json()
-    assert toc["format"] == "legacy"
 
 
 def test_attr_named_dot_txt_not_shadowed_by_raw_route(
@@ -1161,6 +1157,12 @@ def test_structured_live_stream(client: WebHarness, tmp_path: Path) -> None:
         try:
             base = "/repos/github/acme/widget/builds/3/logs/x86_64-linux.ok"
             viewer = (await client.http.get(base)).text
+            # The shareable drv page also serves the running attribute,
+            # rendered from the live capture.
+            drv_page = (await client.http.get(f"{base}/drv/1/view")).text
+            assert "qtbase-5.0" in drv_page
+            assert "CC main.o" in drv_page
+            assert "format=structured" in drv_page  # follows the stream
             task = asyncio.ensure_future(
                 client.http.get(f"{base}/stream?format=structured")
             )
@@ -1176,6 +1178,13 @@ def test_structured_live_stream(client: WebHarness, tmp_path: Path) -> None:
     viewer, stream = client.loop.run_until_complete(run())
     assert "const LIVE = true" in viewer
     assert "format=structured" in viewer  # data-stream on #drv-list
+    # Live page groups cards by status like the finished view.
+    assert 'id="failed-cards"' in viewer
+    assert 'id="building-cards"' in viewer
+    assert 'id="succeeded-list"' in viewer
+    # Live cards link the drv page but not raw (container-backed only).
+    assert "/drv/1/view" in stream
+    assert "/drv/1/raw" not in stream
     assert "event: state" in stream
     assert '"name":"qtbase-5.0"' in stream  # snapshot burst
     # Rows are rendered server-side (ANSI applied), not shipped as raw text.

@@ -1004,6 +1004,14 @@ details.webhook-setup summary {
 		max-height: 14rem;
 	}
 }
+/* Standalone derivation page (drv.html): the whole page is the log,
+   so drop the embedded-card height cap and let the window scroll. */
+.drv-page .log-lines {
+	max-height: none;
+	overflow: visible;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+}
 /* Whole log stays in the DOM (Ctrl-F, anchors, selection, a11y);
    content-visibility skips off-screen layout/paint. Fixed 20px row +
    matching contain-intrinsic-size keeps the scrollbar honest and lets

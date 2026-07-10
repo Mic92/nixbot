@@ -59,6 +59,37 @@
         {% endif %}
         <div id="drv-list"
              {% if live_structured %}data-stream="{{ build_path(project, build.number) }}/logs/{{ attr | urlencode }}/stream?format=structured"{% endif %}>
+          {% if live_structured %}
+            {# Status groups matching the finished page; the JS moves
+               cards between them on status deltas. #}
+            <div class="live-group" id="group-failed" hidden>
+              <h2 class="section">
+                Failures (<span class="count">0</span>)
+              </h2>
+              <div class="group-cards" id="failed-cards"></div>
+            </div>
+            <div class="live-group" id="group-building" hidden>
+              <h2 class="section">
+                Building (<span class="count">0</span>)
+              </h2>
+              <div class="group-cards" id="building-cards"></div>
+            </div>
+            <div class="live-group" id="group-succeeded" hidden>
+              <h2 class="section">
+                Succeeded (<span class="count">0</span>)
+              </h2>
+              <details class="succeeded-panel" id="succeeded-panel">
+                <summary>
+                  <span class="status-icon succeeded" aria-hidden="true"></span>
+                  <span class="card-text">
+                    <span class="card-name"><span class="count">0</span> built</span>
+                    <span class="meta browse-hint"></span>
+                  </span>
+                </summary>
+                <div class="group-cards" id="succeeded-list"></div>
+              </details>
+            </div>
+          {% endif %}
           {% if toc %}
             {% set base = build_path(project, build.number) ~ "/logs/" ~ (attr | urlencode) %}
             {% set failed = toc | selectattr("status", "equalto", "failed") | list %}

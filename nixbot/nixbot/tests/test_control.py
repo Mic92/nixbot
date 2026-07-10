@@ -16,7 +16,6 @@ import pytest
 from nixbot.api_tokens import ApiTokenStore
 from nixbot.auth import AuthzConfig, User
 from nixbot.bootstrap import build_service
-from nixbot.config import Config
 from nixbot.db_gen import builds as builds_q
 from nixbot.events import BuildResult, ChangeEvent, NullStatusReporter
 from nixbot.executor import attribute_log_path
@@ -40,6 +39,7 @@ from .support import (
     db_pool,
     insert_build,
     insert_project,
+    make_config,
     web_harness,
 )
 from .test_visibility import FakeFetcher
@@ -549,12 +549,7 @@ def test_api_token_controls_build(harness: WebHarness) -> None:
 
 
 async def test_build_service_composition(postgres_dsn: str, tmp_path: Path) -> None:
-    config = Config(
-        db_url=postgres_dsn,
-        build_systems=["x86_64-linux"],
-        url="http://ci.test",
-        state_dir=tmp_path / "state",
-    )
+    config = make_config(postgres_dsn, tmp_path / "state")
     service, app = await build_service(config)
     try:
         async with httpx.AsyncClient(
@@ -578,12 +573,7 @@ async def test_build_service_composition(postgres_dsn: str, tmp_path: Path) -> N
 async def test_restart_removes_stale_logs(postgres_dsn: str, tmp_path: Path) -> None:
     """A restart drops the previous run's log metadata and on-disk file
     at reset time, so the pending row does not show stale output."""
-    config = Config(
-        db_url=postgres_dsn,
-        build_systems=["x86_64-linux"],
-        url="http://ci.test",
-        state_dir=tmp_path / "state",
-    )
+    config = make_config(postgres_dsn, tmp_path / "state")
     service, _app = await build_service(config)
     pool = service.pool
     try:
@@ -616,12 +606,7 @@ async def test_restart_removes_stale_logs(postgres_dsn: str, tmp_path: Path) -> 
 async def test_restart_clears_failed_cache_immediately(
     postgres_dsn: str, tmp_path: Path
 ) -> None:
-    config = Config(
-        db_url=postgres_dsn,
-        build_systems=["x86_64-linux"],
-        url="http://ci.test",
-        state_dir=tmp_path / "state",
-    )
+    config = make_config(postgres_dsn, tmp_path / "state")
     service, _app = await build_service(config)
     pool = service.pool
     try:
@@ -756,12 +741,7 @@ async def test_report_retry(
     gives up after MAX_REPORT_ATTEMPTS instead of looping."""
     monkeypatch.setattr("nixbot.service.REPORT_BACKOFF_SECONDS", 0)
 
-    config = Config(
-        db_url=postgres_dsn,
-        build_systems=["x86_64-linux"],
-        url="http://ci.test",
-        state_dir=tmp_path / "state",
-    )
+    config = make_config(postgres_dsn, tmp_path / "state")
     service, _app = await build_service(config)
     pool = service.pool
     try:
@@ -825,12 +805,7 @@ async def test_effect_item_setup_failure_settles_row(
     """A fetch/checkout failure in an effect item must not leave the
     row pending forever."""
 
-    config = Config(
-        db_url=postgres_dsn,
-        build_systems=["x86_64-linux"],
-        url="http://ci.test",
-        state_dir=tmp_path / "state",
-    )
+    config = make_config(postgres_dsn, tmp_path / "state")
     service, _app = await build_service(config)
     pool = service.pool
     try:
@@ -868,12 +843,7 @@ async def test_restart_attribute_posts_pending(
 ) -> None:
     """Re-run on the forge must flip the check to pending immediately,
     not only when the async rebuild finishes."""
-    config = Config(
-        db_url=postgres_dsn,
-        build_systems=["x86_64-linux"],
-        url="http://ci.test",
-        state_dir=tmp_path / "state",
-    )
+    config = make_config(postgres_dsn, tmp_path / "state")
     service, _app = await build_service(config)
     pool = service.pool
     try:
@@ -911,12 +881,7 @@ async def test_recovery_reports_interrupted_effects(
     """An effect left running by a crash is settled failed but never
     re-runs; recovery must post that failure so the check run does not
     stay pending forever (issue #58)."""
-    config = Config(
-        db_url=postgres_dsn,
-        build_systems=["x86_64-linux"],
-        url="http://ci.test",
-        state_dir=tmp_path / "state",
-    )
+    config = make_config(postgres_dsn, tmp_path / "state")
     service, _app = await build_service(config)
     pool = service.pool
     try:
@@ -971,12 +936,7 @@ async def test_recovery_reports_interrupted_effects(
 async def test_work_dispatch(postgres_dsn: str, tmp_path: Path) -> None:
     """The dispatcher reconstructs payloads and fails unknown kinds."""
 
-    config = Config(
-        db_url=postgres_dsn,
-        build_systems=["x86_64-linux"],
-        url="http://ci.test",
-        state_dir=tmp_path / "state",
-    )
+    config = make_config(postgres_dsn, tmp_path / "state")
     service, _app = await build_service(config)
     pool = service.pool
     try:
@@ -1014,12 +974,7 @@ async def test_restart_resets_effects(postgres_dsn: str, tmp_path: Path) -> None
     """A full restart re-runs effects: clear the started-flag and the
     previous run's rows, or the page keeps showing stale results."""
 
-    config = Config(
-        db_url=postgres_dsn,
-        build_systems=["x86_64-linux"],
-        url="http://ci.test",
-        state_dir=tmp_path / "state",
-    )
+    config = make_config(postgres_dsn, tmp_path / "state")
     service, _app = await build_service(config)
     pool = service.pool
     try:
