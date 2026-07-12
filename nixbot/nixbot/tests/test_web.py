@@ -986,6 +986,29 @@ def test_log_viewer_unavailable_for_logless_status(client: WebHarness) -> None:
         client.loop.run_until_complete(restore())
 
 
+def test_eval_error_served_like_build_log(client: WebHarness) -> None:
+    """failed_eval attributes have no build log; the viewer and raw
+    routes serve the stored eval trace with the same UI as build logs."""
+    build_page = client.get("/repos/github/acme/widget/builds/2")
+    assert "/builds/2/logs/x86_64-linux.evalfail" in build_page.text
+
+    viewer = client.get("/repos/github/acme/widget/builds/2/logs/x86_64-linux.evalfail")
+    assert viewer.status_code == 200
+    assert "undefined variable" in viewer.text
+    # Line anchors and ANSI colors, same as build logs.
+    assert 'id="L1"' in viewer.text
+    assert "ansi-red" in viewer.text
+    assert "\x1b" not in viewer.text
+    assert "/logs/raw/x86_64-linux.evalfail" in viewer.text
+
+    raw = client.get(
+        "/repos/github/acme/widget/builds/2/logs/raw/x86_64-linux.evalfail"
+    )
+    assert raw.status_code == 200
+    assert "undefined variable 'openssl_1_1'" in raw.text
+    assert "\x1b" not in raw.text
+
+
 # --- JSON API ----------------------------------------------------------
 
 

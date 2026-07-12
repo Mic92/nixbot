@@ -427,6 +427,12 @@ class _LogRoutes:
         _, build, path = await self._resolve(request, forge, owner, name, number, attr)
         text = await _log_text(self.registry, build, attr, path)
         if text is None:
+            # No build log (e.g. failed_eval): fall back to the stored
+            # eval error so raw links work for every failure status.
+            text = await gen.attribute_error(
+                self.ctx.pool, build_id=build["id"], attr=attr
+            )
+        if text is None:
             raise HTTPException(status_code=404)
         if tail:
             return PlainTextResponse(
@@ -795,7 +801,15 @@ class _LogRoutes:
                 # log exists; show a waiting page instead of a 404.
                 waiting = True
             elif attr_status in NO_LOG_STATUSES:
-                unavailable = True
+                # No build log, but eval failures carry a trace: show it
+                # in the same viewer (line anchors, raw link) as build logs.
+                error = await gen.attribute_error(
+                    self.ctx.pool, build_id=build["id"], attr=attr
+                )
+                if error:
+                    content = await asyncio.to_thread(render_log_lines, error)
+                else:
+                    unavailable = True
             else:
                 raise HTTPException(status_code=404)
         prev_number, next_number = await self.ctx.queries.attribute_neighbors(

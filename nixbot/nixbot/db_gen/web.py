@@ -17,6 +17,7 @@ __all__: collections.abc.Sequence[str] = (
     "WebQueueRow",
     "WebRecentBuildsRow",
     "WebRepoOverviewRow",
+    "attribute_error",
     "attribute_status",
     "metrics_attribute_counts",
     "metrics_build_counts",
@@ -202,6 +203,10 @@ class WebRepoOverviewRow:
     median_secs: float
     pass_rate: int
 
+
+ATTRIBUTE_ERROR: typing.Final[str] = """-- name: AttributeError :one
+SELECT error FROM build_attributes WHERE build_id = $1 AND attr = $2
+"""
 
 ATTRIBUTE_STATUS: typing.Final[str] = """-- name: AttributeStatus :one
 SELECT status FROM build_attributes WHERE build_id = $1 AND attr = $2
@@ -436,6 +441,13 @@ class QueryResults(typing.Generic[T]):
             self._iterator = None
             raise
         return self._decode_hook(record)
+
+
+async def attribute_error(conn: ConnectionLike, *, build_id: int, attr: str) -> str | None:
+    row = await conn.fetchrow(ATTRIBUTE_ERROR, build_id, attr)
+    if row is None:
+        return None
+    return row[0]
 
 
 async def attribute_status(conn: ConnectionLike, *, build_id: int, attr: str) -> str | None:

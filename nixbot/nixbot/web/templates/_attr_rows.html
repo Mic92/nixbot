@@ -3,7 +3,7 @@
   <tr data-attr="{{ a.attr | lower }}">
     <td class="attr-status">{{ status_icon(a.status) }}</td>
     <td class="attr-name">
-      {% if a.log_size or a.status in RUNNING_STATUSES %}
+      {% if a.log_size or a.status in RUNNING_STATUSES or (a.status == "failed_eval" and a.error) %}
         <a href="{{ build_path(project, build.number) }}/logs/{{ a.attr | urlencode }}"><code>{{ a.attr }}</code></a>
       {% else %}
         <code>{{ a.attr }}</code>
