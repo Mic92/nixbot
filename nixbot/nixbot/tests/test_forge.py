@@ -467,6 +467,28 @@ async def test_legacy_import_scopes_topics_per_forge(pool: asyncpg.Pool) -> None
     assert "cross" not in enabled
 
 
+async def test_prune_missing_disabled_projects(pool: asyncpg.Pool) -> None:
+    """Disabled repos missing from discovery are pruned; enabled and
+    pull-based rows survive."""
+
+    await pool.execute("TRUNCATE projects CASCADE")
+    store = RepoStore(pool)
+    kept_enabled = repo("acme", "kept-enabled")
+    gone_disabled = repo("acme", "gone-disabled")
+    still_there = repo("acme", "still-there")
+    await store.sync_discovered([kept_enabled, gone_disabled, still_there])
+    await store.sync_pull_based([("pull/one", "https://x/one.git", "main")])
+    enabled_row = await store.by_forge_id("github", kept_enabled.forge_repo_id)
+    assert enabled_row is not None
+    await store.set_enabled(enabled_row.id, enabled=True)
+
+    # Discovery no longer sees kept-enabled and gone-disabled.
+    await store.prune_missing_disabled("github", [still_there.forge_repo_id])
+
+    names = {r["name"] for r in await pool.fetch("SELECT name FROM projects")}
+    assert names == {"kept-enabled", "still-there", "one"}
+
+
 async def test_project_store_sync_skips_unchanged_rows(pool: asyncpg.Pool) -> None:
     """Re-syncing identical repo metadata must not rewrite rows:
     discovery runs every poll cycle over every repo, and unconditional

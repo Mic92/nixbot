@@ -77,13 +77,14 @@ async def discover_once(s: CIService) -> None:
                 for repo in s.config.pull_based.repositories.values()
             ]
         )
-    repos = []
+    # None marks a failed forge: its rows are neither synced nor pruned.
+    by_forge: dict[str, list[DiscoveredRepo] | None] = {}
     # The topic is only a legacy import aid (one-shot enablement in
     # sync_discovered); it must not hard-filter discovery, otherwise
     # untagged repos never appear in the admin UI.
     if s.github is not None and s.config.github is not None:
         await _warn_github_webhook_misconfig(s, s.github)
-        repos += await _discover_forge(
+        by_forge["github"] = await _discover_forge(
             "github", s.github.discover_repos(), s.config.github.filters
         )
     if s.gitea is not None and s.config.gitea is not None:
@@ -91,15 +92,16 @@ async def discover_once(s: CIService) -> None:
         fetch_topics = (
             s.config.gitea.filters.topic is not None and await s.repo_store.is_empty()
         )
-        repos += await _discover_forge(
+        by_forge["gitea"] = await _discover_forge(
             "gitea",
             s.gitea.discover_repos(fetch_topics=fetch_topics),
             s.config.gitea.filters,
         )
     if s.gitlab is not None and s.config.gitlab is not None:
-        repos += await _discover_forge(
+        by_forge["gitlab"] = await _discover_forge(
             "gitlab", s.gitlab.discover_repos(), s.config.gitlab.filters
         )
+    repos = [r for found in by_forge.values() if found is not None for r in found]
     topics = {
         forge: forge_config.filters.topic
         for forge, forge_config in (
@@ -110,6 +112,14 @@ async def discover_once(s: CIService) -> None:
         if forge_config is not None and forge_config.filters.topic is not None
     }
     await s.repo_store.sync_discovered(repos, legacy_import_topics=topics)
+    # Drop disabled repos a successful discovery no longer returned so
+    # the admin toggle list stays clean; a failed forge is skipped to
+    # avoid mass-deleting rows on a transient API error.
+    for forge, found in by_forge.items():
+        if found is not None:
+            await s.repo_store.prune_missing_disabled(
+                forge, [r.forge_repo_id for r in found]
+            )
     # Auto-register Gitea/GitLab webhooks for enabled projects.
     await register_hooks(s)
 
@@ -118,13 +128,14 @@ async def _discover_forge(
     forge: str,
     discovery: Awaitable[list[DiscoveredRepo]],
     filters: RepoFilters,
-) -> list[DiscoveredRepo]:
-    """One forge failing must not abort discovery for the others."""
+) -> list[DiscoveredRepo] | None:
+    """One forge failing must not abort discovery for the others;
+    returns None on failure so that forge is not pruned."""
     try:
         return filter_repos(replace(filters, topic=None), await discovery)
     except Exception:
         logger.exception("%s repo discovery failed", forge)
-        return []
+        return None
 
 
 async def register_hooks(s: CIService) -> None:
