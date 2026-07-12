@@ -66,6 +66,15 @@ WHERE (projects.default_branch, projects.url)
 -- name: SetProjectEnabled :exec
 UPDATE projects SET enabled = $2, updated_at = now() WHERE id = $1;
 
+-- name: PruneMissingDisabledProjects :exec
+-- Drop disabled repos of one forge that discovery no longer returned.
+-- Enabled projects are kept so build history survives transient
+-- visibility loss.
+DELETE FROM projects
+WHERE forge = $1
+  AND NOT enabled
+  AND forge_repo_id <> ALL (sqlc.arg(forge_repo_ids)::text[]);
+
 -- name: ToggleProjectEnabled :exec
 UPDATE projects SET enabled = NOT enabled, updated_at = now() WHERE id = $1;
 

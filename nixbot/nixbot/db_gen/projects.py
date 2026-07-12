@@ -17,6 +17,7 @@ __all__: collections.abc.Sequence[str] = (
     "project_by_id",
     "project_forge_ids",
     "project_visibility_rows",
+    "prune_missing_disabled_projects",
     "reconcile_watermark",
     "rotate_webhook_secret",
     "set_project_enabled",
@@ -100,6 +101,13 @@ SELECT id, forge, forge_repo_id FROM projects
 
 PROJECT_VISIBILITY_ROWS: typing.Final[str] = """-- name: ProjectVisibilityRows :many
 SELECT id, forge, forge_repo_id, owner, name, private FROM projects
+"""
+
+PRUNE_MISSING_DISABLED_PROJECTS: typing.Final[str] = """-- name: PruneMissingDisabledProjects :exec
+DELETE FROM projects
+WHERE forge = $1
+  AND NOT enabled
+  AND forge_repo_id <> ALL ($2::text[])
 """
 
 RECONCILE_WATERMARK: typing.Final[str] = """-- name: ReconcileWatermark :one
@@ -281,6 +289,10 @@ def project_visibility_rows(conn: ConnectionLike) -> QueryResults[ProjectVisibil
     def _decode_hook(row: asyncpg.Record) -> ProjectVisibilityRowsRow:
         return ProjectVisibilityRowsRow(id=row[0], forge=row[1], forge_repo_id=row[2], owner=row[3], name=row[4], private=row[5])
     return QueryResults[ProjectVisibilityRowsRow](conn, PROJECT_VISIBILITY_ROWS, _decode_hook)
+
+
+async def prune_missing_disabled_projects(conn: ConnectionLike, *, forge: str, forge_repo_ids: collections.abc.Sequence[str]) -> None:
+    await conn.execute(PRUNE_MISSING_DISABLED_PROJECTS, forge, forge_repo_ids)
 
 
 async def reconcile_watermark(conn: ConnectionLike, *, id_: int) -> datetime.datetime | None:

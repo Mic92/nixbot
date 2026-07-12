@@ -107,6 +107,15 @@ class RepoStore:
             urls=[url for _, _, url, _ in split],
         )
 
+    async def prune_missing_disabled(
+        self, forge: str, forge_repo_ids: Sequence[str]
+    ) -> None:
+        """Delete disabled repos of `forge` that discovery no longer
+        returned; enabled projects keep their build history."""
+        await q.prune_missing_disabled_projects(
+            self.pool, forge=forge, forge_repo_ids=list(forge_repo_ids)
+        )
+
     async def set_enabled(self, project_id: int, *, enabled: bool) -> None:
         await q.set_project_enabled(self.pool, id_=project_id, enabled=enabled)
 
