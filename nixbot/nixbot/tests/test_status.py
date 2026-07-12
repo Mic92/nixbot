@@ -357,10 +357,10 @@ async def test_build_finished_table_groups_by_status_then_alpha() -> None:
     assert "`s`" not in text
 
 
-async def test_build_finished_table_omits_links_for_logless_statuses() -> None:
-    """failed_eval attributes never produce a log, so their viewer/raw
-    links would 404; render them without links. skipped_local rows are
-    dropped entirely."""
+async def test_build_finished_table_links_eval_failures_drops_skipped() -> None:
+    """failed_eval attributes keep their viewer/raw links (the web UI
+    serves their eval trace there). skipped_local rows are dropped
+    entirely."""
     reporter, poster, _ = make_reporter()
     await reporter.build_finished(
         EVENT,
@@ -384,12 +384,10 @@ async def test_build_finished_table_omits_links_for_logless_statuses() -> None:
         i for i, p in enumerate(poster.posts) if p.context == "nixbot/nix-build"
     )
     text = poster.extras[summary_idx]["text"]
-    assert "/builds/42/logs/e" not in text
-    assert "/builds/42/logs/raw/e" not in text
+    assert "/builds/42/logs/e" in text
+    assert "/builds/42/logs/raw/e" in text
     assert "/builds/42/logs/s" not in text
     assert "/builds/42/logs/raw/s" not in text
-    # failed_eval attribute still listed, just without links; readable label.
-    assert "`e`" in text
     assert "| ❌ failed eval |" in text
     # skipped_local attribute is not listed at all.
     assert "`s`" not in text

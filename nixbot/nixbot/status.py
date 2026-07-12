@@ -65,9 +65,10 @@ FAILED_STATUS_STATES = frozenset(
     {"failed", "failed_eval", "dependency_failed", "cached_failure", "cancelled"}
 )
 
-# Statuses for which no per-attribute log is ever written: eval failed
-# before a build started, or the build was skipped because the output is
-# already present locally. Linking to /logs/{attr} for these would 404.
+# Statuses for which no per-attribute build log is ever written: eval
+# failed before a build started, or the build was skipped because the
+# output is already present locally. The log viewer falls back to the
+# stored eval error for failed_eval.
 NO_LOG_STATUSES = frozenset({"failed_eval", "skipped_local"})
 
 
@@ -848,9 +849,11 @@ def _build_plan(
         live = f"{build_url}/logs/{quote(attr)}"
         raw = f"{build_url}/logs/raw/{quote(attr)}"
         status = statuses.get(attr) if statuses is not None else None
-        has_log = status not in NO_LOG_STATUSES
-        attr_cell = f"[`{attr}`]({live})" if has_log else f"`{attr}`"
-        raw_cell = f"[raw]({raw})" if has_log else ""
+        # failed_eval attributes have no build log, but the viewer/raw
+        # routes serve their eval error, so they keep their links.
+        linkable = status != "skipped_local"
+        attr_cell = f"[`{attr}`]({live})" if linkable else f"`{attr}`"
+        raw_cell = f"[raw]({raw})" if linkable else ""
         if statuses is None:
             line = f"| {attr_cell} | {raw_cell} |"
         else:

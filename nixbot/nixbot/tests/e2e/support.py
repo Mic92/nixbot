@@ -50,6 +50,34 @@ def _seed_container(*, failed: bool) -> bytes:
     return w.finalize()
 
 
+# A realistic multi-line nix eval trace (with ANSI colors) for the
+# failed_eval attribute; exercises the viewer/raw eval-error fallback.
+_EVAL_ERROR = """\
+\x1b[31;1merror:\x1b[0m attribute 'x86_64-linux.evalfail' failed to evaluate
+
+       … while calling the 'derivationStrict' builtin
+         at <nix/derivation-internal.nix>:34:12:
+           33|
+           34|   strict = derivationStrict drvAttrs;
+             |            ^
+
+       … while evaluating derivation 'widget-1.0'
+         whose name attribute is located at pkgs/stdenv/generic/make-derivation.nix:336:7
+
+       … while evaluating attribute 'buildInputs' of derivation 'widget-1.0'
+         at pkgs/stdenv/generic/make-derivation.nix:380:7:
+           379|       depsHostHost = elemAt (elemAt dependencies 1) 0;
+           380|       buildInputs = elemAt (elemAt dependencies 1) 1;
+             |       ^
+
+       \x1b[31;1merror:\x1b[0m undefined variable '\x1b[35;1mopenssl_1_1\x1b[0m'
+       at /build/source/default.nix:12:20:
+           11|   buildInputs = [
+           12|     openssl_1_1
+             |     ^
+           13|   ];"""
+
+
 async def seed(dsn: str, state_dir: Path | None = None) -> None:
     """One project with a succeeded, a failed, and a running build."""
     pool = await asyncpg.create_pool(dsn)
@@ -87,6 +115,15 @@ async def seed(dsn: str, state_dir: Path | None = None) -> None:
                 if status == "failed"
                 else None,
             )
+            if status == "failed":
+                await pool.execute(
+                    """
+                    INSERT INTO build_attributes (build_id, attr, system, status, error)
+                    VALUES ($1, 'x86_64-linux.evalfail', 'x86_64-linux', 'failed_eval', $2)
+                    """,
+                    build_id,
+                    _EVAL_ERROR,
+                )
             # Finished builds get a log for the prev/next navigation.
             if state_dir is not None and status != "building":
                 log_file = attribute_log_path(state_dir, build_id, "x86_64-linux.bad")
