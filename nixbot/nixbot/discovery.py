@@ -26,9 +26,34 @@ if TYPE_CHECKING:
 
     from .config import RepoFilters
     from .forge import DiscoveredRepo, GitHubAppClient
+    from .repos import RepoRecord
     from .service import CIService
 
 logger = logging.getLogger(__name__)
+
+
+async def _reconcile_project(s: CIService, project: RepoRecord) -> None:
+    try:
+        watermark = await s.repo_store.reconcile_watermark(project.id)
+        if project.forge == "github" and s.github is not None:
+            heads = await github_heads(s.github, project, watermark)
+        elif project.forge == "gitea" and s.gitea is not None:
+            heads = await gitea_heads(s.gitea, project, watermark)
+        elif project.forge == "gitlab" and s.gitlab is not None:
+            heads = await gitlab_heads(s.gitlab, project, watermark)
+        else:
+            return
+        await reconcile_repo(s.pool, project, heads, s)
+        # Only after all submits succeeded: a crash mid-reconcile
+        # must retry the same window on the next startup.
+        new_watermark = max_pr_updated(heads)
+        if new_watermark is not None:
+            await s.repo_store.set_reconcile_watermark(project.id, new_watermark)
+    except Exception:
+        logger.exception(
+            "reconciliation failed",
+            extra={"project": f"{project.owner}/{project.name}"},
+        )
 
 
 async def reconcile_once(s: CIService) -> None:
@@ -37,27 +62,7 @@ async def reconcile_once(s: CIService) -> None:
     per-project watermark bounds the PR listing to PRs updated
     since the last successful reconcile."""
     for project in await s.repo_store.enabled_repos():
-        try:
-            watermark = await s.repo_store.reconcile_watermark(project.id)
-            if project.forge == "github" and s.github is not None:
-                heads = await github_heads(s.github, project, watermark)
-            elif project.forge == "gitea" and s.gitea is not None:
-                heads = await gitea_heads(s.gitea, project, watermark)
-            elif project.forge == "gitlab" and s.gitlab is not None:
-                heads = await gitlab_heads(s.gitlab, project, watermark)
-            else:
-                continue
-            await reconcile_repo(s.pool, project, heads, s)
-            # Only after all submits succeeded: a crash mid-reconcile
-            # must retry the same window on the next startup.
-            new_watermark = max_pr_updated(heads)
-            if new_watermark is not None:
-                await s.repo_store.set_reconcile_watermark(project.id, new_watermark)
-        except Exception:
-            logger.exception(
-                "reconciliation failed",
-                extra={"project": f"{project.owner}/{project.name}"},
-            )
+        await _reconcile_project(s, project)
 
 
 async def _warn_github_webhook_misconfig(s: CIService, github: GitHubAppClient) -> None:
@@ -138,29 +143,55 @@ async def _discover_forge(
         return None
 
 
-async def register_hooks(s: CIService) -> None:
+def _hook_registrars(
+    s: CIService,
+) -> dict[str, tuple[Any, Callable[..., Awaitable[None]]]]:
     registrars: dict[str, tuple[Any, Callable[..., Awaitable[None]]]] = {}
     if s.gitea is not None:
         registrars["gitea"] = (s.gitea, register_repo_hook)
     if s.gitlab is not None:
         registrars["gitlab"] = (s.gitlab, register_gitlab_repo_hook)
+    return registrars
+
+
+async def _register_project_hook(
+    s: CIService,
+    project: RepoRecord,
+    registrars: dict[str, tuple[Any, Callable[..., Awaitable[None]]]],
+) -> None:
+    if project.forge not in registrars:
+        return
+    client, register = registrars[project.forge]
     base = s.config.webhook_base_url or s.config.url
+    try:
+        await register(
+            client,
+            WebhookSecrets(s.pool, project.forge),
+            project.id,
+            project.owner,
+            project.name,
+            base,
+        )
+    except Exception:
+        logger.exception(
+            "%s hook registration failed",
+            project.forge,
+            extra={"project": f"{project.owner}/{project.name}"},
+        )
+
+
+async def register_hooks(s: CIService) -> None:
+    registrars = _hook_registrars(s)
     for project in await s.repo_store.enabled_repos():
-        if project.forge not in registrars:
-            continue
-        client, register = registrars[project.forge]
-        try:
-            await register(
-                client,
-                WebhookSecrets(s.pool, project.forge),
-                project.id,
-                project.owner,
-                project.name,
-                base,
-            )
-        except Exception:
-            logger.exception(
-                "%s hook registration failed",
-                project.forge,
-                extra={"project": f"{project.owner}/{project.name}"},
-            )
+        await _register_project_hook(s, project, registrars)
+
+
+async def activate_project(s: CIService, project_id: int) -> None:
+    """Register the webhook and reconcile a single, freshly enabled
+    project so it starts building without waiting for the next
+    discovery cycle or a service restart (issue #82)."""
+    project = await s.repo_store.by_id(project_id)
+    if project is None or not project.enabled:
+        return
+    await _register_project_hook(s, project, _hook_registrars(s))
+    await _reconcile_project(s, project)

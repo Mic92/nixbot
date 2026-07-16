@@ -69,6 +69,7 @@ class FakeBackend:
     attr_cancels: list[tuple[int, str]] = field(default_factory=list)
     scheduled_runs: list[tuple[int, str, str, str]] = field(default_factory=list)
     refreshes: int = 0
+    activated: list[int] = field(default_factory=list)
 
     async def restart_build(self, build_id: int) -> None:
         self.restarted.append(build_id)
@@ -87,6 +88,9 @@ class FakeBackend:
 
     async def refresh_projects(self) -> None:
         self.refreshes += 1
+
+    async def project_activated(self, project_id: int) -> None:
+        self.activated.append(project_id)
 
     async def run_scheduled_now(
         self, project_id: int, schedule_name: str, effect: str, when_spec: str
@@ -344,6 +348,25 @@ def test_admin_project_toggle(harness: WebHarness) -> None:
     assert response.headers["location"] == "/?q=wid%20get"
 
 
+def test_toggle_activates_newly_enabled_project(harness: WebHarness) -> None:
+    """Regression for #82: enabling a repo must immediately register
+    its webhook and reconcile it, not wait for the next restart."""
+    BACKEND.activated.clear()
+    # Ensure the project starts disabled.
+    if project_enabled(harness):
+        assert harness.post("/admin/repos/1/toggle", ROOT).status_code == 303
+    BACKEND.activated.clear()
+
+    assert harness.post("/admin/repos/1/toggle", ROOT).status_code == 303
+    assert project_enabled(harness) is True
+    assert BACKEND.activated == [1]
+
+    # Disabling must not trigger activation.
+    assert harness.post("/admin/repos/1/toggle", ROOT).status_code == 303
+    assert project_enabled(harness) is False
+    assert BACKEND.activated == [1]
+
+
 def test_run_schedule(harness: WebHarness) -> None:
     url = "/repos/github/acme/widget/schedules/run"
     data = {"schedule": "nightly", "effect": "deploy"}
@@ -399,8 +422,11 @@ def test_api_enable_disable(harness: WebHarness) -> None:
     assert (
         harness.post("/api/repos/github/acme/widget/disable", ROOT).status_code == 200
     )
+    BACKEND.activated.clear()
     assert harness.post("/api/repos/github/acme/widget/enable", ROOT).status_code == 200
     assert project_enabled(harness) is True
+    # Enabling via the API activates the project (webhook + reconcile).
+    assert BACKEND.activated == [1]
     assert harness.post("/api/repos/github/acme/nope/enable", ROOT).status_code == 404
 
 

@@ -43,6 +43,8 @@ class ControlBackend(Protocol):
 
     async def refresh_projects(self) -> None: ...
 
+    async def project_activated(self, project_id: int) -> None: ...
+
     async def run_scheduled_now(
         self, project_id: int, schedule_name: str, effect: str, when_spec: str
     ) -> None: ...
@@ -207,6 +209,8 @@ class _ControlRoutes:
         await proj_gen.set_project_enabled(
             self.ctx.pool, id_=project["id"], enabled=enabled
         )
+        if enabled:
+            await self.backend.project_activated(project["id"])
         return {"owner": owner, "name": name, "enabled": enabled}
 
     async def refresh_repos(
@@ -229,6 +233,9 @@ class _ControlRoutes:
     ) -> RedirectResponse:
         await self._require_repo_admin(request, project_id)
         await proj_gen.toggle_project_enabled(self.ctx.pool, id_=project_id)
+        project = await proj_gen.project_by_id(self.ctx.pool, id_=project_id)
+        if project is not None and project.enabled:
+            await self.backend.project_activated(project_id)
         # Back to the dashboard with the project filter intact.
         return RedirectResponse(f"/?q={quote(q)}" if q else "/", status_code=303)
 
