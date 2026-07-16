@@ -320,6 +320,9 @@ class CIService:
 
     # -- ControlBackend ---------------------------------------------------
 
+    async def project_activated(self, project_id: int) -> None:
+        await discovery.activate_project(self, project_id)
+
     async def refresh_projects(self) -> None:
         async with self._discovery_lock:
             if time.monotonic() - self._last_discovery < REFRESH_COOLDOWN:
