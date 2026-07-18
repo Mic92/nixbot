@@ -43,7 +43,7 @@ from .forge import (
     GitlabClient,
     NetrcFetchCredentialsProvider,
 )
-from .forge_tokens import ForgeTokenStore
+from .forge_tokens import ForgeTokenRefresher, ForgeTokenStore
 from .gitrepo import (
     CredentialsProvider,
     RepoManager,
@@ -114,6 +114,24 @@ def _polled_repositories(config: Config) -> list[PolledRepository]:
         )
         for repo in config.pull_based.repositories.values()
     ]
+
+
+async def _login_and_oidc_providers(
+    config: Config,
+) -> tuple[dict[str, OAuthProvider], bool]:
+    """Login providers plus whether OIDC discovery must be retried in
+    the background."""
+    providers = await _login_providers(config)
+    oidc_pending = False
+    if config.oidc is not None:
+        try:
+            providers["oidc"] = await _oidc_login_provider(
+                config.oidc, httpx.AsyncClient
+            )
+        except Exception:
+            logger.exception("OIDC discovery failed; retrying in background")
+            oidc_pending = True
+    return providers, oidc_pending
 
 
 async def _login_providers(config: Config) -> dict[str, OAuthProvider]:
@@ -321,17 +339,16 @@ async def build_service(config: Config) -> tuple[CIService, FastAPI]:
         cache=AccessCache(config.repo_acl_cache_ttl),
     )
 
-    providers = await _login_providers(config)
-    oidc_pending = False
-    if config.oidc is not None:
-        try:
-            providers["oidc"] = await _oidc_login_provider(
-                config.oidc, httpx.AsyncClient
-            )
-        except Exception:
-            logger.exception("OIDC discovery failed; retrying in background")
-            oidc_pending = True
+    providers, oidc_pending = await _login_and_oidc_providers(config)
     if providers or oidc_pending:
+        # The providers dict is shared, so late OIDC registration is
+        # picked up automatically.
+        ctx.token_refresher = ForgeTokenRefresher(
+            ctx.forge_tokens,
+            providers,
+            httpx.AsyncClient(),
+            config.session_lifetime,
+        )
         app.include_router(
             create_auth_router(
                 providers,

@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
 from ..auth import OAuthError, relevant_groups, same_origin  # noqa: TID252
+from ..forge_tokens import RefreshCredentials  # noqa: TID252
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -130,7 +131,15 @@ def create_auth_router(  # noqa: C901, PLR0913
         token_lifetime = signer.lifetime
         if token.expires_in is not None:
             token_lifetime = min(token_lifetime, token.expires_in)
-        await forge_tokens.save(session_id, token.access_token, token_lifetime)
+        await forge_tokens.save(
+            session_id,
+            token.access_token,
+            token_lifetime,
+            refresh=RefreshCredentials(token.refresh_token, provider_name)
+            if token.refresh_token
+            else None,
+            refresh_lifetime=signer.lifetime if token.refresh_token else None,
+        )
         response = RedirectResponse("/")
         response.delete_cookie(_state_cookie(state))
         response.set_cookie(
