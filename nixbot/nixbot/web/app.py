@@ -55,7 +55,11 @@ from .templating import STATIC_DIR, CachedStaticFiles, make_env
 if TYPE_CHECKING:
     from ..api_tokens import ApiTokenStore  # noqa: TID252
     from ..auth import AuthzConfig, SessionSigner, User  # noqa: TID252
-    from ..forge_tokens import SessionRevocations, TokenVault  # noqa: TID252
+    from ..forge_tokens import (  # noqa: TID252
+        ForgeTokenRefresher,
+        SessionRevocations,
+        TokenVault,
+    )
     from ..visibility import VisibilityService  # noqa: TID252
 
 if TYPE_CHECKING:
@@ -103,6 +107,8 @@ class WebContext:
         self.webhook_base_url: str | None = None
         self.token_store: ApiTokenStore | None = None
         self.forge_tokens: TokenVault | None = None
+        # Wired by bootstrap; renews expired forge access tokens.
+        self.token_refresher: ForgeTokenRefresher | None = None
         # Logout denylist: stateless cookies stay verifiable until
         # expiry, so revoked session ids are checked server-side.
         self.revoked_sessions: SessionRevocations | None = RevokedSessionStore(pool)
@@ -211,6 +217,8 @@ class WebContext:
         session_id = self.signer.session_id_from(request.cookies.get(SESSION_COOKIE))
         if session_id is None:
             return None
+        if self.token_refresher is not None:
+            return await self.token_refresher.access_token(session_id)
         return await self.forge_tokens.get(session_id)
 
     async def repo_or_404(

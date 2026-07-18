@@ -27,21 +27,45 @@ WHERE t.user_qualified = $1 ORDER BY t.id;
 DELETE FROM api_tokens WHERE id = $1 AND user_qualified = $2 RETURNING id;
 
 -- name: SaveForgeToken :exec
--- Lazy cleanup of expired rows piggybacks on every save.
+-- Lazy cleanup of expired rows piggybacks on every save. A row is
+-- only useless once both the access token AND its refresh token (if
+-- any) have expired.
 WITH pruned AS (
-    DELETE FROM forge_tokens WHERE expires_at < now()
+    DELETE FROM forge_tokens
+    WHERE GREATEST(expires_at, COALESCE(refresh_expires_at, expires_at)) < now()
 )
-INSERT INTO forge_tokens (session_id, token, expires_at)
-VALUES ($1, $2, now() + make_interval(secs => sqlc.arg(lifetime)::float))
+INSERT INTO forge_tokens
+    (session_id, token, expires_at, refresh_token, provider, refresh_expires_at)
+VALUES (
+    $1,
+    $2,
+    now() + make_interval(secs => sqlc.arg(lifetime)::float),
+    sqlc.narg(refresh_token),
+    sqlc.narg(provider),
+    now() + make_interval(secs => sqlc.narg(refresh_lifetime)::float)
+)
 -- The CTE's deletes are invisible to the INSERT in the same
 -- statement; an expired row under the same session id must be
 -- overwritten, not collide.
 ON CONFLICT (session_id) DO UPDATE
-    SET token = EXCLUDED.token, expires_at = EXCLUDED.expires_at;
+    SET token = EXCLUDED.token,
+        expires_at = EXCLUDED.expires_at,
+        refresh_token = EXCLUDED.refresh_token,
+        provider = EXCLUDED.provider,
+        refresh_expires_at = EXCLUDED.refresh_expires_at;
 
 -- name: GetForgeToken :one
 SELECT token FROM forge_tokens
 WHERE session_id = $1 AND expires_at > now();
+
+-- name: GetForgeRefreshToken :one
+-- Refresh credentials for a session whose access token may already
+-- be expired.
+SELECT refresh_token, provider FROM forge_tokens
+WHERE session_id = $1
+  AND refresh_token IS NOT NULL
+  AND provider IS NOT NULL
+  AND COALESCE(refresh_expires_at, expires_at) > now();
 
 -- name: DeleteForgeToken :exec
 DELETE FROM forge_tokens WHERE session_id = $1;
