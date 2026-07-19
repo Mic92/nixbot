@@ -15,10 +15,18 @@ repositories using
 ```console
 $ cd my-repo
 $ nixbot-effects list
-["deploy", "notify"]
+{"deploy": {"after": ["notify"], "lock": "hw-lab"}, "notify": {"after": [], "lock": null}}
+
+$ nixbot-effects graph
+notify
+└── deploy [lock: hw-lab]
 
 $ nixbot-effects run deploy
 ```
+
+Effects can declare scheduling metadata as attributes on the effect derivation:
+`after` (names of effects that must succeed first) and `lock` (a named lock
+serializing runs across builds).
 
 ### Remote repository (flake reference)
 
@@ -35,7 +43,8 @@ $ nixbot-effects run-scheduled github:org/repo#flake-update update
 
 | Command          | Description                           |
 | ---------------- | ------------------------------------- |
-| `list`           | List available effects                |
+| `list`           | List available effects with metadata  |
+| `graph`          | Show the effect DAG as an ASCII tree  |
 | `run`            | Run a single effect                   |
 | `list-schedules` | List scheduled effects                |
 | `run-scheduled`  | Run a specific effect from a schedule |
@@ -44,13 +53,13 @@ $ nixbot-effects run-scheduled github:org/repo#flake-update update
 
 All subcommands accept:
 
-| Flag       | Description                                               |
-| ---------- | --------------------------------------------------------- |
-| `--rev`    | Git revision to use                                       |
-| `--branch` | Git branch to use                                         |
-| `--repo`   | Git repo name                                             |
-| `--path`   | Path to the repository (default: current directory)       |
-| `--debug`  | Enable debug mode (may leak secrets such as GITHUB_TOKEN) |
+| Flag           | Description                                                                                                                      |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `--rev`        | Git revision to use                                                                                                              |
+| `--branch`     | Git branch to use                                                                                                                |
+| `--repo`       | Git repo name                                                                                                                    |
+| `--path`       | Path to the repository (default: current directory)                                                                              |
+| `--debug`      | Enable debug mode (may leak secrets such as GITHUB_TOKEN)                                                                        |
 | `--no-refresh` | Do not pass `--refresh` when resolving flake references (refresh is on by default so remote refs resolve to the latest revision) |
 
 `run` and `run-scheduled` also accept:

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .errors import EffectError
+from .graph import EffectMeta, validate_deps
 from .proc import stream_command
 
 if TYPE_CHECKING:
@@ -134,13 +135,39 @@ async def _nix_eval_json(expr: str, opts: EffectsOptions) -> Any:  # noqa: ANN40
     return json.loads(out)
 
 
-async def list_effects(opts: EffectsOptions) -> list[str]:
-    """The effect names defined by the flake's onPush.default output."""
-    return list(
-        await _nix_eval_json(
-            f"builtins.attrNames ({await effect_function(opts)})", opts
-        )
-    )
+async def list_effects(opts: EffectsOptions) -> dict[str, EffectMeta]:
+    """Effects with their scheduling metadata.
+
+    Effects may be nested in attribute sets; names and `after` entries are
+    dotted attribute paths (e.g. "env.staging"). Metadata is read from the
+    effect or its `run` wrapper (hercules-ci's runIf).
+    """
+    expr = f"""
+        let
+          isEffect = v: v ? isEffect || v ? effectScript || v ? run
+            || v ? dependencies || (v.type or null) == "derivation";
+          dep = name: a:
+            if builtins.isList a then builtins.concatStringsSep "." a
+            else throw "effect '${{name}}': 'after' entries must be attribute paths (lists of strings)";
+          meta = name: e:
+            let d = e.run or e; in {{
+              after = map (dep name) (d.after or []);
+              lock = d.lock or null;
+            }};
+          walk = prefix: v:
+            let name = builtins.concatStringsSep "." prefix; in
+            if isEffect v then [ {{ inherit name; value = meta name v; }} ]
+            else builtins.concatLists
+              (map (n: walk (prefix ++ [ n ]) v.${{n}}) (builtins.attrNames v));
+        in builtins.listToAttrs (walk [] ({await effect_function(opts)}))
+        """
+    effects = {
+        name: EffectMeta(after=tuple(info["after"]), lock=info["lock"])
+        for name, info in (await _nix_eval_json(expr, opts)).items()
+    }
+    # A bad DAG (cycle, unknown dependency) fails discovery right here.
+    validate_deps(effects)
+    return effects
 
 
 async def list_scheduled_effects(opts: EffectsOptions) -> dict[str, Any]:

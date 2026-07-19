@@ -23,8 +23,11 @@ FLAKE_NIX = """\
   outputs = { self, ... }: {
     herculesCI = args: {
       onPush.default.outputs.effects = {
-        deploy = {
-          effectScript = "echo deploying";
+        # Effects can nest; they are addressed by attribute path.
+        env.staging = {
+          effectScript = "echo deploying staging";
+          after = [ [ "notify" ] ];
+          lock = "hw-lab";
         };
         notify = {
           effectScript = "echo notifying";
@@ -43,18 +46,14 @@ def flake_repo(tmp_path: Path) -> Path:
     return repo
 
 
-def test_list_via_flake_ref(flake_repo: Path) -> None:
-    """nixbot-effects list <git+file://repo> should work end-to-end."""
-    flake_ref = f"git+file://{flake_repo}"
-
-    result = subprocess.run(
+def _cli(*args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
         [
             sys.executable,
             "-c",
             "import sys; sys.argv = ['nixbot-effects'] + sys.argv[1:]; "
             "from nixbot_effects.cli import main; main()",
-            "list",
-            flake_ref,
+            *args,
         ],
         check=True,
         text=True,
@@ -63,5 +62,18 @@ def test_list_via_flake_ref(flake_repo: Path) -> None:
         # pytest invocation directory.
         cwd=Path(__file__).parents[2],
     )
-    effects = json.loads(result.stdout)
-    assert sorted(effects) == ["deploy", "notify"]
+
+
+def test_list_via_flake_ref(flake_repo: Path) -> None:
+    """nixbot-effects list <git+file://repo> should work end-to-end,
+    flatten nested effects to dotted names, and include after/lock."""
+    effects = json.loads(_cli("list", f"git+file://{flake_repo}").stdout)
+    assert sorted(effects) == ["env.staging", "notify"]
+    assert effects["env.staging"] == {"after": ["notify"], "lock": "hw-lab"}
+    assert effects["notify"] == {"after": [], "lock": None}
+
+
+def test_graph_via_flake_ref(flake_repo: Path) -> None:
+    """nixbot-effects graph renders the DAG from the flake's metadata."""
+    out = _cli("graph", f"git+file://{flake_repo}").stdout
+    assert out == "notify\n└── env.staging [lock: hw-lab]\n"

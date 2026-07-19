@@ -99,7 +99,7 @@ async def maybe_run_effects(
         task_token=task_token,
     )
     try:
-        names = await list_effects(ctx)
+        names = list(await list_effects(ctx))
     except (EffectError, OSError):
         # OSError: nix/git missing from PATH. Effects are best-effort
         # and must not fail the (already reported) build.

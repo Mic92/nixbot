@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import json
 import sys
+from dataclasses import asdict
 from pathlib import Path
 
 from . import (
@@ -17,6 +18,7 @@ from . import (
     run_scheduled_effect,
 )
 from .eval import options_from_flake_ref
+from .graph import EffectGraphError, render_tree
 
 
 async def _log_stderr(data: bytes) -> None:
@@ -75,7 +77,26 @@ async def list_command(args: argparse.Namespace) -> None:
     options = _options_from_args(args)
     if args.flake_ref:
         options = await options_from_flake_ref(args.flake_ref, options)
-    json.dump(await list_effects(options), fp=sys.stdout, indent=2)
+    effects = await list_effects(options)
+    json.dump(
+        {name: asdict(meta) for name, meta in effects.items()},
+        fp=sys.stdout,
+        indent=2,
+    )
+
+
+async def graph_command(args: argparse.Namespace) -> None:
+    """Print the effect DAG as an ASCII tree."""
+    options = _options_from_args(args)
+    if args.flake_ref:
+        options = await options_from_flake_ref(args.flake_ref, options)
+    try:
+        tree = render_tree(await list_effects(options))
+    except EffectGraphError as e:
+        print(f"error: {e}", file=sys.stderr)
+        sys.exit(1)
+    if tree:
+        print(tree)
 
 
 async def list_schedules_command(args: argparse.Namespace) -> None:
@@ -240,6 +261,18 @@ def parse_args() -> argparse.Namespace:
     _add_common_flags(list_parser)
     list_parser.set_defaults(func=list_command)
     list_parser.add_argument(
+        "flake_ref",
+        nargs="?",
+        help="Flake reference (e.g. github:org/repo/branch)",
+    )
+
+    graph_parser = subparser.add_parser(
+        "graph",
+        help="Show the effect dependency graph as an ASCII tree",
+    )
+    _add_common_flags(graph_parser)
+    graph_parser.set_defaults(func=graph_command)
+    graph_parser.add_argument(
         "flake_ref",
         nargs="?",
         help="Flake reference (e.g. github:org/repo/branch)",
