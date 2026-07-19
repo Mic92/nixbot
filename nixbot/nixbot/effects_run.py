@@ -8,6 +8,7 @@ keeps the module dependency graph acyclic.
 
 from __future__ import annotations
 
+import json
 import logging
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
@@ -19,6 +20,7 @@ from .db_gen import maintenance as q
 from .db_gen import web as web_q
 from .db_gen import work_queue as wq
 from .effects import (
+    EffectMeta,
     EffectsContext,
     effect_push_url,
     effects_context,
@@ -99,7 +101,9 @@ async def maybe_run_effects(
         task_token=task_token,
     )
     try:
-        names = list(await list_effects(ctx))
+        # A bad effect DAG (cycle, unknown dependency) fails discovery
+        # here and its reason ends up in the log.
+        effects = await list_effects(ctx)
     except (EffectError, OSError):
         # OSError: nix/git missing from PATH. Effects are best-effort
         # and must not fail the (already reported) build.
@@ -109,28 +113,63 @@ async def maybe_run_effects(
         o.task_tokens.revoke(task_token)
     # Effects removed from the flake since the last run would
     # otherwise linger as stale pending rows.
-    await q.drop_removed_effects(o.pool, build_id=build.id, names=names)
-    await _enqueue_effects(o, event, build, names)
+    await q.drop_removed_effects(o.pool, build_id=build.id, names=list(effects))
+    await _enqueue_effects(o, event, build, effects)
+
+
+def _dedup_key(build: BuildRecord, name: str, meta: EffectMeta) -> str:
+    """Locked effects share a per-project key so runs serialize across
+    builds; unlocked ones get per-effect keys so independent effects of
+    one build run in parallel (the claim query holds back effects whose
+    dependencies have not settled)."""
+    if meta.lock is not None:
+        return f"effect-lock-{build.project_id}-{meta.lock}"
+    return f"build-{build.id}-effect-{name}"
 
 
 async def _enqueue_effects(
-    o: Orchestrator, event: ChangeEvent, build: BuildRecord, names: list[str]
+    o: Orchestrator,
+    event: ChangeEvent,
+    build: BuildRecord,
+    effects: dict[str, EffectMeta],
 ) -> None:
-    """One queue item per effect, on the build's dedup key."""
-    # Effect names are repo-controlled. A duplicate inside one batch
-    # would make ON CONFLICT DO UPDATE fail with "cannot affect row a
-    # second time".
-    names = list(dict.fromkeys(names))
-    if not names:
+    """One queue item per effect."""
+    if not effects:
         return
-    await builds_q.start_pending_effects(o.pool, build_id=build.id, names=names)
+    names = list(effects)
+    await builds_q.start_pending_effects(
+        o.pool,
+        build_id=build.id,
+        names=names,
+        deps=[json.dumps(list(effects[n].after)) for n in names],
+    )
     await o.reporter.effects_started(event, build, len(names))
     await wq.enqueue_effect_items(
         o.pool,
-        dedup_key=f"build-{build.id}",
         build_id=build.id,
         names=names,
+        dedup_keys=[_dedup_key(build, n, effects[n]) for n in names],
     )
+
+
+async def _skip_effect(
+    o: Orchestrator, event: ChangeEvent, build: BuildRecord, name: str, failed_dep: str
+) -> None:
+    """Terminal 'skipped' row: the effect never ran because a dependency
+    did not succeed. Counts as failed on the forge (a deploy that never
+    ran must not look green)."""
+    error = f"skipped: dependency '{failed_dep}' did not succeed"
+    await builds_q.start_effect(o.pool, build_id=build.id, name=name, status="skipped")
+    await builds_q.finish_effect(
+        o.pool,
+        build_id=build.id,
+        name=name,
+        status="skipped",
+        error=error,
+        log_size=0,
+        log_truncated=False,
+    )
+    await o.reporter.effect_finished(event, build, name, success=False, error=error)
 
 
 @asynccontextmanager
@@ -167,11 +206,30 @@ async def run_effect_item(
     name: str,
     credentials: FetchCredentials | None = None,
 ) -> None:
-    """Dispatcher entry for one queued effect."""
+    """Dispatcher entry for one queued effect: run it, or skip it when a
+    dependency did not succeed."""
     row = await q.effect_status(o.pool, build_id=build.id, name=name)
     if row != "pending":
         # Swept after a crash mid-run, or already terminal. Started
         # effects never auto-re-run (deploys are not idempotent).
+        return
+    dep_rows = await builds_q.effect_dep_statuses(o.pool, build_id=build.id, name=name)
+    unsettled = [d.name for d in dep_rows if d.status in ("pending", "running")]
+    if unsettled:
+        # Only when an effects restart reset the rows under a stale claim;
+        # the restart enqueued fresh items, so defer to those.
+        logger.warning(
+            "effect %s of build %s claimed before %s settled; deferring",
+            name,
+            build.id,
+            ", ".join(unsettled),
+        )
+        return
+    failed_dep = next((d.name for d in dep_rows if d.status != "succeeded"), None)
+    if failed_dep is not None:
+        event = effects_event_for_build(info, build)
+        await _skip_effect(o, event, build, name, failed_dep)
+        await post_effects_summary(o, event, build)
         return
     async with o.rerun_worktree(info, build, "effect", credentials) as (
         worktree_event,

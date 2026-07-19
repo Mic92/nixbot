@@ -6,6 +6,7 @@ from __future__ import annotations
 
 __all__: collections.abc.Sequence[str] = (
     "AttributeStatusesRow",
+    "EffectDepStatusesRow",
     "EvalJobRowsRow",
     "LockBuildRowRow",
     "QueryResults",
@@ -18,6 +19,7 @@ __all__: collections.abc.Sequence[str] = (
     "create_build",
     "create_failed_build",
     "detach_build_from_pr",
+    "effect_dep_statuses",
     "effects_for_build",
     "eval_job_rows",
     "find_completed_eval",
@@ -57,6 +59,12 @@ from nixbot.db_gen import models
 @dataclasses.dataclass()
 class AttributeStatusesRow:
     attr: str
+    status: str
+
+
+@dataclasses.dataclass()
+class EffectDepStatusesRow:
+    name: str
     status: str
 
 
@@ -164,8 +172,15 @@ UPDATE builds SET pr_number = NULL, pr_author = NULL,
 WHERE id = $1 RETURNING id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number
 """
 
+EFFECT_DEP_STATUSES: typing.Final[str] = """-- name: EffectDepStatuses :many
+SELECT d.name, d.status FROM build_effects e
+JOIN build_effects d ON d.build_id = e.build_id
+    AND d.name IN (SELECT jsonb_array_elements_text(e.deps))
+WHERE e.build_id = $1 AND e.name = $2
+"""
+
 EFFECTS_FOR_BUILD: typing.Final[str] = """-- name: EffectsForBuild :many
-SELECT id, build_id, name, status, error, log_size, log_truncated, started_at, finished_at FROM build_effects WHERE build_id = $1 ORDER BY name
+SELECT id, build_id, name, status, error, log_size, log_truncated, started_at, finished_at, deps FROM build_effects WHERE build_id = $1 ORDER BY name
 """
 
 EVAL_JOB_ROWS: typing.Final[str] = """-- name: EvalJobRows :many
@@ -292,12 +307,14 @@ ON CONFLICT (build_id, name) DO UPDATE SET
 """
 
 START_PENDING_EFFECTS: typing.Final[str] = """-- name: StartPendingEffects :exec
-INSERT INTO build_effects (build_id, name, status)
-SELECT $1::bigint, u.name, 'pending'
-FROM unnest($2::text[]) AS u(name)
+INSERT INTO build_effects (build_id, name, status, deps)
+SELECT $1::bigint, u.name, 'pending', u.deps::jsonb
+FROM (SELECT unnest($2::text[]) AS name,
+             unnest($3::text[]) AS deps) AS u
 ON CONFLICT (build_id, name) DO UPDATE SET
     status = 'pending', error = NULL, log_size = 0,
-    log_truncated = FALSE, started_at = now(), finished_at = NULL
+    log_truncated = FALSE, started_at = now(), finished_at = NULL,
+    deps = EXCLUDED.deps
 """
 
 
@@ -401,9 +418,15 @@ async def detach_build_from_pr(conn: ConnectionLike, *, id_: int, pr_number: int
     return models.Build(id=row[0], project_id=row[1], number=row[2], tree_hash=row[3], commit_sha=row[4], branch=row[5], pr_number=row[6], pr_author=row[7], status=row[8], status_generation=row[9], effects_started=row[10], error=row[11], created_at=row[12], started_at=row[13], finished_at=row[14], eval_warnings=row[15], eval_completed=row[16], effects_commit_sha=row[17], effects_branch=row[18], effects_pr_number=row[19])
 
 
+def effect_dep_statuses(conn: ConnectionLike, *, build_id: int, name: str) -> QueryResults[EffectDepStatusesRow]:
+    def _decode_hook(row: asyncpg.Record) -> EffectDepStatusesRow:
+        return EffectDepStatusesRow(name=row[0], status=row[1])
+    return QueryResults[EffectDepStatusesRow](conn, EFFECT_DEP_STATUSES, _decode_hook, build_id, name)
+
+
 def effects_for_build(conn: ConnectionLike, *, build_id: int) -> QueryResults[models.BuildEffect]:
     def _decode_hook(row: asyncpg.Record) -> models.BuildEffect:
-        return models.BuildEffect(id=row[0], build_id=row[1], name=row[2], status=row[3], error=row[4], log_size=row[5], log_truncated=row[6], started_at=row[7], finished_at=row[8])
+        return models.BuildEffect(id=row[0], build_id=row[1], name=row[2], status=row[3], error=row[4], log_size=row[5], log_truncated=row[6], started_at=row[7], finished_at=row[8], deps=row[9])
     return QueryResults[models.BuildEffect](conn, EFFECTS_FOR_BUILD, _decode_hook, build_id)
 
 
@@ -487,5 +510,5 @@ async def start_effect(conn: ConnectionLike, *, build_id: int, name: str, status
     await conn.execute(START_EFFECT, build_id, name, status)
 
 
-async def start_pending_effects(conn: ConnectionLike, *, build_id: int, names: collections.abc.Sequence[str]) -> None:
-    await conn.execute(START_PENDING_EFFECTS, build_id, names)
+async def start_pending_effects(conn: ConnectionLike, *, build_id: int, names: collections.abc.Sequence[str], deps: collections.abc.Sequence[str]) -> None:
+    await conn.execute(START_PENDING_EFFECTS, build_id, names, deps)

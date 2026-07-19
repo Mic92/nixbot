@@ -1,8 +1,99 @@
-# (experimental) Hercules CI effects
+# Hercules CI effects
 
 See [flake.nix](../flake.nix) for an example and the
 [Hercules CI effects documentation](https://docs.hercules-ci.com/hercules-ci/effects/)
 for the upstream reference.
+
+## Ordering and locks
+
+Effects can declare two attributes on the effect derivation:
+
+- `after`: attribute paths of effects (of the same build) that must succeed
+  first, e.g. `[ [ "build-image" ] ]`. Each entry is a list of strings because
+  effects can be nested in attribute sets (`effects.env.staging` is
+  `[ "env" "staging" ]`). The effect only starts once everything in `after`
+  succeeded; if a dependency fails, the effect is marked `skipped` and reported
+  as a failure. Effects not ordered against each other run in parallel.
+- `lock`: a named lock. Effects holding the same lock name run one at a time per
+  project, across builds and pull requests — use it for shared resources like a
+  staging environment or a hardware lab. A lock is handed out in build order:
+  all of a build's effects on a lock finish before the next build's start, so
+  multi-effect deployments never interleave across builds.
+
+Both are ordinary attributes on the effect derivation: set them next to
+`effectScript`, whether you write plain attribute sets, use this repo's
+[effects-lib](../herculesCI/effects-lib.nix), or upstream
+[hercules-ci-effects](https://docs.hercules-ci.com/hercules-ci-effects/)'
+`mkEffect` (extra attributes pass through). They are a nixbot extension:
+Hercules CI itself ignores them; only nixbot orders and serializes on them.
+
+```nix
+# flake.nix
+{
+  outputs = { self, nixpkgs, ... }: {
+    herculesCI = { primaryRepo, ... }: let
+      pkgs = nixpkgs.legacyPackages.x86_64-linux;
+      # Or hercules-ci-effects' mkEffect; after/lock pass through there too.
+      inherit (import ./effects-lib.nix { inherit pkgs; }) mkEffect;
+    in {
+      onPush.default.outputs.effects = {
+        push-image = mkEffect {
+          inputs = [ pkgs.skopeo ];
+          effectScript = ''
+            skopeo copy docker-archive:${self.packages.x86_64-linux.image} \
+              docker://registry.example.org/app:${primaryRepo.rev}
+          '';
+        };
+
+        # Starts only after push-image succeeded; the "staging" lock makes
+        # concurrent PRs take turns deploying to staging.
+        deploy-staging = mkEffect {
+          after = [ [ "push-image" ] ];
+          lock = "staging";
+          inputs = [ pkgs.kubectl ];
+          effectScript = ''
+            kubectl set image deployment/app app=registry.example.org/app:${primaryRepo.rev}
+          '';
+        };
+
+        deploy-prod = mkEffect {
+          after = [ [ "deploy-staging" ] ];
+          lock = "prod";
+          inputs = [ pkgs.kubectl ];
+          effectScript = ''
+            kubectl --context prod set image deployment/app app=registry.example.org/app:${primaryRepo.rev}
+          '';
+        };
+
+        # No after/lock: runs in parallel with everything else.
+        notify = mkEffect {
+          inputs = [ pkgs.curl ];
+          effectScript = ''
+            curl -sf -d "deployed ${primaryRepo.rev}" https://chat.example.org/hook
+          '';
+        };
+      };
+    };
+  };
+}
+```
+
+With this flake, one push runs `push-image` and `notify` immediately and in
+parallel, then `deploy-staging`, then `deploy-prod`. If `push-image` fails, both
+deploys end up `skipped` and the commit status is red. Cycles or unknown paths
+in `after` fail effect discovery.
+
+Effects nested in attribute sets are addressed by their dotted path everywhere
+else: `nixbot-effects run env.staging`, log names, and the `after` entries in
+`nixbot-effects list` output. Inspect the DAG locally:
+
+```console
+$ nixbot-effects graph
+notify
+push-image
+└── deploy-staging [lock: staging]
+    └── deploy-prod [lock: prod]
+```
 
 ## CLI usage
 
@@ -23,10 +114,6 @@ notify
 
 $ nixbot-effects run deploy
 ```
-
-Effects can declare scheduling metadata as attributes on the effect derivation:
-`after` (names of effects that must succeed first) and `lock` (a named lock
-serializing runs across builds).
 
 ### Remote repository (flake reference)
 

@@ -26,9 +26,9 @@ Chat with us on Matrix:
 - The last attribute of a build is protected from garbage collection
 - Build matrix based on `.#checks` attributes
 - No arbitrary code runs outside of the Nix sandbox
-- _experimental_
-  [hercules-ci effect](https://docs.hercules-ci.com/hercules-ci-effects/) to run
-  impure CI steps i.e. deploying NixOS
+- [hercules-ci effects](https://docs.hercules-ci.com/hercules-ci-effects/) to
+  run impure CI steps i.e. deploying NixOS, with dependency ordering and named
+  locks
 
 ## Getting Started
 
@@ -189,7 +189,7 @@ integrate run a systemd service as described in
 service watches for changes in the local nix store and uploads the contents to
 the attic cache.
 
-## (experimental) Hercules CI effects
+## Hercules CI effects
 
 See [docs/EFFECTS.md](docs/EFFECTS.md) for CLI usage, flake reference support,
 and secrets configuration.

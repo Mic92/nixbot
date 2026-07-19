@@ -5,8 +5,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .errors import EffectError
 
-class EffectGraphError(Exception):
+
+class EffectGraphError(EffectError):
     pass
 
 

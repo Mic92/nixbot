@@ -72,6 +72,7 @@ class BuildEffect:
     log_truncated: bool
     started_at: datetime.datetime
     finished_at: datetime.datetime | None
+    deps: str | None
 
 
 @dataclasses.dataclass()

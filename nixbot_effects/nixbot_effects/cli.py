@@ -18,7 +18,7 @@ from . import (
     run_scheduled_effect,
 )
 from .eval import options_from_flake_ref
-from .graph import EffectGraphError, render_tree
+from .graph import render_tree
 
 
 async def _log_stderr(data: bytes) -> None:
@@ -90,12 +90,7 @@ async def graph_command(args: argparse.Namespace) -> None:
     options = _options_from_args(args)
     if args.flake_ref:
         options = await options_from_flake_ref(args.flake_ref, options)
-    try:
-        tree = render_tree(await list_effects(options))
-    except EffectGraphError as e:
-        print(f"error: {e}", file=sys.stderr)
-        sys.exit(1)
-    if tree:
+    if tree := render_tree(await list_effects(options)):
         print(tree)
 
 

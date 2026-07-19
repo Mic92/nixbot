@@ -124,6 +124,7 @@ th {
 .failed,
 .failed_eval,
 .dependency_failed,
+.skipped,
 .cached_failure {
 	--status-color: var(--bad);
 }
@@ -274,6 +275,7 @@ h2 .status-icon {
 .status-icon.failed::before,
 .status-icon.failed_eval::before,
 .status-icon.dependency_failed::before,
+.status-icon.skipped::before,
 .status-icon.cached_failure::before,
 .status-icon.cancelled::before {
 	content: "\2715";
