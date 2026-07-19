@@ -42,3 +42,6 @@ class EffectsOptions:
     # Line-wise sink for all child output (nix eval, bwrap, the effect).
     log: LogWrite | None = None
     debug: bool = False
+    # Refresh flake metadata by default so remote flake refs always resolve
+    # to the latest revision instead of a stale cached one.
+    refresh: bool = True

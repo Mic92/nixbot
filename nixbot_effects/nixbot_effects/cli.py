@@ -45,6 +45,7 @@ def _options_from_args(args: argparse.Namespace) -> EffectsOptions:
         project_path=args.project_path,
         extra_nix_options=args.extra_nix_option,
         debug=args.debug,
+        refresh=not args.no_refresh,
         extra_sandbox_paths=args.extra_sandbox_path,
         effect_checkout=args.effect_checkout,
         # Keep stdout for JSON output. All child output goes to stderr.
@@ -193,6 +194,12 @@ def _add_common_flags(parser: argparse.ArgumentParser) -> None:
         action="append",
         default=[],
         help="Path that should be included in the sandbox from the host.",
+    )
+    parser.add_argument(
+        "--no-refresh",
+        default=False,
+        action="store_true",
+        help="Do not pass --refresh when resolving flake references",
     )
     parser.add_argument(
         "--effect-checkout",

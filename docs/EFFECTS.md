@@ -51,6 +51,7 @@ All subcommands accept:
 | `--repo`   | Git repo name                                             |
 | `--path`   | Path to the repository (default: current directory)       |
 | `--debug`  | Enable debug mode (may leak secrets such as GITHUB_TOKEN) |
+| `--no-refresh` | Do not pass `--refresh` when resolving flake references (refresh is on by default so remote refs resolve to the latest revision) |
 
 `run` and `run-scheduled` also accept:
 

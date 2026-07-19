@@ -247,11 +247,21 @@ async def parse_derivation(
 
 
 async def resolve_flake(
-    flake_ref: str, *, log: LogWrite | None = None, debug: bool = False
+    flake_ref: str,
+    *,
+    log: LogWrite | None = None,
+    debug: bool = False,
+    refresh: bool = True,
 ) -> dict[str, Any]:
     """`nix flake metadata --json` for a flake reference."""
     out = await stream_command(
-        nix_command("flake", "metadata", "--json", flake_ref),
+        nix_command(
+            "flake",
+            "metadata",
+            "--json",
+            *(["--refresh"] if refresh else []),
+            flake_ref,
+        ),
         capture_stdout=True,
         log=log,
         debug=debug,
@@ -264,7 +274,9 @@ async def options_from_flake_ref(
 ) -> EffectsOptions:
     """Resolve a flake reference into a copy of `base` pointing at the
     fetched source (its store path has no .git)."""
-    meta = await resolve_flake(flake_ref, log=base.log, debug=base.debug)
+    meta = await resolve_flake(
+        flake_ref, log=base.log, debug=base.debug, refresh=base.refresh
+    )
     locked = meta.get("locked", {})
     return replace(
         base,
