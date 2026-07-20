@@ -66,6 +66,8 @@ buildPythonPackage (finalAttrs: {
   # Chromium refuses to start with the unwritable default HOME.
   preCheck = ''
     export HOME=$(mktemp -d)
+    # On huge builders more workers only add scheduling overhead and postgres connection pressure.
+    export PYTEST_XDIST_AUTO_NUM_WORKERS=$(( NIX_BUILD_CORES > 64 ? 64 : NIX_BUILD_CORES ))
   '';
 
   env = {
