@@ -1,6 +1,7 @@
 [tool.pytest.ini_options]
 pythonpath = ["nixbot"]
 testpaths = ["tests"]
+addopts = ["-n", "auto"]
 timeout = 60
 asyncio_mode = "auto"
 
