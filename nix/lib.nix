@@ -20,4 +20,15 @@
     _type = "interpolate";
     inherit value;
   };
+
+  /**
+    Minimal effects library (mkEffect, runIf) for flakes that do not
+    want to pull in hercules-ci-effects.
+
+    # Type
+    ```
+    effects :: { pkgs :: Nixpkgs } -> { mkEffect, runIf }
+    ```
+  */
+  effects = import ../herculesCI/effects-lib.nix;
 }

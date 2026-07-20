@@ -30,11 +30,13 @@ Hercules CI itself ignores them; only nixbot orders and serializes on them.
 ```nix
 # flake.nix
 {
-  outputs = { self, nixpkgs, ... }: {
+  inputs.nixbot.url = "github:Mic92/nixbot";
+
+  outputs = { self, nixpkgs, nixbot, ... }: {
     herculesCI = { primaryRepo, ... }: let
       pkgs = nixpkgs.legacyPackages.x86_64-linux;
       # Or hercules-ci-effects' mkEffect; after/lock pass through there too.
-      inherit (import ./effects-lib.nix { inherit pkgs; }) mkEffect;
+      inherit (nixbot.lib.effects { inherit pkgs; }) mkEffect;
     in {
       onPush.default.outputs.effects = {
         push-image = mkEffect {
