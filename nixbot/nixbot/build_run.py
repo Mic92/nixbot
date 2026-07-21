@@ -160,6 +160,20 @@ def _eval_settings(
     netrc_file = None
     if credentials is not None and (event.pr_number is None or credentials.repo_scoped):
         netrc_file = credentials.netrc_file
+    # Arguments hercules-ci-agent passes to the flake's herculesCI
+    # function; tag is unknown here (builds are branch/PR driven).
+    primary_repo = {
+        "name": event.repo.repo,
+        "owner": event.repo.owner,
+        "branch": event.branch,
+        "ref": f"refs/heads/{event.branch}",
+        "tag": None,
+        "rev": event.commit_sha,
+        "shortRev": event.commit_sha[:7],
+        "remoteHttpUrl": event.repo.clone_url,
+        "forgeType": event.repo.forge,
+    }
+    hercules_args = {"primaryRepo": primary_repo, **primary_repo}
     return EvalSettings(
         gc_roots_dir=o.gcroots_dir(build),
         timeout=o.config.eval_timeout,
@@ -170,6 +184,7 @@ def _eval_settings(
         # The worktree's .git points into the central clone. The
         # sandboxed evaluator needs to read it.
         extra_ro_paths=[o.repos.clone_path(event.repo.key)],
+        hercules_args=hercules_args,
     )
 
 

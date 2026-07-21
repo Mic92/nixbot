@@ -24,7 +24,8 @@ Chat with us on Matrix:
 - All builds share the same nix store for speed
 - Tested with large flakes (50k flake outputs per evaluation)
 - The last attribute of a build is protected from garbage collection
-- Build matrix based on `.#checks` attributes
+- Build matrix based on `.#checks` plus the `herculesCI` onPush jobs of your
+  flake
 - No arbitrary code runs outside of the Nix sandbox
 - [hercules-ci effects](https://docs.hercules-ci.com/hercules-ci-effects/) to
   run impure CI steps i.e. deploying NixOS, with dependency ordering and named
@@ -60,14 +61,25 @@ Nixbot automatically triggers builds for your project under these conditions:
 - When a pull request is opened.
 - When a commit is pushed to the default git branch.
 
-It does this by evaluating the `.#checks` attribute of your project's flake in
-parallel. Each attribute found results in a separate build step. You can test
-these builds locally using `nix flake check -L` or
+It evaluates the `.#checks` attribute of your project's flake in parallel; each
+attribute results in a separate build step (named
+`default.checks.<system>.<name>`). You can test these builds locally using
+`nix flake check -L` or
 [nix-fast-build](https://github.com/Mic92/nix-fast-build).
 
+If your flake also defines a `herculesCI` output (by hand or via
+[hercules-ci-effects](https://docs.hercules-ci.com/hercules-ci-effects/)),
+nixbot additionally follows
+[hercules-ci-agent's evaluation
+semantics](https://docs.hercules-ci.com/hercules-ci-agent/evaluation): every
+`onPush.<job>.outputs` attribute is built (named `<job>.<path>`),
+`outputs.effects` run as [effects](./docs/EFFECTS.md), `ciSystems` filters
+per-system outputs, and the `buildDependenciesOnly`, `noBuildPhase`,
+`ignoreFailure` and `requireFailure` build modifiers are honored.
+
 If you need to build other parts of your flake, such as packages or NixOS
-machines, you should re-export these into the `.#checks` output. Here are two
-examples to guide you:
+machines, add them to `onPush.<job>.outputs` or re-export them into the
+`.#checks` output. Here are two examples to guide you:
 
 - Using
   [flake-parts](https://github.com/Mic92/dotfiles/blob/10890601a02f843b49fe686d7bc19cb66a04e3d7/flake.nix#L139).

@@ -125,40 +125,42 @@ async def test_full_pipeline(flake: Path, tmp_path: Path) -> None:
 
     # Eval fan-out: every attribute got its own record.
     assert set(statuses) == {
-        f"{system}.base",
-        f"{system}.dependent",
-        f"{system}.broken",
-        f"{system}.brokendep",
-        f"{system}.evalfail",
+        f"default.checks.{system}.base",
+        f"default.checks.{system}.dependent",
+        f"default.checks.{system}.broken",
+        f"default.checks.{system}.brokendep",
+        f"default.checks.{system}.evalfail",
     }
 
     # Failure aggregation: eval failure, build failure, dependency failure.
-    assert statuses[f"{system}.evalfail"] == AttributeStatus.failed_eval
-    assert statuses[f"{system}.broken"] == AttributeStatus.failed
-    assert statuses[f"{system}.brokendep"] in {
+    assert statuses[f"default.checks.{system}.evalfail"] == AttributeStatus.failed_eval
+    assert statuses[f"default.checks.{system}.broken"] == AttributeStatus.failed
+    assert statuses[f"default.checks.{system}.brokendep"] in {
         AttributeStatus.failed,
         AttributeStatus.dependency_failed,
     }
     assert not result.success
 
     # Successful chain really built in the local store.
-    assert statuses[f"{system}.base"] in {
+    assert statuses[f"default.checks.{system}.base"] in {
         AttributeStatus.succeeded,
         AttributeStatus.skipped_local,
     }
-    assert statuses[f"{system}.dependent"] in {
+    assert statuses[f"default.checks.{system}.dependent"] in {
         AttributeStatus.succeeded,
         AttributeStatus.skipped_local,
     }
 
     # Real build log captured for the broken attribute.
-    if f"{system}.broken" in executor.built:
-        log = read_log(tmp_path / f"{system}.broken.zst")
+    if f"default.checks.{system}.broken" in executor.built:
+        log = read_log(tmp_path / f"default.checks.{system}.broken.zst")
         assert b"build error details" in log
 
     # Error text preserved for the eval failure.
     errors = {r.attr: r.error for r in result.results}
-    assert "deliberate eval failure" in (errors[f"{system}.evalfail"] or "")
+    assert "deliberate eval failure" in (
+        errors[f"default.checks.{system}.evalfail"] or ""
+    )
 
 
 async def test_cached_skip_on_second_run(flake: Path, tmp_path: Path) -> None:
@@ -167,10 +169,12 @@ async def test_cached_skip_on_second_run(flake: Path, tmp_path: Path) -> None:
     result, executor = await run_pipeline(flake, tmp_path)
     system = current_system()
     statuses = {r.attr: r.status for r in result.results}
-    assert statuses[f"{system}.base"] == AttributeStatus.skipped_local
-    assert statuses[f"{system}.dependent"] == AttributeStatus.skipped_local
-    assert f"{system}.base" not in executor.built
-    assert f"{system}.dependent" not in executor.built
+    assert statuses[f"default.checks.{system}.base"] == AttributeStatus.skipped_local
+    assert (
+        statuses[f"default.checks.{system}.dependent"] == AttributeStatus.skipped_local
+    )
+    assert f"default.checks.{system}.base" not in executor.built
+    assert f"default.checks.{system}.dependent" not in executor.built
     # Skipped jobs still expose out paths for gcroots/outputs updates.
     skipped = dict(result.skipped_out_paths)
-    assert skipped[f"{system}.base"].startswith("/nix/store/")
+    assert skipped[f"default.checks.{system}.base"].startswith("/nix/store/")
