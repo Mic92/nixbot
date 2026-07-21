@@ -368,6 +368,15 @@ class BuildSettings:
     extra_args: list[str] = field(default_factory=list)
 
 
+def build_installables(job: NixEvalJobSuccess) -> list[str]:
+    """What `nix build` should realise for this attribute: the derivation
+    itself, or only its missing dependencies for buildDependenciesOnly
+    attributes (shells)."""
+    if job.build_dependencies_only:
+        return [f"{d}^*" for d in job.needed_builds if d != job.drv_path]
+    return [f"{job.drv_path}^*"]
+
+
 def build_nix_command(
     job: NixEvalJobSuccess, settings: BuildSettings, out_link: Path
 ) -> list[str]:
@@ -396,7 +405,7 @@ def build_nix_command(
         *settings.extra_args,
         "--out-link",
         str(out_link),
-        f"{job.drv_path}^*",
+        *build_installables(job),
     ]
 
 
@@ -793,6 +802,9 @@ class NixBuildExecutor:
         cancel_event = cancel_event or asyncio.Event()
         if cancel_event.is_set():
             return BuildOutcome.cancelled
+        if not build_installables(job):
+            # buildDependenciesOnly with all dependencies already present.
+            return BuildOutcome.success
         # A superseded build must not sit "building" until an unrelated
         # build frees a slot: race the acquisition against the cancel.
         acquire_task = asyncio.create_task(self.queue.acquire(build_key))

@@ -63,6 +63,11 @@ FLAKE_TEMPLATE = """
         broken = mk "broken-{salt}" "echo build error details >&2; exit 1";
         brokendep = mk "brokendep-{salt}" "cat ${{mk "broken2-{salt}" "exit 1"}} > $out";
         evalfail = throw "deliberate eval failure";
+        # hercules-ci build modifiers, exported via the eval's --apply.
+        ignoredfail = mk "ignoredfail-{salt}" "exit 1" // {{ ignoreFailure = true; }};
+        mustfail = mk "mustfail-{salt}" "exit 1" // {{ requireFailure = true; }};
+        depsonly = mk "depsonly-{salt}" "cat ${{mk "depsonly-dep-{salt}" "echo dep > $out"}} > $out; exit 1"
+          // {{ buildDependenciesOnly = true; }};
       }};
     }};
 }}
@@ -130,7 +135,19 @@ async def test_full_pipeline(flake: Path, tmp_path: Path) -> None:
         f"default.checks.{system}.broken",
         f"default.checks.{system}.brokendep",
         f"default.checks.{system}.evalfail",
+        f"default.checks.{system}.ignoredfail",
+        f"default.checks.{system}.mustfail",
+        f"default.checks.{system}.depsonly",
     }
+
+    # hercules-ci build modifiers: an ignored failure is recorded but not a
+    # failure, requireFailure inverts the result, buildDependenciesOnly
+    # builds only the dependency and never runs the failing script.
+    assert statuses[f"default.checks.{system}.ignoredfail"] == (
+        AttributeStatus.ignored_failure
+    )
+    assert statuses[f"default.checks.{system}.mustfail"] == AttributeStatus.succeeded
+    assert statuses[f"default.checks.{system}.depsonly"] == AttributeStatus.succeeded
 
     # Failure aggregation: eval failure, build failure, dependency failure.
     assert statuses[f"default.checks.{system}.evalfail"] == AttributeStatus.failed_eval

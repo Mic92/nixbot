@@ -150,6 +150,18 @@ onPushJobs // {{ default = defaultJob; }}
 """
 
 
+# nix-eval-jobs --apply function: hercules-ci build modifiers per
+# derivation, delivered as `extraValue` in the job JSON.
+APPLY_EXPR = """
+drv: {
+  buildDependenciesOnly = (drv.buildDependenciesOnly or false)
+    || (drv.phases or null) == [ "noBuildPhase" ];
+  ignoreFailure = drv.ignoreFailure or false;
+  requireFailure = drv.requireFailure or false;
+}
+"""
+
+
 def build_select_expr(branch_config: BranchConfig, settings: EvalSettings) -> str:
     return SELECT_TEMPLATE.format(
         args_json=json.dumps(json.dumps(settings.hercules_args)),
@@ -187,6 +199,8 @@ def build_eval_command(
         "--check-cache-status",
         "--select",
         build_select_expr(branch_config, settings),
+        "--apply",
+        APPLY_EXPR,
         *settings.extra_args,
         *(["--show-trace"] if settings.show_trace else []),
         "--flake",

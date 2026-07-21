@@ -52,6 +52,8 @@ def test_eval_command(tmp_path: Path) -> None:
     select = cmd[cmd.index("--select") + 1]
     assert json.dumps(json.dumps(["checks"])) in select
     assert "herculesCI" in select
+    # Build modifiers (buildDependenciesOnly, ...) are exported per drv.
+    assert "requireFailure" in cmd[cmd.index("--apply") + 1]
     # Flakes and nix-command must be opted-in for hosts where the
     # system nix.conf hasn't enabled them yet.
     assert "nix-command flakes" in cmd

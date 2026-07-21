@@ -13,10 +13,13 @@ from nixbot.build_scheduler import (
     CachedFailure,
     JobScheduler,
     ScheduleResult,
+    _success_result,
     compute_job_closures,
     get_failed_dependents,
+    outcome_status,
     sort_jobs_by_closures,
 )
+from nixbot.db import FAILED_ATTRIBUTE_STATUSES, TERMINAL_ATTRIBUTE_STATUSES
 from nixbot.models import (
     CacheStatus,
     NixEvalJob,
@@ -572,3 +575,36 @@ async def test_resent_jobs_are_not_rebuilt() -> None:
         assert sorted(r.attr for r in result.results) == ["a", "b"]
 
     await main()
+
+
+def _with_extra(job: NixEvalJobSuccess, **flags: bool) -> NixEvalJobSuccess:
+    return job.model_copy(update={"extra_value": flags})
+
+
+def test_require_failure_only_accepts_genuine_build_failures() -> None:
+    job = _with_extra(mk_job("neg"), requireFailure=True)
+    assert outcome_status(job, BuildOutcome.failure) == (
+        AttributeStatus.succeeded,
+        None,
+    )
+    # Timeouts/transient errors and unexpected successes stay failures.
+    assert outcome_status(job, BuildOutcome.failure_no_cache)[0] == (
+        AttributeStatus.failed
+    )
+    assert outcome_status(job, BuildOutcome.success)[0] == AttributeStatus.failed
+
+
+def test_ignore_failure_status_is_not_a_failure() -> None:
+    job = _with_extra(mk_job("soft"), ignoreFailure=True)
+    assert outcome_status(job, BuildOutcome.failure) == (
+        AttributeStatus.ignored_failure,
+        None,
+    )
+    assert "ignored_failure" not in FAILED_ATTRIBUTE_STATUSES
+    assert "ignored_failure" in TERMINAL_ATTRIBUTE_STATUSES
+
+
+def test_deps_only_result_has_no_out_path() -> None:
+    job = _with_extra(mk_job("shell"), buildDependenciesOnly=True)
+    result = _success_result(job, AttributeStatus.succeeded)
+    assert result.out_path is None

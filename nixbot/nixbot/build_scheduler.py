@@ -116,6 +116,9 @@ class AttributeStatus(StrEnum):
     # Already present in the local store: not rebuilt, out path recorded
     # for gcroot registration and outputs updates.
     skipped_local = "skipped_local"
+    # The build failed but the attribute has ignoreFailure = true: shown
+    # as failed on the build page, excluded from the aggregate status.
+    ignored_failure = "ignored_failure"
 
 
 TERMINAL_FAILURES = {
@@ -261,6 +264,30 @@ def _fail_unresolvable(state: _State) -> None:
     state.pending.clear()
 
 
+def outcome_status(
+    job: NixEvalJobSuccess, outcome: BuildOutcome
+) -> tuple[AttributeStatus, str | None]:
+    """Attribute status for a finished build, honoring the hercules-ci
+    modifiers requireFailure and ignoreFailure."""
+    if outcome == BuildOutcome.cancelled:
+        return AttributeStatus.cancelled, None
+    failed = outcome != BuildOutcome.success
+    if job.require_failure:
+        # Only a genuine build failure counts as the expected failure;
+        # timeouts and transient errors stay failures.
+        if outcome == BuildOutcome.failure:
+            return AttributeStatus.succeeded, None
+        if not failed:
+            return (
+                AttributeStatus.failed,
+                "the build succeeded but requireFailure is set",
+            )
+        return AttributeStatus.failed, None
+    if failed and job.ignore_failure:
+        return AttributeStatus.ignored_failure, None
+    return AttributeStatus.failed if failed else AttributeStatus.succeeded, None
+
+
 def _success_result(
     job: NixEvalJobSuccess,
     status: AttributeStatus,
@@ -273,7 +300,9 @@ def _success_result(
         attr=job.attr,
         status=status,
         job=job,
-        out_path=job.outputs.get("out"),
+        # buildDependenciesOnly never realises the derivation itself, so
+        # there is no output to gcroot or publish.
+        out_path=None if job.build_dependencies_only else job.outputs.get("out"),
         drv_path=job.drv_path,
         system=job.system,
         error=error,
@@ -405,22 +434,18 @@ class JobScheduler:
     async def _finish_job(
         self, state: _State, job: NixEvalJobSuccess, outcome: BuildOutcome
     ) -> None:
-        if outcome == BuildOutcome.success:
-            state.result.results.append(_success_result(job, AttributeStatus.succeeded))
-        elif outcome == BuildOutcome.post_build_failure:
-            # The derivation itself built: do not cache it as a failed
-            # build and do not fail dependents (their dependency exists
-            # in the store), but the attribute is failed.
-            state.result.results.append(_success_result(job, AttributeStatus.failed))
-        else:
+        status, error = outcome_status(job, outcome)
+        state.result.results.append(_success_result(job, status, error=error))
+        # post_build_failure: the derivation itself built, so do not cache
+        # it as a failed build and do not fail dependents.
+        if outcome not in (BuildOutcome.success, BuildOutcome.post_build_failure):
             cancelled = outcome == BuildOutcome.cancelled
-            state.result.results.append(
-                _success_result(
-                    job,
-                    AttributeStatus.cancelled if cancelled else AttributeStatus.failed,
-                )
-            )
-            if outcome == BuildOutcome.failure and self.failed_build_cache is not None:
+            if (
+                outcome == BuildOutcome.failure
+                and self.failed_build_cache is not None
+                and not job.require_failure
+                and not job.ignore_failure
+            ):
                 await self.failed_build_cache.add(job.drv_path, self.build_url)
             # Cancelled jobs propagate cancellation, never
             # dependency_failed, and are not cached as failures.
@@ -574,6 +599,10 @@ class JobScheduler:
 
     async def _classify(self, job: NixEvalJobSuccess, result: ScheduleResult) -> str:
         """Decide whether to run or skip a ready job, recording skip results."""
+        # requireFailure inverts the result, so a present output or a
+        # cached failure must not short-circuit the build.
+        if job.require_failure:
+            return "run"
         # An output already in the local store is not a failure: the
         # local-store skip must win over a stale failed-build cache
         # entry for the same drv.
@@ -581,7 +610,7 @@ class JobScheduler:
             result.results.append(_success_result(job, AttributeStatus.skipped_local))
             return "skip"
 
-        if self.failed_build_cache is not None:
+        if self.failed_build_cache is not None and not job.ignore_failure:
             cached = await self.failed_build_cache.check(job.drv_path)
             if cached is not None:
                 result.results.append(

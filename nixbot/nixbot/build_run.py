@@ -21,6 +21,7 @@ from .build_scheduler import (
     AttributeStatus,
     BuildOutcome,
     JobScheduler,
+    outcome_status,
 )
 from .db import BuildStatus
 from .db_gen import builds as q
@@ -610,19 +611,15 @@ class _OrchestratorExecutor:
             mirror.cancel()
             self.o.attr_cancel_events.pop((self.build_record.id, job.attr), None)
 
-        status = {
-            BuildOutcome.success: AttributeStatus.succeeded,
-            BuildOutcome.failure: AttributeStatus.failed,
-            BuildOutcome.failure_no_cache: AttributeStatus.failed,
-            BuildOutcome.post_build_failure: AttributeStatus.failed,
-            BuildOutcome.cancelled: AttributeStatus.cancelled,
-        }[outcome]
+        status, error = outcome_status(job, outcome)
         # Failed attributes carry a log-tail excerpt so the build page
         # answers "why" without a click into the log. ANSI stays: the
         # web layer renders it, the API strips it.
-        error = None
         failure = None
-        if status == AttributeStatus.failed:
+        if error is None and status in (
+            AttributeStatus.failed,
+            AttributeStatus.ignored_failure,
+        ):
             failure = writer.capture.build_failure() if writer.capture else None
             error = (
                 (failure.as_text() if failure else "")
@@ -635,7 +632,7 @@ class _OrchestratorExecutor:
             job=job,
             error=error,
             failure=failure,
-            out_path=job.outputs.get("out"),
+            out_path=None if job.build_dependencies_only else job.outputs.get("out"),
             drv_path=job.drv_path,
             system=job.system,
         )
