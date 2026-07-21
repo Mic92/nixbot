@@ -69,11 +69,11 @@ async def effects_args(opts: EffectsOptions) -> dict[str, Any]:
     # secret_context needs the tag (isTag conditions), also when resolved from git
     opts.tag = tag
     url = opts.url or (await get_git_remote_url(opts.path) if has_git else None)
+    ref = f"refs/tags/{tag}" if tag else (f"refs/heads/{branch}" if branch else None)
     primary_repo = {
         "name": repo,
         "branch": branch,
-        # TODO: support ref
-        "ref": None,
+        "ref": ref,
         "tag": tag,
         "rev": rev,
         "shortRev": rev[:7],
@@ -93,8 +93,10 @@ def _flake_url(opts: EffectsOptions, rev: str) -> str:
     return f"git+file://{opts.path}?rev={rev}#"
 
 
-async def _effects_expr(opts: EffectsOptions, accessor: str) -> str:
-    """Nix expression selecting `accessor` from the herculesCI/effects output."""
+async def _effects_expr(opts: EffectsOptions, body: str) -> str:
+    """Nix expression evaluating `body` with `hci` bound to the flake's
+    herculesCI value and `call` applying the herculesCI arguments to values
+    that are functions."""
     args = await effects_args(opts)
     rev = args["rev"]
     escaped_args = json.dumps(json.dumps(args))
@@ -102,27 +104,30 @@ async def _effects_expr(opts: EffectsOptions, accessor: str) -> str:
     return f"""
       let
         flake = builtins.getFlake {url};
-        outputName = if flake.outputs ? herculesCI then
-          "herculesCI"
-        else if flake.outputs ? effects then
-          "effects"
-        else
-          null;
-      in
-        if outputName == null then
-          {{}}
-        else
-          (flake.outputs.${{outputName}}
-            (builtins.fromJSON {escaped_args})).{accessor} or {{}}
+        args = builtins.fromJSON {escaped_args};
+        call = f: if builtins.isFunction f then f args else f;
+        hci = call (flake.outputs.herculesCI or {{}});
+      in {body}
     """
 
 
 async def effect_function(opts: EffectsOptions) -> str:
-    return await _effects_expr(opts, "onPush.default.outputs.effects")
+    """Effects of every onPush job: `{ <job> = <effects attrset>; }`.
+    `outputs` and `outputs.effects` may be functions of the herculesCI
+    arguments, as in hercules-ci-agent. Without `onPush`, the flake's
+    top-level `effects` output becomes the default job's effects, matching
+    hercules-ci-agent's default job."""
+    return await _effects_expr(
+        opts,
+        "if hci ? onPush then builtins.mapAttrs"
+        " (job: j: call ((call (j.outputs or {})).effects or {}))"
+        " hci.onPush"
+        " else { default = call (flake.outputs.effects or {}); }",
+    )
 
 
 async def scheduled_effect_function(opts: EffectsOptions) -> str:
-    return await _effects_expr(opts, "onSchedule")
+    return await _effects_expr(opts, "hci.onSchedule or {}")
 
 
 async def _nix_eval_json(expr: str, opts: EffectsOptions) -> Any:  # noqa: ANN401
@@ -138,17 +143,21 @@ async def _nix_eval_json(expr: str, opts: EffectsOptions) -> Any:  # noqa: ANN40
 async def list_effects(opts: EffectsOptions) -> dict[str, EffectMeta]:
     """Effects with their scheduling metadata.
 
-    Effects may be nested in attribute sets; names and `after` entries are
-    dotted attribute paths (e.g. "env.staging"). Metadata is read from the
-    effect or its `run` wrapper (hercules-ci's runIf).
+    Names are dotted attribute paths starting with the onPush job, e.g.
+    "default.env.staging". Traversal follows hercules-ci-agent: recurse into
+    attribute sets unless `recurseForDerivations = false`, ignore `_type`
+    sets. `after` entries are absolute attr paths (job first) and are
+    returned as dotted names. Metadata comes from the effect or its `run`
+    wrapper (hercules-ci's runIf).
     """
     expr = f"""
         let
+          jobs = {await effect_function(opts)};
           isEffect = v: v ? isEffect || v ? effectScript || v ? run
             || v ? dependencies || (v.type or null) == "derivation";
           dep = name: a:
             if builtins.isList a then builtins.concatStringsSep "." a
-            else throw "effect '${{name}}': 'after' entries must be attribute paths (lists of strings)";
+            else throw "effect '${{name}}': 'after' entries must be attribute paths (lists of strings), job first";
           meta = name: e:
             let d = e.run or e; in {{
               after = map (dep name) (d.after or []);
@@ -156,10 +165,13 @@ async def list_effects(opts: EffectsOptions) -> dict[str, EffectMeta]:
             }};
           walk = prefix: v:
             let name = builtins.concatStringsSep "." prefix; in
-            if isEffect v then [ {{ inherit name; value = meta name v; }} ]
-            else builtins.concatLists
-              (map (n: walk (prefix ++ [ n ]) v.${{n}}) (builtins.attrNames v));
-        in builtins.listToAttrs (walk [] ({await effect_function(opts)}))
+            if !builtins.isAttrs v || v ? _type then []
+            else if isEffect v then [ {{ inherit name; value = meta name v; }} ]
+            else if v.recurseForDerivations or true then builtins.concatLists
+              (map (n: walk (prefix ++ [ n ]) v.${{n}}) (builtins.attrNames v))
+            else [];
+        in builtins.listToAttrs (builtins.concatLists
+          (map (job: walk [ job ] jobs.${{job}}) (builtins.attrNames jobs)))
         """
     effects = {
         name: EffectMeta(after=tuple(info["after"]), lock=info["lock"])

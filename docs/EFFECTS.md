@@ -8,12 +8,14 @@ for the upstream reference.
 
 Effects can declare two attributes on the effect derivation:
 
-- `after`: attribute paths of effects (of the same build) that must succeed
-  first, e.g. `[ [ "build-image" ] ]`. Each entry is a list of strings because
-  effects can be nested in attribute sets (`effects.env.staging` is
-  `[ "env" "staging" ]`). The effect only starts once everything in `after`
-  succeeded; if a dependency fails, the effect is marked `skipped` and reported
-  as a failure. Effects not ordered against each other run in parallel.
+- `after`: attribute paths of effects of the same build that must succeed first,
+  e.g. `[ [ "default" "build-image" ] ]`. Each entry is a list of strings: the
+  onPush job first, then the path inside that job's effects attrset (nested
+  effects work too: `[ "default" "env" "staging" ]`), so it matches the dotted
+  names shown everywhere else and can reference effects of another job. The
+  effect only starts once everything in `after` succeeded; if a dependency
+  fails, the effect is marked `skipped` and reported as a failure. Effects not
+  ordered against each other run in parallel.
 - `lock`: a named lock. Effects holding the same lock name run one at a time per
   project, across builds and pull requests — use it for shared resources like a
   staging environment or a hardware lab. A lock is handed out in build order:
@@ -50,7 +52,7 @@ Hercules CI itself ignores them; only nixbot orders and serializes on them.
         # Starts only after push-image succeeded; the "staging" lock makes
         # concurrent PRs take turns deploying to staging.
         deploy-staging = mkEffect {
-          after = [ [ "push-image" ] ];
+          after = [ [ "default" "push-image" ] ];
           lock = "staging";
           inputs = [ pkgs.kubectl ];
           effectScript = ''
@@ -59,7 +61,7 @@ Hercules CI itself ignores them; only nixbot orders and serializes on them.
         };
 
         deploy-prod = mkEffect {
-          after = [ [ "deploy-staging" ] ];
+          after = [ [ "default" "deploy-staging" ] ];
           lock = "prod";
           inputs = [ pkgs.kubectl ];
           effectScript = ''
@@ -85,16 +87,17 @@ parallel, then `deploy-staging`, then `deploy-prod`. If `push-image` fails, both
 deploys end up `skipped` and the commit status is red. Cycles or unknown paths
 in `after` fail effect discovery.
 
-Effects nested in attribute sets are addressed by their dotted path everywhere
-else: `nixbot-effects run env.staging`, log names, and the `after` entries in
-`nixbot-effects list` output. Inspect the DAG locally:
+nixbot evaluates every `onPush.<job>` of the `herculesCI` output. Outside the
+flake, effects are addressed by their dotted attribute path prefixed with the
+job name: `nixbot-effects run default.deploy-staging`, log names, and the
+`after` entries in `nixbot-effects list` output. Inspect the DAG locally:
 
 ```console
 $ nixbot-effects graph
-notify
-push-image
-└── deploy-staging [lock: staging]
-    └── deploy-prod [lock: prod]
+default.notify
+default.push-image
+└── default.deploy-staging [lock: staging]
+    └── default.deploy-prod [lock: prod]
 ```
 
 ## CLI usage
@@ -108,13 +111,13 @@ repositories using
 ```console
 $ cd my-repo
 $ nixbot-effects list
-{"deploy": {"after": ["notify"], "lock": "hw-lab"}, "notify": {"after": [], "lock": null}}
+{"default.deploy": {"after": ["default.notify"], "lock": "hw-lab"}, "default.notify": {"after": [], "lock": null}}
 
 $ nixbot-effects graph
-notify
-└── deploy [lock: hw-lab]
+default.notify
+└── default.deploy [lock: hw-lab]
 
-$ nixbot-effects run deploy
+$ nixbot-effects run default.deploy
 ```
 
 ### Remote repository (flake reference)
@@ -122,7 +125,7 @@ $ nixbot-effects run deploy
 No local checkout needed:
 
 ```console
-$ nixbot-effects run github:org/repo/branch#deploy
+$ nixbot-effects run github:org/repo/branch#default.deploy
 $ nixbot-effects list github:org/repo/branch
 $ nixbot-effects list-schedules github:org/repo/branch
 $ nixbot-effects run-scheduled github:org/repo#flake-update update
@@ -175,7 +178,7 @@ containing key-value pairs:
 ```
 
 ```console
-$ nixbot-effects run --secrets secrets.json deploy
+$ nixbot-effects run --secrets secrets.json default.deploy
 ```
 
 Inside the effect, secrets are available at `/run/secrets.json` (via

@@ -281,7 +281,7 @@ def parse_args() -> argparse.Namespace:
     run_parser.set_defaults(func=run_command)
     run_parser.add_argument(
         "effect",
-        help="Effect to run, or flakeref#effect (e.g. github:org/repo/branch#deploy)",
+        help="Effect to run, or flakeref#effect (e.g. github:org/repo/branch#default.deploy)",
     )
 
     list_schedules_parser = subparser.add_parser(

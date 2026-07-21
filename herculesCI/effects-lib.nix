@@ -14,12 +14,13 @@
       # see docs/EFFECTS.md.
       checkout ? false,
       # Scheduling metadata read via `nixbot-effects list`: attribute paths
-      # of effects that must succeed first (e.g. [ [ "deploy-staging" ] ]),
-      # and a named lock serializing runs across builds.
+      # of effects that must succeed first, job name first
+      # (e.g. [ [ "default" "deploy-staging" ] ]), and a named lock
+      # serializing runs across builds.
       after ? [ ],
       lock ? null,
     }:
-    pkgs.stdenvNoCC.mkDerivation ({
+    pkgs.stdenvNoCC.mkDerivation {
       inherit
         name
         effectScript
@@ -49,7 +50,7 @@
       '';
       userSetupPhase = ''eval "$userSetupScript"'';
       effectPhase = ''eval "$effectScript"'';
-    });
+    };
 
   # When the condition is false we still want eval/build of the effect's
   # closure to succeed, so return a no-op effect instead.
