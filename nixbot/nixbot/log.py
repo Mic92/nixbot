@@ -13,7 +13,7 @@ import sys
 import time
 from typing import Any
 
-# Attributes present on every LogRecord; everything else is user-supplied
+# Attributes present on every LogRecord. Everything else is user-supplied
 # via `extra=` and gets serialized into the JSON line.
 _RESERVED = frozenset(logging.LogRecord("", 0, "", 0, "", (), None).__dict__) | {
     "message",

@@ -36,7 +36,7 @@ class NixEvalJobSuccess(BaseModel):
     # nix-eval-jobs emits null output paths for impure and some
     # content-addressed derivations: it cannot know their store paths
     # without actually building them. Accept None so the whole eval step
-    # does not crash; downstream consumers already treat a missing
+    # does not crash. Downstream consumers already treat a missing
     # out path as "not statically known".
     outputs: dict[str, str | None]
     system: str

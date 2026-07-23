@@ -60,7 +60,7 @@
         <div id="drv-list"
              {% if live_structured %}data-stream="{{ build_path(project, build.number) }}/logs/{{ attr | urlencode }}/stream?format=structured"{% endif %}>
           {% if live_structured %}
-            {# Status groups matching the finished page; the JS moves
+            {# Status groups matching the finished page. The JS moves
                cards between them on status deltas. #}
             <div class="live-group" id="group-failed" hidden>
               <h2 class="section">
@@ -127,7 +127,7 @@
     const LIVE = {{ live | tojson }};
     const RUNNING = {{ (attr_status in ("pending", "building")) | tojson }};
     const log = document.getElementById("log");
-    /* Failures sit at the end; start there unless a line is linked. */
+    /* Failures sit at the end. Start there unless a line is linked. */
     if (log && !location.hash) log.scrollTop = log.scrollHeight;
     /* Queued or just (re)started with no stream yet: reload until it
        exists. Polling, not events: a status event sent before the

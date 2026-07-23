@@ -17,7 +17,7 @@ class GitlabClient(TokenForgeClient):
 
     def project_api_url(self, owner: str, repo: str) -> str:
         # GitLab accepts the URL-encoded full path wherever it takes a
-        # numeric project id; namespaces may be nested (a/b/c).
+        # numeric project id. Namespaces may be nested (a/b/c).
         return (
             f"{self.instance_url}/api/v4/projects/{quote(f'{owner}/{repo}', safe='')}"
         )

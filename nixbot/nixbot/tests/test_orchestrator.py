@@ -1,7 +1,7 @@
 """Orchestrator/state-machine tests: ephemeral Postgres,
 real git repos, fake eval and executor."""
 
-# ruff: noqa: PLR2004, ARG001, ARG002 (test literals; protocol fakes ignore args)
+# ruff: noqa: PLR2004, ARG001, ARG002 (test literals. Protocol fakes ignore args)
 
 from __future__ import annotations
 
@@ -306,7 +306,7 @@ def run_effect_build(
     upstream: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> EffectBuildRunner:
-    """One default-branch build with a fake "deploy" effect; returns
+    """One default-branch build with a fake "deploy" effect. Returns
     the recorded effect runs for further assertions."""
 
     async def run() -> tuple[BuildRecord | None, Orchestrator, RepoInfo, list[str]]:
@@ -409,7 +409,7 @@ async def test_tree_hash_reuse(run_event: EventRunner, upstream: Path) -> None:
     executor = FakeExecutor()
     build1, _ = await run_event(eval_runner, executor)
     # Same tree content from another context: no second build, no
-    # second eval; existing result re-reported.
+    # second eval. Existing result re-reported.
     build2, reporter2 = await run_event(eval_runner, executor)
     assert build1 is not None
     assert build2 is not None
@@ -775,7 +775,7 @@ async def test_eval_warnings_null_when_empty(
 async def test_rerun_flips_stale_red_eval_status(
     pool: asyncpg.Pool, make_env: EnvFactory, upstream: Path
 ) -> None:
-    """Resuming from stored eval results skips eval; the eval status
+    """Resuming from stored eval results skips eval. The eval status
     must still be re-posted green over a stale red one."""
     sha = add_commit(upstream, "eval-flip")
     # Failing attribute: keeps the effects path out of this test.
@@ -1028,7 +1028,7 @@ async def test_eval_netrc_withheld_from_pr_with_instance_wide_creds(
     make_env: EnvFactory, tmp_path: Path, upstream: Path
 ) -> None:
     """PR-controlled eval fetches arbitrary flake inputs with the
-    netrc; an instance-wide Gitea/GitLab token must not reach it.
+    netrc. An instance-wide Gitea/GitLab token must not reach it.
     Repo-scoped GitHub tokens may."""
 
     git(upstream, "checkout", "-b", "prsrc")
@@ -1188,7 +1188,7 @@ async def test_recovery_rerun_runs_effects(
 async def test_unsupported_system_attr_does_not_block_aggregation(
     pool: asyncpg.Pool, run_event: EventRunner, upstream: Path
 ) -> None:
-    """The scheduler drops unsupported systems; a pending row for them
+    """The scheduler drops unsupported systems. A pending row for them
     would keep the build non-terminal forever."""
 
     add_commit(upstream, "sys")
@@ -1303,7 +1303,7 @@ async def test_effect_items_resume_only_pending(
     build, orchestrator, project, ran = await run_effect_build()
     assert build is not None
     assert ran == ["deploy"]
-    # Crash mid-run: the sweep settles the row; the requeued
+    # Crash mid-run: the sweep settles the row. The requeued
     # item must skip it.
     await pool.execute(
         "UPDATE build_effects SET status = 'running' WHERE build_id = $1",
@@ -1365,7 +1365,7 @@ async def test_failed_effect_reports_failure_status(
     upstream: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A failed effect must post a failure commit status; otherwise a
+    """A failed effect must post a failure commit status. Otherwise a
     failed deploy leaves the commit green (issue #30)."""
 
     async def failing_run(ctx: object, name: str, log_write: object = None) -> bool:
@@ -1431,7 +1431,7 @@ async def test_post_process_error_does_not_wedge_build(
     finished = [e for e in reporter.events if e[0] == "finished"]
     assert finished
     assert finished[-1][2] == BuildStatus.FAILED
-    # The eval succeeded; only the build may turn red.
+    # The eval succeeded. Only the build may turn red.
     assert ("eval", build.id, False, ()) not in reporter.events
 
 
@@ -1603,7 +1603,7 @@ async def test_reuse_replays_effect_statuses_to_new_commit(
     assert first is not None
     await drain_effect_items(orchestrator, project, pool)
 
-    # A second commit with an identical tree reuses the build; its
+    # A second commit with an identical tree reuses the build. Its
     # effects do not re-run, so the statuses must be replayed.
     git(upstream, "commit", "--allow-empty", "-m", "reuse-replay-empty")
     sha2 = git(upstream, "rev-parse", "HEAD")
@@ -1729,7 +1729,7 @@ async def test_post_process_paths_are_forge_scoped(
     make_env: EnvFactory, tmp_path: Path, upstream: Path
 ) -> None:
     """Gcroots and outputs for the same owner/repo on two forges must
-    not collide; the forge belongs in both path schemes."""
+    not collide. The forge belongs in both path schemes."""
 
     add_commit(upstream, "forge-scope")
     orchestrator, _, project = await make_env(

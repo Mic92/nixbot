@@ -54,7 +54,7 @@ async def replay_terminal_status(
     o: Orchestrator, event: ChangeEvent, build: BuildRecord
 ) -> None:
     """Re-post the final eval and build statuses of an already
-    terminal build for a new context; without this the context's
+    terminal build for a new context. Without this the context's
     nix-eval/nix-build checks stay pending forever. A succeeded
     build with zero attributes is a genuine empty-but-green eval,
     not an eval failure."""
@@ -106,7 +106,7 @@ async def finish_linked(
     eval_success: bool | None = None,
 ) -> None:
     """Final status fan-out for second contexts attached to this
-    build; eval_success is None when no eval result exists."""
+    build. eval_success is None when no eval result exists."""
     for linked in o.linked_events.pop(build.id, []):
         if eval_success is not None:
             await o.reporter.eval_finished(
@@ -172,7 +172,7 @@ async def reuse_terminal_build(  # noqa: PLR0913
         try:
             await _post_process_existing(o, event, build)
             if build.effects_started:
-                # Effects already ran and will not re-run; replay their
+                # Effects already ran and will not re-run. Replay their
                 # statuses so the reusing commit is not left blank.
                 await replay_effect_statuses(o, event, build)
             else:

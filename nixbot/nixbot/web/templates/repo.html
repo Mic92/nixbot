@@ -128,7 +128,7 @@
                 {% endif %}
               </td>
               <td class="attr-status">
-                {# UX only; the run route enforces authz server-side. #}
+                {# UX only. The run route enforces authz server-side. #}
                 {% if can_run_schedules %}
                   <form method="post" action="{{ repo_path(project) }}/schedules/run">
                     <input type="hidden" name="schedule" value="{{ s.schedule }}">

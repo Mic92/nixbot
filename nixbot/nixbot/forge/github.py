@@ -1,5 +1,5 @@
 """GitHub App auth and discovery. App JWTs are signed via openssl
-with the operator-supplied private key; short-lived installation
+with the operator-supplied private key. Short-lived installation
 tokens are minted per installation and cached until shortly before
 expiry. Private-repo fetches get per-fetch credentials through the
 gitrepo CredentialsProvider interface (netrc with x-access-token)."""
@@ -103,7 +103,7 @@ class GitHubAppClient:
         ] = {}
         # Per-key mint locks so concurrent misses collapse into one API call.
         self._token_locks: dict[tuple[int, tuple[str, ...] | None], asyncio.Lock] = {}
-        # owner/repo (lowercase) -> installation id; filled by discovery.
+        # owner/repo (lowercase) -> installation id. Filled by discovery.
         self.repo_installations: dict[str, int] = {}
 
     async def _app_jwt(self) -> str:
@@ -118,7 +118,7 @@ class GitHubAppClient:
         self, installation_id: int, repositories: tuple[str, ...] | None = None
     ) -> str:
         """Mint (or reuse) an installation token. `repositories` limits
-        the token to those repo names; pass it for any token that can
+        the token to those repo names. Pass it for any token that can
         leak into PR-controlled paths (e.g. fetch credentials)."""
         cache_key = (installation_id, repositories)
         cached = self._installation_tokens.get(cache_key)
@@ -149,7 +149,7 @@ class GitHubAppClient:
             msg = f"failed to mint installation token: {response.status_code} {response.text}"
             raise ForgeError(msg, status_code=response.status_code)
         token = response.json()["token"]
-        # GitHub installation tokens last 60 minutes; refresh at 80%.
+        # GitHub installation tokens last 60 minutes. Refresh at 80%.
         self._installation_tokens[cache_key] = _CachedToken(
             token, datetime.now(tz=UTC) + timedelta(minutes=48)
         )
@@ -250,7 +250,7 @@ class GitHubAppClient:
             try:
                 repos.extend(await self._discover_installation(installation_id))
             except (ForgeError, httpx.HTTPError):
-                # e.g. suspended installation; keep discovering the rest.
+                # e.g. suspended installation. Keep discovering the rest.
                 logger.exception(
                     "repo discovery failed for installation %s", installation_id
                 )

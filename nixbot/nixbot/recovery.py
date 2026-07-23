@@ -2,7 +2,7 @@
 
 Recovery resumes rather than restarts: attributes already terminal in
 the database are skipped (attribute completion is one transactional
-write, so the database is trustworthy); pending attributes are first
+write, so the database is trustworthy). Pending attributes are first
 re-checked against the nix store by reading its sqlite database
 directly (see check_store_paths) — already-valid out paths complete
 without a rebuild — and only the rest re-run.
@@ -11,11 +11,11 @@ automatically.
 
 DB outage policy: when the database is unreachable the affected
 operation raises and the service restarts via systemd. Webhook
-fail-fast lives in ingestion; the health check backs the
+fail-fast lives in ingestion. The health check backs the
 HTTP health endpoint.
 
 Retention: builds older than the configured horizon are deleted along
-with their log files; stale workdirs are swept via RepoManager.cleanup.
+with their log files. Stale workdirs are swept via RepoManager.cleanup.
 """
 
 from __future__ import annotations
@@ -95,7 +95,7 @@ async def find_unfinished_builds(
         pending_jobs = []
         for attr in attrs:
             # 'building' rows are attributes that were running when the
-            # service died; they must resume like pending ones.
+            # service died. They must resume like pending ones.
             if attr.status not in ("pending", "building"):
                 continue  # terminal in DB: never redone
             if not attr.drv_path:
@@ -186,7 +186,7 @@ async def settle_already_built(
     path_checker: Callable[[list[str]], Awaitable[set[str]]] = check_store_paths,
 ) -> tuple[list[NixEvalJobSuccess], list[tuple[str, str]]]:
     """Complete pending attributes whose out paths already exist in the
-    store; return (jobs that still need building, settled (attr,
+    store. Return (jobs that still need building, settled (attr,
     out_path) pairs for gcroots/outputs post-processing)."""
     valid = await path_checker(
         [p for job in build.pending_jobs if (p := job.outputs.get("out"))]

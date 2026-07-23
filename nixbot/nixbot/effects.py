@@ -3,12 +3,12 @@
 Ported from nixbot_effects.py + the effects parts of nix_eval.py:
 
 - effects run per the DEFAULT BRANCH's repo config: default branch
-  always; PRs when `effects_on_pull_requests`; branches matching
+  always; PRs when `effects_on_pull_requests`. Branches matching
   `effects_branches` globs,
 - effects are listed via `nixbot-effects list` and each effect run
   via `nixbot-effects run <name>`,
 - per-repo secret resolution supports exact `forge:owner/repo` and org
-  wildcard `forge:owner/*` entries; the secret JSON is written next to
+  wildcard `forge:owner/*` entries. The secret JSON is written next to
   the checkout as ../secrets.json for the duration of the run,
 - `effects.extraSandboxPaths` are forwarded.
 
@@ -42,10 +42,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Deploy tooling emits arbitrarily long lines; asyncio's 64 KiB
+# Deploy tooling emits arbitrarily long lines. Asyncio's 64 KiB
 # StreamReader default would abort the read loop on them.
 STREAM_LIMIT = 16 * 1024 * 1024
-# Deploys can hang on the network; same cap as attribute builds.
+# Deploys can hang on the network. Same cap as attribute builds.
 DEFAULT_TIMEOUT = 60 * 60 * 3
 
 
@@ -117,7 +117,7 @@ def effects_context(  # noqa: PLR0913
     git_token: str | None,
     task_token: str | None,
 ) -> EffectsContext:
-    """Context with the service-level configuration filled in; shared
+    """Context with the service-level configuration filled in. Shared
     by push and scheduled effect runs."""
     return EffectsContext(
         worktree_path=worktree_path,
@@ -262,7 +262,7 @@ async def run_effect_command(
     targets: list[str],
     log_write: LogWrite | None = None,
 ) -> bool:
-    """Run one (push or scheduled) effect; returns success. The secrets
+    """Run one (push or scheduled) effect. Returns success. The secrets
     file is written outside the checkout (parent directory, like the
     buildbot setup) and removed afterwards."""
     side_files: list[Path] = []

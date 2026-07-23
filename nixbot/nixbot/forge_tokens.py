@@ -148,7 +148,7 @@ class ForgeTokenRefresher:
             session_id,
             token.access_token,
             lifetime,
-            # Providers may rotate the refresh token; keep the old one
+            # Providers may rotate the refresh token. Keep the old one
             # if the response omitted a new one.
             refresh=RefreshCredentials(
                 token.refresh_token or credentials.refresh_token,

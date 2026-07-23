@@ -4,7 +4,7 @@ served in the web UI, or posted to a forge.
 We only redact secrets we control (deploy secret values, git and task
 tokens): matching them literally catches any forge's token by value and
 never touches unrelated output. Token-shape patterns are deliberately
-avoided; they cannot cover Gitea's prefix-less tokens and risk masking
+avoided. They cannot cover Gitea's prefix-less tokens and risk masking
 commit SHAs and other legitimate text.
 """
 
@@ -23,7 +23,7 @@ _MIN_LITERAL_LEN = 6
 
 def secret_literals(*values: str | None) -> list[bytes]:
     """Literal secrets to redact, including the leaf string values of
-    any JSON secret payload; too-short values are dropped."""
+    any JSON secret payload. Too-short values are dropped."""
     found: set[str] = set()
     for value in values:
         if value is None:

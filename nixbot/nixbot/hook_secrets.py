@@ -20,7 +20,7 @@ class WebhookSecrets:
 
     def __init__(self, pool: asyncpg.Pool, forge: str | None = None) -> None:
         self.pool = pool
-        # Only lookups by forge repo id need the forge scope; rotation
+        # Only lookups by forge repo id need the forge scope. Rotation
         # and creation are keyed by project id.
         self.forge = forge
 
@@ -45,7 +45,7 @@ class WebhookSecrets:
         )
 
     async def rotate(self, project_id: int) -> str:
-        """Replace the secret; the old one stops verifying immediately.
+        """Replace the secret. The old one stops verifying immediately.
         Auto-managed hooks re-sync on the next discovery cycle."""
         secret = secrets.token_hex(32)
         return expect(

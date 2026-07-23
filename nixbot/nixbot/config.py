@@ -40,7 +40,7 @@ def read_secret_file(secret_file: Path) -> str:
 
 
 def resolve_credential_path(path: Path | None) -> Path | None:
-    """Relative secret paths are systemd LoadCredential names; resolve
+    """Relative secret paths are systemd LoadCredential names. Resolve
     them against $CREDENTIALS_DIRECTORY (mirrors read_secret_file)."""
     if path is None or path.is_absolute():
         return path
@@ -51,14 +51,14 @@ def resolve_credential_path(path: Path | None) -> Path | None:
 
 
 # Note that serialization isn't correct, as there is no way to *rename* the
-# field `nix_type` to `_type`; one must always specify `by_alias=True`, such
+# field `nix_type` to `_type`. One must always specify `by_alias=True`, such
 # as `model_dump(by_alias=True)`. Relevant issue:
 # https://github.com/pydantic/pydantic/issues/8379
 class Interpolate(BaseModel):
     """A string with placeholder interpolation, set from repo config.
 
     Kept for config-format compatibility with the buildbot-era
-    `Interpolate` (`{"_type": "interpolate", "value": ...}`); the service
+    `Interpolate` (`{"_type": "interpolate", "value": ...}`). The service
     substitutes placeholders itself when running post-build steps.
     """
 
@@ -73,7 +73,7 @@ class Interpolate(BaseModel):
 
 class TokenForgeConfig(BaseModel):
     """Shared token/OAuth/SSH options for token-authenticated forges
-    (Gitea, GitLab); subclasses only differ in defaults and the config
+    (Gitea, GitLab). Subclasses only differ in defaults and the config
     key used in error messages."""
 
     _config_key: ClassVar[str]
@@ -138,7 +138,7 @@ class PullBasedConfig(BaseModel):
 
 
 class GitHubConfig(BaseModel):
-    """GitHub App configuration (App auth only; token mode was dropped)."""
+    """GitHub App configuration (App auth only. Token mode was dropped)."""
 
     id: int
     secret_key_file: Path
@@ -304,7 +304,7 @@ class Config(BaseModel):
     @field_validator("url", "webhook_base_url")
     @classmethod
     def _strip_trailing_slash(cls, value: str | None) -> str | None:
-        # Joined with absolute paths everywhere; a trailing slash
+        # Joined with absolute paths everywhere. A trailing slash
         # produces double-slash URLs (the state API 404s on them).
         return value.rstrip("/") if value is not None else None
 
@@ -313,11 +313,11 @@ class Config(BaseModel):
 
     eval_max_memory_size: int = 4096
     admins: list[str] = []
-    # Private visibility for non-forge logins; key/rule syntax in
+    # Private visibility for non-forge logins. Key/rule syntax in
     # docs/OIDC.md, semantics in auth.can_view_private.
     private_repo_viewers: dict[str, list[str]] = {}
     eval_worker_count: int | None = None
-    # Concurrent evaluations (global); default matches today's global eval lock.
+    # Concurrent evaluations (global). Default matches today's global eval lock.
     eval_concurrency: int = 1
     # Global cap on concurrent attribute builds; None = derive from CPU count.
     build_concurrency: int | None = None
@@ -332,7 +332,7 @@ class Config(BaseModel):
     failed_build_report_limit: int = (
         47  # Default: 50 total - 3 reserved for eval/build/effects
     )
-    # Commit status context prefix; buildbot-nix migrations can set
+    # Commit status context prefix. Buildbot-nix migrations can set
     # "buildbot" to keep existing branch protection rules working.
     status_context_prefix: str = "nixbot"
     branches: BranchConfigDict = BranchConfigDict({})
@@ -352,11 +352,11 @@ class Config(BaseModel):
     allow_unauthenticated_control: bool = False
     build_max_silent_time: int = 60 * 20  # stop stuck builds after 20 minutes
     build_timeout: int = 60 * 60 * 3  # 3 hours default for nix build
-    # Wall-clock limit for one nix-eval-jobs run; a hung evaluation
+    # Wall-clock limit for one nix-eval-jobs run. A hung evaluation
     # would otherwise hold the global eval slot forever.
     eval_timeout: int = 60 * 60
 
-    # Per-attribute log size cap in bytes; head and tail kept on truncation.
+    # Per-attribute log size cap in bytes. Head and tail kept on truncation.
     log_size_limit: int = 64 * 1024 * 1024
     # Build/log retention horizon in days.
     retention_days: int = 90
@@ -367,7 +367,7 @@ class Config(BaseModel):
 
     http_port: int = 8010
     http_unix_socket: Path | None = None
-    # Also bind the TCP port when a unix socket is configured; off by
+    # Also bind the TCP port when a unix socket is configured. Off by
     # default because the TCP listener would bypass the TLS proxy.
     http_listen: bool = False
 
@@ -397,7 +397,7 @@ class ScheduleWhen(BaseModel):
         """Resolve to concrete cron-like fields.
 
         An unset minute gets a deterministic pseudo-random default
-        seeded by the schedule name (thundering-herd avoidance); an
+        seeded by the schedule name (thundering-herd avoidance). An
         unset hour means every hour, like Hercules.
         Day-of-week names are normalized to integers (Mon=0 .. Sun=6).
         """

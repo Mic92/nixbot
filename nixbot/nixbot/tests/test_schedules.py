@@ -1,6 +1,6 @@
 """Tests for scheduled effects: parsing, cron matching, persistence."""
 
-# ruff: noqa: PLR2004, S106 (test literals; secret_name is a credential id)
+# ruff: noqa: PLR2004, S106 (test literals, secret_name is a credential id)
 from __future__ import annotations
 
 import os
@@ -131,7 +131,7 @@ async def test_replace_schedules_preserves_last_run_for_unchanged_spec(
 async def test_replace_schedules_tolerates_duplicate_effect_names(
     pool: asyncpg.Pool,
 ) -> None:
-    """Effect lists are repo-controlled; a duplicate name must not crash
+    """Effect lists are repo-controlled. A duplicate name must not crash
     the update and permanently block schedule refreshes."""
 
     project_id = await insert_project(pool, forge_repo_id="sched-dupe")
@@ -187,7 +187,7 @@ async def test_store_roundtrip_and_due(pool: asyncpg.Pool) -> None:
 
 
 def test_due_occurrence_window() -> None:
-    # The sweep loop drifts past minute boundaries; occurrences within
+    # The sweep loop drifts past minute boundaries. Occurrences within
     # the window must still be found.
     when = ScheduleWhen(minute=30, hour=2)
     occ = due_occurrence(when, "s", datetime(2026, 6, 5, 2, 33, 10, tzinfo=UTC))

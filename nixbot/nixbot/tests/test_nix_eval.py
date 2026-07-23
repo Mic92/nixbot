@@ -84,7 +84,7 @@ def test_sandbox_command_mounts(tmp_path: Path) -> None:
 
 
 def test_sandbox_skips_missing_daemon_socket(tmp_path: Path) -> None:
-    # Single-user nix installs have no daemon socket; the sandbox must
+    # Single-user nix installs have no daemon socket. The sandbox must
     # not hard-bind it (bwrap aborts on missing source paths) and the
     # evaluator must not be forced through the absent daemon.
     settings = EvalSettings(
@@ -198,7 +198,7 @@ async def test_eval_runner_integration(tmp_path: Path) -> None:
 async def test_stderr_noise_filtered_and_warnings_reach_callback(
     tmp_path: Path,
 ) -> None:
-    """Noise stays out of both the tail and the callback; warning and
+    """Noise stays out of both the tail and the callback. Warning and
     error lines reach the callback ANSI-stripped, progress output does
     not."""
     script = tmp_path / "warn.sh"
@@ -285,7 +285,7 @@ def test_cgroup_limiter_create_handles_missing_delegation(
 
 async def test_cgroup_limiter_eval_cgroup_lifecycle(tmp_path: Path) -> None:
     # Filesystem-level behavior with a plain directory standing in for the
-    # delegated subtree; cgroup.kill writes fail and are tolerated.
+    # delegated subtree. cgroup.kill writes fail and are tolerated.
     limiter = nix_eval.CgroupLimiter(tmp_path)
     path = limiter.new_eval_cgroup(123)
     assert (path / "memory.max").read_text() == str(123 * 1024 * 1024)
@@ -310,7 +310,7 @@ async def test_eval_runner_handles_long_json_lines(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # nix-eval-jobs emits one JSON object per line including the full
-    # neededBuilds closure; such lines easily exceed asyncio's 64 KiB
+    # neededBuilds closure. Such lines easily exceed asyncio's 64 KiB
     # default StreamReader limit and must not crash the evaluation.
     job = {
         "attr": "big",
@@ -383,7 +383,7 @@ async def test_eval_runner_flushes_partial_batch_on_timeout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # A slow eval that trickles jobs must not sit on a partial batch
-    # until the size threshold; the flush interval bounds the latency.
+    # until the size threshold. The flush interval bounds the latency.
     job = json.dumps(
         {
             "attr": "first",
@@ -484,7 +484,7 @@ async def test_eval_fails_cleanly_on_line_over_stream_limit(
 ) -> None:
     # A JSON line over the StreamReader limit used to raise ValueError
     # out of the reader, leaking a running nix-eval-jobs blocked on the
-    # full pipe; it must surface as a clean EvalError instead.
+    # full pipe. It must surface as a clean EvalError instead.
     monkeypatch.setattr(nix_eval, "STREAM_LIMIT", 64 * 1024)
     fake_nix_eval_jobs(
         tmp_path, monkeypatch, "head -c 200000 /dev/zero | tr '\\0' 'x'\necho\n"

@@ -54,7 +54,7 @@ async def test_failed_migration_error_not_masked(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """When a migration kills the connection, the transaction rollback
-    and the advisory unlock fail too; the original error must still
+    and the advisory unlock fail too. The original error must still
     propagate."""
     bad = migrations_mod.Migration(
         version=9999,
@@ -69,7 +69,7 @@ async def test_failed_migration_error_not_masked(
 
 
 async def test_huge_attr_name_does_not_break_notify_trigger(pool: asyncpg.Pool) -> None:
-    """pg_notify payloads cap at ~8000 bytes; the notify trigger must
+    """pg_notify payloads cap at ~8000 bytes. The notify trigger must
     truncate the repo-controlled attr name or every insert/update of
     such a row fails."""
 
@@ -149,7 +149,7 @@ async def test_check_run_store_round_trip(pool: asyncpg.Pool) -> None:
 
 
 async def test_failed_status_store_component(pool: asyncpg.Pool) -> None:
-    """FailedStatusStore is the only consumer of failed_statuses; its
+    """FailedStatusStore is the only consumer of failed_statuses. Its
     mark/upsert/get/clear cycle covers the table semantics."""
 
     store = FailedStatusStore(pool)
@@ -206,7 +206,7 @@ async def test_get_or_create_build_concurrent_no_duplicates(postgres_dsn: str) -
 
 
 async def test_cancelled_build_not_reused(pool: asyncpg.Pool) -> None:
-    # A cancelled build carries no verdict; re-pushing the same tree
+    # A cancelled build carries no verdict. Re-pushing the same tree
     # must build again instead of re-reporting "cancelled".
     project_id = await insert_project(pool, "cancelled-reuse")
     first, created = await db.get_or_create_build(
@@ -222,7 +222,7 @@ async def test_cancelled_build_not_reused(pool: asyncpg.Pool) -> None:
 
 
 async def test_reuse_backfills_pr_fields(pool: asyncpg.Pool) -> None:
-    # Branch push creates the build first; the PR event for the same
+    # Branch push creates the build first. The PR event for the same
     # tree must backfill pr_number/pr_author so the PR author keeps
     # restart/cancel rights.
     project_id = await insert_project(pool, "pr-backfill")
@@ -252,7 +252,7 @@ async def test_reuse_backfills_pr_fields(pool: asyncpg.Pool) -> None:
 async def test_reuse_by_other_pr_clears_both_identity_fields(
     pool: asyncpg.Pool,
 ) -> None:
-    # Two PRs producing the same tree share a build; the second PR's
+    # Two PRs producing the same tree share a build. The second PR's
     # event must not leave a row mixing PR A's number with no author,
     # nor attach PR B's author to PR A's number.
     project_id = await insert_project(pool, "pr-cross")
@@ -316,7 +316,7 @@ async def test_branch_push_takes_over_reused_pr_build(pool: asyncpg.Pool) -> Non
 
 
 async def test_pr_does_not_capture_branch_push_build(pool: asyncpg.Pool) -> None:
-    # A default-branch push created the build; a PR for a different
+    # A default-branch push created the build. A PR for a different
     # branch sharing the tree hash must not gain pr_author authz
     # (restart/cancel control) over it.
     project_id = await insert_project(pool, "pr-capture")
@@ -340,7 +340,7 @@ async def test_pr_does_not_capture_branch_push_build(pool: asyncpg.Pool) -> None
 
 
 async def test_complete_attribute_preserves_eval_outputs(pool: asyncpg.Pool) -> None:
-    # Eval records the full outputs map (multi-output drvs); completion
+    # Eval records the full outputs map (multi-output drvs). Completion
     # must merge the freshly-known "out" path into it, not replace the
     # map, and must never NULL an existing map when no out path is
     # known (restarted/cancelled attributes).
@@ -442,7 +442,7 @@ async def test_complete_attribute_marks_substituted_as_cached(
 
 
 async def test_complete_attribute_replaces_log_metadata(pool: asyncpg.Pool) -> None:
-    # Attribute restarts rewrite the same log file; the inline size
+    # Attribute restarts rewrite the same log file. The inline size
     # metadata must reflect the latest run, not the first.
     project_id = await insert_project(pool, "log-dup")
     build, _ = await db.get_or_create_build(pool, project_id, "tree-l", "sha", "main")

@@ -1,8 +1,8 @@
 """Project store: DB-backed enablement keyed by stable forge repo ID.
 
-Discovery (forge/) feeds repos in; rows are upserted on
+Discovery (forge/) feeds repos in. Rows are upserted on
 (forge, forge_repo_id) so renames/transfers keep history and the
-enablement flag. Enablement is toggled by admins in the web UI; the
+enablement flag. Enablement is toggled by admins in the web UI. The
 legacy topic filter is imported once, on the first startup with an
 empty projects table.
 """
@@ -91,7 +91,7 @@ class RepoStore:
         """Upsert pull-based repositories as (name, url, default_branch).
 
         Listing a repository in the static config is the enablement
-        decision, so new rows start enabled; the admin toggle is
+        decision, so new rows start enabled. The admin toggle is
         preserved on conflict."""
         if not repos:
             return
@@ -111,7 +111,7 @@ class RepoStore:
         self, forge: str, forge_repo_ids: Sequence[str]
     ) -> None:
         """Delete disabled repos of `forge` that discovery no longer
-        returned; enabled projects keep their build history."""
+        returned. Enabled projects keep their build history."""
         await q.prune_missing_disabled_projects(
             self.pool, forge=forge, forge_repo_ids=list(forge_repo_ids)
         )

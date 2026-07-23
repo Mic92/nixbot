@@ -30,7 +30,7 @@ SYSTEM = "x86_64-linux"
 
 
 class FakeExecutor:
-    """Records build order; per-attr outcomes configurable."""
+    """Records build order. Per-attr outcomes configurable."""
 
     def __init__(self, outcomes: dict[str, BuildOutcome] | None = None) -> None:
         self.outcomes = outcomes or {}
@@ -238,7 +238,7 @@ async def test_mixed_eval_results_independent() -> None:
 
 
 async def test_skipped_local_frees_dependents_immediately() -> None:
-    # parent is already in the local store (skipped); its dependent must
+    # parent is already in the local store (skipped). Its dependent must
     # be dispatched right away, not only after the unrelated running
     # build finishes.
     parent = mk_job("parent", cache_status=CacheStatus.local)
@@ -358,7 +358,7 @@ async def test_streaming_builds_start_before_eval_finishes() -> None:
 
 async def test_streaming_dependency_across_batches() -> None:
     # A job arriving in a later batch can depend on one from an
-    # earlier batch that already finished; it must still build.
+    # earlier batch that already finished. It must still build.
     async def main() -> None:
         executor = FakeExecutor()
         scheduler = JobScheduler(executor, [SYSTEM])
@@ -448,7 +448,7 @@ async def test_streaming_batch_order_does_not_leak_failed_dependency() -> None:
         await queue.put([mk_job("f")])
         run_task = asyncio.create_task(scheduler.run_incremental(queue))
         await asyncio.wait_for(dep_failed.wait(), timeout=5)
-        # "top" precedes "mid" in the batch; only "mid" depends on the
+        # "top" precedes "mid" in the batch. Only "mid" depends on the
         # failed job directly.
         await queue.put([mk_job("top", deps=["mid"]), mk_job("mid", deps=["f"])])
         await queue.put(None)
@@ -495,7 +495,7 @@ async def test_streaming_pending_dependent_fails_when_late_dep_arrives_failed() 
         await queue.put([mk_job("top", deps=["r", "a"])])
         await queue.put([mk_job("a", deps=["f"])])
         await queue.put(None)
-        # "top" must settle while "r" still runs; only then release.
+        # "top" must settle while "r" still runs. Only then release.
         await asyncio.wait_for(a_settled.wait(), timeout=5)
         release_r.set()
         result = await asyncio.wait_for(run_task, timeout=5)

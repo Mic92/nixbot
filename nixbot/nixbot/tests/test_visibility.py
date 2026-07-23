@@ -359,7 +359,7 @@ def test_api_token_inherits_login_groups(harness: WebHarness) -> None:
 
 
 def test_access_cache_prunes_expired_on_get() -> None:
-    """Expired entries must not accumulate forever; get() prunes them."""
+    """Expired entries must not accumulate forever. get() prunes them."""
     cache = AccessCache(ttl=0)
     cache.set("github:alice", RepoAccess(frozenset(), frozenset()))
     cache.set("github:bob", RepoAccess(frozenset(), frozenset()))
@@ -470,5 +470,5 @@ async def test_github_repo_access_fetcher_enterprise_api_url() -> None:
     access = await fetcher.repo_access(user, "tok")
     assert access.accessible == frozenset({"github:5", "github:6", "github:7"})
     assert access.admin == frozenset({"github:5"})
-    # write/maintain/admin all set the push flag; read-only does not.
+    # write/maintain/admin all set the push flag. Read-only does not.
     assert access.writable == frozenset({"github:5", "github:6"})

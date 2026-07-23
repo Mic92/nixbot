@@ -6,7 +6,7 @@ commit-status *contexts* share the required-checks namespace, so
 branch protection rules are unaffected.
 
 Combined per-phase contexts are `nixbot/nix-eval` (warning count
-appended to the description) and `nixbot/nix-build`; the prefix is
+appended to the description) and `nixbot/nix-build`. The prefix is
 configurable via status_context_prefix, e.g. "buildbot" to keep
 branch protection rules from a buildbot-nix deployment working.
 Per-attribute failure statuses (`nixbot/nix-build
@@ -57,7 +57,7 @@ CHECK_RUN_TEXT_LIMIT = 60_000
 
 logger = logging.getLogger(__name__)
 
-# Cap on remembered (build id -> posted generation) entries; one entry
+# Cap on remembered (build id -> posted generation) entries. One entry
 # per build forever would be a slow leak in a long-lived process.
 POSTED_GENERATIONS_MAX = 1024
 
@@ -80,7 +80,7 @@ class StatusState(StrEnum):
 
 
 class StatusPostError(Exception):
-    """HTTP-level status post failure; retry_after carries the forge's
+    """HTTP-level status post failure. retry_after carries the forge's
     Retry-After / rate-limit-reset hint in seconds, if any."""
 
     def __init__(self, message: str, retry_after: float | None = None) -> None:
@@ -89,7 +89,7 @@ class StatusPostError(Exception):
 
 
 class CheckPermissionError(ForgeError):
-    """The GitHub App lacks Checks: write; latched so we stop
+    """The GitHub App lacks Checks: write. Latched so we stop
     hammering the API until the operator fixes the permission."""
 
 
@@ -127,7 +127,7 @@ class CheckRunIds(Protocol):
 
 
 class CheckRunStore:
-    """(project, sha, name) → GitHub check-run id; lets the poster
+    """(project, sha, name) → GitHub check-run id. Lets the poster
     PATCH the existing run instead of stacking duplicates on a SHA."""
 
     def __init__(self, pool: asyncpg.Pool) -> None:
@@ -163,7 +163,7 @@ _CHECK_RUN_FIELDS: dict[StatusState, tuple[str, str | None]] = {
 
 
 def _check_run_output(context: str, summary: str, text: str | None) -> dict[str, str]:
-    # The full context repeats the repo path; keep the title short.
+    # The full context repeats the repo path. Keep the title short.
     output = {"title": context.split(" ", 1)[0], "summary": summary}
     if text:
         if len(text) > CHECK_RUN_TEXT_LIMIT:
@@ -235,7 +235,7 @@ class GitHubCheckRunPoster:
             response = await self.client.http.patch(
                 f"{base}/{run_id}", headers=headers, json=body
             )
-            # The DB row can outlive the GitHub run; recreate instead
+            # The DB row can outlive the GitHub run. Recreate instead
             # of retrying the terminal summary forever.
             if response.status_code not in (httpx.codes.NOT_FOUND, httpx.codes.GONE):
                 _raise_for_check_run(response, f"{owner}/{repo}")
@@ -277,7 +277,7 @@ class GiteaStatusPoster:
 
 
 class GitlabStatusPoster:
-    # GitLab has no "error" state; both map to failed.
+    # GitLab has no "error" state. Both map to failed.
     _STATES: ClassVar[dict[StatusState, str]] = {
         StatusState.pending: "pending",
         StatusState.success: "success",
@@ -438,7 +438,7 @@ class ForgeStatusReporter:
                 context,
                 state,
                 # Descriptions may carry failure excerpts with raw ANSI
-                # colors (kept for the web UI); forges show them verbatim.
+                # colors (kept for the web UI). Forges show them verbatim.
                 strip_ansi(description),
                 self.build_url(event, build),
                 project_id=event.repo.id,
@@ -477,7 +477,7 @@ class ForgeStatusReporter:
     async def eval_finished(
         self, event: ChangeEvent, build: BuildRecord, report: EvalReport
     ) -> None:
-        # Failed evals show the error tail; successful ones the warnings.
+        # Failed evals show the error tail. Successful ones the warnings.
         if not report.success and report.error:
             text: str | None = _fence(report.error)
         elif report.warnings:
@@ -507,7 +507,7 @@ class ForgeStatusReporter:
             )
 
     async def eval_cancelled(self, event: ChangeEvent, build: BuildRecord) -> None:
-        """Resolve the pending eval context; see the orchestrator's
+        """Resolve the pending eval context. See the orchestrator's
         cancel path."""
         await self._post(
             event,
@@ -617,7 +617,7 @@ class ForgeStatusReporter:
         self, event: ChangeEvent, build: BuildRecord, attr: str | None
     ) -> None:
         """Flip the restarted checks to pending before the async rebuild
-        starts; force_new so GitHub renders them as re-running."""
+        starts. force_new so GitHub renders them as re-running."""
         if attr is None:
             await self._post(
                 event,
@@ -659,7 +659,7 @@ class ForgeStatusReporter:
         results: list[AttributeResult],
         attr_prefix: str,
     ) -> dict[str, int]:
-        """Per-attribute failure statuses and success flips; returns
+        """Per-attribute failure statuses and success flips. Returns
         failed/succeeded counts over `results`."""
         revision = event.commit_sha
         previously_failed = await self.failed_statuses.get_failed(revision)
@@ -727,7 +727,7 @@ class ForgeStatusReporter:
             description = f"{counts['succeeded']} attributes built"
         elif status == "cancelled":
             state = StatusState.error
-            # Attribute-level cancels aggregate like failures; only a
+            # Attribute-level cancels aggregate like failures. Only a
             # build-level cancel (no attribute info at all) was
             # superseded by a newer build.
             parts = [
@@ -758,7 +758,7 @@ def _fence(text: str) -> str:
     return f"```\n{strip_ansi(text)}\n```"
 
 
-# Flat/effect excerpts prefix lines with "name> "; structured failures
+# Flat/effect excerpts prefix lines with "name> ". Structured failures
 # skip this path entirely (they carry a BuildFailure).
 _DRV_PREFIX = re.compile(r"^[^\s>]+> +")
 
@@ -826,7 +826,7 @@ def _build_plan(
         header = f"Building {len(attrs)} attribute(s):"
         head, sep, trunc = "| attribute | raw |", "| --- | --- |", "| [all]({0}) |"
     else:
-        # Locally-skipped attributes were not built here; drop them.
+        # Locally-skipped attributes were not built here. Drop them.
         attrs = [a for a in attrs if statuses.get(a) != "skipped_local"]
         # Group by status (see _STATUS_ORDER), then alphabetically within
         # each status.
@@ -841,7 +841,7 @@ def _build_plan(
     if not attrs:
         return None
     lines = [header, "", head, sep]
-    # +1 per line for the newline join() inserts; undercounting lets the
+    # +1 per line for the newline join() inserts. Undercounting lets the
     # joined text exceed the budget, and _check_run_output then chops it
     # mid-row into invalid markdown.
     used = sum(len(line) + 1 for line in lines)

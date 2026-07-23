@@ -81,10 +81,10 @@ class RepoAccessFetcher(Protocol):
     async def repo_access(self, user: User, token: str) -> RepoAccess: ...
 
 
-# GitLab access_level for Maintainer; the lowest level allowed to
+# GitLab access_level for Maintainer. The lowest level allowed to
 # manage CI settings, mapped to our per-repo "admin" permission.
 _GITLAB_MAINTAINER = 40
-# GitLab Developer; the lowest level that can push, mapped to our
+# GitLab Developer. The lowest level that can push, mapped to our
 # per-repo "writable" permission (restart/cancel builds).
 _GITLAB_DEVELOPER = 30
 
@@ -260,14 +260,14 @@ class VisibilityService:
         self, user: User | None, token: str | None = None
     ) -> list[int] | None:
         """Projects the requester may enable/disable. None = all
-        (instance admins); forge-side repo admins get their own."""
+        (instance admins). Forge-side repo admins get their own."""
         return await self._repo_ids_for(user, token, lambda a: a.admin)
 
     async def controllable_repo_ids(
         self, user: User | None, token: str | None = None
     ) -> list[int] | None:
         """Projects whose builds the requester may restart/cancel. None =
-        all (instance admins); forge-side repo writers get their own."""
+        all (instance admins). Forge-side repo writers get their own."""
         return await self._repo_ids_for(user, token, lambda a: a.writable)
 
     async def _repo_ids_for(

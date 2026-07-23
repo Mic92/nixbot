@@ -128,7 +128,7 @@ class _ControlRoutes:
         )
         if known is None:
             raise HTTPException(status_code=404, detail="unknown attribute")
-        # Reuses the stored eval results (drv_path); no re-eval.
+        # Reuses the stored eval results (drv_path). No re-eval.
         await self.backend.restart_attribute(build["id"], attr)
         return _back_to_attr(forge, owner, name, number, attr)
 
@@ -248,7 +248,7 @@ class _ControlRoutes:
         schedule: Annotated[str, Form()],
         effect: Annotated[str, Form()],
     ) -> RedirectResponse:
-        """Trigger an onSchedule effect on demand. Repo admins only; the
+        """Trigger an onSchedule effect on demand. Repo admins only. The
         schedule must already exist so form input cannot run arbitrary
         effects."""
         project = await self.ctx.repo_or_404(forge, owner, name, request)
@@ -272,7 +272,7 @@ class _ControlRoutes:
     async def regenerate_webhook_secret(
         self, request: Request, project_id: int
     ) -> HTMLResponse:
-        """Rotate and show the webhook secret once; it is never
+        """Rotate and show the webhook secret once. It is never
         readable afterwards."""
         await self._require_repo_admin(request, project_id)
         secret = await WebhookSecrets(self.ctx.pool).rotate(project_id)
@@ -314,7 +314,7 @@ def create_control_api_router(
     authz: AuthzConfig,
     own_url: str,
 ) -> APIRouter:
-    """JSON control endpoints; part of the documented /api surface.
+    """JSON control endpoints. Part of the documented /api surface.
     API tokens authenticate via Authorization: Bearer."""
     router = APIRouter(prefix="/api", tags=["api"])
     routes = _ControlRoutes(ctx, backend, authz, own_url)

@@ -80,7 +80,7 @@ class PollingService:
         self._tasks: list[asyncio.Task[None]] = []
 
     async def poll_repo_once(self, repo: PolledRepository) -> bool:
-        """Poll one repository; returns True when a new head was seen."""
+        """Poll one repository. Returns True when a new head was seen."""
         sha = await poll_head(repo)
         if sha is None or self._last_seen.get(repo.name) == sha:
             return False

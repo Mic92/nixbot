@@ -85,7 +85,7 @@ async def discover_once(s: CIService) -> None:
     # None marks a failed forge: its rows are neither synced nor pruned.
     by_forge: dict[str, list[DiscoveredRepo] | None] = {}
     # The topic is only a legacy import aid (one-shot enablement in
-    # sync_discovered); it must not hard-filter discovery, otherwise
+    # sync_discovered). It must not hard-filter discovery, otherwise
     # untagged repos never appear in the admin UI.
     if s.github is not None and s.config.github is not None:
         await _warn_github_webhook_misconfig(s, s.github)
@@ -118,7 +118,7 @@ async def discover_once(s: CIService) -> None:
     }
     await s.repo_store.sync_discovered(repos, legacy_import_topics=topics)
     # Drop disabled repos a successful discovery no longer returned so
-    # the admin toggle list stays clean; a failed forge is skipped to
+    # the admin toggle list stays clean. A failed forge is skipped to
     # avoid mass-deleting rows on a transient API error.
     for forge, found in by_forge.items():
         if found is not None:

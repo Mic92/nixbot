@@ -1,7 +1,7 @@
 """Tests for the attribute build executor: fair queue, log capture,
 build subprocess handling (with a fake `nix` on PATH)."""
 
-# ruff: noqa: PLR2004, ARG001 (test literals; fixtures used for side effects)
+# ruff: noqa: PLR2004, ARG001 (test literals. Fixtures used for side effects)
 
 from __future__ import annotations
 
@@ -343,7 +343,7 @@ async def test_executor_hard_cancel_kills_process_group(
     not leak the running nix process group.
 
     Group-kill semantics themselves are covered by
-    test_proc.test_reap_kills_whole_group; this checks the executor's
+    test_proc.test_reap_kills_whole_group. This checks the executor's
     hard-cancel wiring (the finally path that also stops the log pump).
     """
     fake_nix.write_text("hangpid")
@@ -610,7 +610,7 @@ async def test_structured_capture_live_stream() -> None:
     assert deltas[0] == {"t": "drv", "idx": 1, "name": "qtbase-5.0"}
     assert {"t": "phase", "idx": 1, "phase": "build", "line": 0} in deltas
     assert {"t": "line", "idx": 1, "from": 1, "text": "CC main.o"} in deltas
-    # stop marks built, finalize status overrides to failed; both stream.
+    # stop marks built, finalize status overrides to failed. Both stream.
     assert {"t": "status", "idx": 1, "status": "built"} in deltas
     assert {"t": "status", "idx": 1, "status": "failed"} in deltas
     assert deltas[-1] is None  # close signals done
@@ -631,7 +631,7 @@ async def test_structured_capture_stalled_subscriber_bounded() -> None:
 
 
 async def test_structured_capture_monotonic_line_from_past_cap() -> None:
-    # The container caps retained lines, so its line count plateaus; live
+    # The container caps retained lines, so its line count plateaus. Live
     # delta "from" must stay monotonic anyway or row ids would collide.
     cap = StructuredCapture(clock=lambda: 1.0, max_lines=4)
     q = cap.subscribe()
@@ -662,7 +662,7 @@ def test_structured_failure_excerpt_uses_failed_derivation() -> None:
         cap.log_line(1, line)
     cap.set_status("/nix/store/aaa-ghidra-cli-test.drv", "failed")
     excerpt = cap.failure_excerpt()
-    # The failing derivation's own tail under a single name header; no
+    # The failing derivation's own tail under a single name header. No
     # per-line prefix, no nix re-quote.
     assert excerpt.splitlines()[0] == "ghidra-cli-test:"
     assert excerpt.splitlines()[-1] == "Error: exit status 1"
@@ -714,8 +714,8 @@ def test_phase_echo_suppressed_and_marker_is_zero_based() -> None:
     cap.close()
 
     reader = LogContainerReader(cap.finalize())
-    # idx 0 is the setup bucket; the build is idx 1. The echo is not
-    # stored; the marker points at the first real line (0-based).
+    # idx 0 is the setup bucket. The build is idx 1. The echo is not
+    # stored. The marker points at the first real line (0-based).
     assert reader.lines(1) == ["boom"]
     assert reader.entry(1)["ph"] == [["buildPhase", 0]]
 
@@ -764,7 +764,7 @@ def test_structured_failure_excerpt_caps_many_failures() -> None:
         cap.log_line(i + 1, f"boom {i}")
         cap.set_status(drv, "failed")
     excerpt = cap.failure_excerpt(max_drvs=2)
-    # Only the last two failures are shown, each under its name; the
+    # Only the last two failures are shown, each under its name. The
     # rest are counted.
     assert "pkg-4:\nboom 4" in excerpt
     assert "pkg-3:\nboom 3" in excerpt
@@ -791,7 +791,7 @@ def test_scrapes_cannot_build_reason_wording() -> None:
     cap.setup_line(f"error: Cannot build '{top}'.\n       Reason: 1 dependency failed.")
     cap.mark_failed(top)
     state = {e["name"]: e["status"] for e in cap.state()}
-    # Leaf flagged with its output; no phantom top-level card, setup neutral.
+    # Leaf flagged with its output. No phantom top-level card, setup neutral.
     assert state["closure-info"] == "failed"
     assert "vm-test-run-nixbot-gitlab" not in state
     assert state["setup"] == "built"
@@ -824,7 +824,7 @@ async def test_structured_capture_state_snapshot() -> None:
 
 
 # As written by render_log_event: the builder's own lines arrive as
-# internal-json events and get a name> prefix; nix's prose error then
+# internal-json events and get a name> prefix. Nix's prose error then
 # re-quotes the same lines with a bare "> ".
 NIX_FAILURE_TAIL = """\
 building '/nix/store/mxpvhwgqn3q6sl1lykymcj77z7a1iifi-fail-1.drv'
@@ -848,7 +848,7 @@ def test_failure_excerpt_extracts_log_and_reason() -> None:
     excerpt = failure_excerpt(NIX_FAILURE_TAIL)
     lines = excerpt.splitlines()
     # The structured (name-prefixed) line wins over nix's prose
-    # re-quote of the same text; the failure reason follows.
+    # re-quote of the same text. The failure reason follows.
     assert lines[0] == "fail-1> this build is supposed to fail"
     assert lines[1] == "Reason: builder failed with exit code 1."
     assert len([x for x in lines if "supposed to fail" in x]) == 1
@@ -873,7 +873,7 @@ def test_failure_excerpt_truncates_overlong_lines() -> None:
     long = "x" * 2000
     excerpt = failure_excerpt(f"fail-1> {long}\nReason: nope.\n")
     log_line = excerpt.splitlines()[0]
-    # Visible length capped; ellipsis marks the cut.
+    # Visible length capped. Ellipsis marks the cut.
     assert log_line.endswith("…")
     assert len(strip_ansi(log_line)) <= 650
 
@@ -892,7 +892,7 @@ def test_failure_excerpt_keeps_ansi_when_truncating() -> None:
     log_line = excerpt.splitlines()[0]
     assert "\x1b[31m" in log_line
     assert len(strip_ansi(log_line)) <= 650
-    # Truncation drops the source line's own reset; a reset is
+    # Truncation drops the source line's own reset. A reset is
     # re-appended so red does not bleed into the following line.
     assert log_line.endswith("\x1b[0m")
 

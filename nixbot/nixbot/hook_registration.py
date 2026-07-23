@@ -34,7 +34,7 @@ async def register_hook(  # noqa: PLR0913
     except ForgeError as e:
         if e.status_code != 403:  # noqa: PLR2004
             raise
-        # Hook management needs elevated repo permission; the project
+        # Hook management needs elevated repo permission. The project
         # still works if the webhook is created manually.
         logger.warning(permission_warning, extra={"repo": repo_name, "url": target_url})
         return
@@ -45,7 +45,7 @@ async def register_hook(  # noqa: PLR0913
     )
     if existing_id is not None:
         # The existing hook may carry a stale secret (e.g. after a
-        # database reset) and the forge never exposes it; re-sync in place.
+        # database reset) and the forge never exposes it. Re-sync in place.
         response = await update_hook(existing_id)
         if response.status_code >= 400:  # noqa: PLR2004
             logger.error(

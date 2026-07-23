@@ -8,7 +8,7 @@
   hx-ext="sse, morph" sse-connect="/events?build={{ build.id }}"
 {% endblock bodyattrs %}
 {% block body %}
-  {# sseOpen re-checks state rendered before the stream connected; a
+  {# sseOpen re-checks state rendered before the stream connected. A
      status change in that gap (eval start, attr restart) would
      otherwise be lost. #}
   {# throttle, not delay: delay debounces, so a busy build's event
@@ -58,7 +58,7 @@
           </p>
         </div>
         <div class="controls">
-          {# UX only; the control routes enforce authz server-side. #}
+          {# UX only. The control routes enforce authz server-side. #}
           {% if can_control and build.status in RUNNING_STATUSES %}
             <form method="post" action="{{ build_path(project, build.number) }}/cancel">
               <button>cancel</button>

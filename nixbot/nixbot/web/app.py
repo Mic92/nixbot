@@ -4,8 +4,8 @@ Server-rendered Jinja2, classless CSS with system-preference dark
 mode. Live updates are pushed: Postgres triggers NOTIFY on status
 changes, /events fans them out over SSE, and a few lines of inline
 JS refetch fragments or patch rows. Per-project sequential build
-numbers in URLs; prev/next navigation between builds and
-per-attribute history; attributes grouped by system with
+numbers in URLs. Prev/next navigation between builds and
+per-attribute history. Attributes grouped by system with
 failed-first ordering and inline error excerpts.
 
 Visibility filtering hooks (`visible_repo_ids`) are wired by task
@@ -86,7 +86,7 @@ INLINE_GROUPS = ("failed", "building")
 
 
 class WebContext:
-    """Shared state for the routes; auth (5.3) extends this."""
+    """Shared state for the routes. Auth (5.3) extends this."""
 
     def __init__(
         self,
@@ -103,11 +103,11 @@ class WebContext:
         self.visibility = visibility
         # Wired by bootstrap; None hides control buttons (authz unknown).
         self.authz: AuthzConfig | None = None
-        # Wired by bootstrap; admins see Gitea webhook setup with it.
+        # Wired by bootstrap. Admins see Gitea webhook setup with it.
         self.webhook_base_url: str | None = None
         self.token_store: ApiTokenStore | None = None
         self.forge_tokens: TokenVault | None = None
-        # Wired by bootstrap; renews expired forge access tokens.
+        # Wired by bootstrap. Renews expired forge access tokens.
         self.token_refresher: ForgeTokenRefresher | None = None
         # Logout denylist: stateless cookies stay verifiable until
         # expiry, so revoked session ids are checked server-side.
@@ -280,7 +280,7 @@ class _PageRoutes:
         ctx = self.ctx
         visible = await ctx.visible_repo_ids(request)
         # Discovery inserts repos disabled. Admins see the disabled repos
-        # they may toggle so a fresh instance is not a blank page; the
+        # they may toggle so a fresh instance is not a blank page. The
         # search box filters the list. Non-admins have an empty
         # toggleable set and see nothing here.
         toggleable = await ctx.toggleable_repo_ids(request)
@@ -346,7 +346,7 @@ class _PageRoutes:
         )
 
     async def _can_cancel_queue(self, request: Request) -> bool:
-        """UX only; the cancel-all route re-checks server-side."""
+        """UX only. The cancel-all route re-checks server-side."""
         ctx = self.ctx
         return ctx.authz is not None and is_admin(
             await ctx.request_user(request), ctx.authz
@@ -386,7 +386,7 @@ class _PageRoutes:
         )
 
     async def _can_run_schedules(self, request: Request, project_id: int) -> bool:
-        """UX only; the run-schedule route re-checks server-side."""
+        """UX only. The run-schedule route re-checks server-side."""
         ctx = self.ctx
         if ctx.authz is None:
             return False
@@ -400,7 +400,7 @@ class _PageRoutes:
     ) -> str | None:
         """Gitea webhook target for admins: manual setup when the
         buildbot user cannot manage hooks itself. The secret is not
-        included; it is rotated and shown once via the control route."""
+        included. It is rotated and shown once via the control route."""
         ctx = self.ctx
         if (
             project["forge"] not in ("gitea", "gitlab")
@@ -541,7 +541,7 @@ class _PageRoutes:
         build: dict[str, Any],
         q: str | None,
     ) -> HTMLResponse:
-        """The grouped attribute fragment; a query filters every group
+        """The grouped attribute fragment. A query filters every group
         and renders all of them eagerly opened."""
         group_counts, inline = await self._grouped_attributes(build["id"], q)
         return await self.ctx.render(

@@ -1,7 +1,7 @@
 """Tests for effects secret resolution, scope rules, and CLI driving
 (with a fake nixbot-effects on PATH)."""
 
-# ruff: noqa: ARG001, S106 (fixtures used for side effects; test secret names)
+# ruff: noqa: ARG001, S106 (fixtures used for side effects. Test secret names)
 
 from __future__ import annotations
 
@@ -105,7 +105,7 @@ def fake_effects(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 echo "$@" >> {tmp_path}/calls
 case "$1" in
   list)
-    # nix routinely logs to stderr while evaluating; must not corrupt JSON.
+    # nix routinely logs to stderr while evaluating. Must not corrupt JSON.
     echo 'warning: Git tree is dirty' >&2
     echo '["deploy", "notify"]'
     ;;
@@ -163,7 +163,7 @@ async def test_run_effect_with_secrets(
     ok = await run_effect(ctx, "deploy", log_write)
     assert ok
     output = b"".join(chunks).decode()
-    # The effect echoes the secrets file; the deploy secret must be
+    # The effect echoes the secrets file. The deploy secret must be
     # masked in the log even though the CLI received the real file.
     assert "s3-longsecret" not in output
     assert "***" in output
@@ -177,7 +177,7 @@ async def test_run_effect_with_secrets(
 async def test_run_effect_inherits_environment(
     tmp_path: Path, fake_effects: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Remote builders need $HOME for ~/.ssh; the service environment
+    # Remote builders need $HOME for ~/.ssh. The service environment
     # must be inherited by nixbot-effects.
     monkeypatch.setenv("HOME", "/var/lib/nixbot-test")
     chunks: list[bytes] = []

@@ -28,7 +28,7 @@
   </main>
   {% if live %}
     {# Follow the running derivation over the attribute's structured
-       stream, filtered to this idx; a terminal status reloads into the
+       stream, filtered to this idx. A terminal status reloads into the
        finished (container-backed) page. #}
     {% set stream_url = build_path(project, build.number) ~ "/logs/" ~ (attr | urlencode) ~ "/stream?format=structured" %}
     <script>

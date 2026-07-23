@@ -68,7 +68,7 @@ logger = logging.getLogger(__name__)
 
 _STATIC_CREDENTIALS = StaticCredentialsProvider()
 
-# Repo metadata rarely changes; the UI refresh button covers the
+# Repo metadata rarely changes. The UI refresh button covers the
 # "I just created a repo" case without waiting for the next tick.
 DISCOVERY_INTERVAL = 60 * 60
 REFRESH_COOLDOWN = 60
@@ -98,7 +98,7 @@ MAX_REPORT_DELAY_SECONDS = 3600
 
 def _report_payload(build_id: int, attempt: int, error: Exception) -> dict[str, Any]:
     payload: dict[str, Any] = {"build_id": build_id, "attempt": attempt}
-    # Forges send Retry-After on rate limits; honoring it is required
+    # Forges send Retry-After on rate limits. Honoring it is required
     # (e.g. GitHub secondary limits escalate when ignored).
     retry_after = getattr(error, "retry_after", None)
     if retry_after is not None:
@@ -200,7 +200,7 @@ class CIService:
     # garbage-collected mid-flight.
     _tasks: set[asyncio.Task] = field(default_factory=set)
     # Discovery must not run concurrently (upserts, webhook
-    # registration); the timestamp debounces the UI refresh button,
+    # registration). The timestamp debounces the UI refresh button,
     # which any logged-in user can press.
     _discovery_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     _last_discovery: float = 0.0
@@ -260,7 +260,7 @@ class CIService:
 
     async def _submit_rerequest(self, event: CheckRerequested) -> None:
         """GitHub "Re-run" button → existing restart paths. Per-attr
-        runs restart that attr only; summary runs and check_suite
+        runs restart that attr only. Summary runs and check_suite
         restart the whole build."""
         project = await self.repo_store.by_forge_id(event.forge, event.forge_repo_id)
         if project is None:
@@ -269,7 +269,7 @@ class CIService:
         if build_id is not None:
             build = await builds_q.get_build(self.pool, id_=build_id)
             # external_id is attacker-influenced (set by whichever app
-            # created the run); never restart another project's build.
+            # created the run). Never restart another project's build.
             if build is None or build.project_id != project.id:
                 build_id = None
         if build_id is None:
@@ -288,7 +288,7 @@ class CIService:
         await self.restart_build(build_id)
 
     async def _submit_change(self, change: ChangeRequest) -> None:
-        """Enqueue only; the dispatcher runs _process_change. The key
+        """Enqueue only. The dispatcher runs _process_change. The key
         serializes deliveries of one commit, not of one branch:
         supersede needs newer commits to run concurrently."""
         await self.enqueue_work(
@@ -346,12 +346,12 @@ class CIService:
 
     async def _restart(self, build_id: int, *, attr: str | None) -> None:
         # Reset synchronously so the build row is the source of truth
-        # for the UI/recovery; the queue item is only a wake-up. Drop
+        # for the UI/recovery. The queue item is only a wake-up. Drop
         # the previous run's logs here too, so the pending row does not
         # show stale output until the rebuild starts.
         await q.reset_build_for_restart(self.pool, build_id=build_id, attr=attr)
         self.orchestrator.reset_build_logs(build_id, attr)
-        # Flip the forge checks to pending now; the async rerun only
+        # Flip the forge checks to pending now. The async rerun only
         # posts the terminal status, possibly much later.
         build = await builds_q.get_build(self.pool, id_=build_id)
         project = (
@@ -441,7 +441,7 @@ class CIService:
         elif item.kind == "rerun":
             # Resume pending attributes (restart and crash recovery).
             if await restart_dispatch.rerun(self, payload["build_id"]):
-                # Previous run still unwinding; retry, don't drop.
+                # Previous run still unwinding. Retry, don't drop.
                 await self.enqueue_work("rerun", item.dedup_key, payload)
         elif item.kind == "effects":
             await restart_dispatch.restart_effects(self, payload["build_id"])
@@ -494,7 +494,7 @@ class CIService:
             # competing attempt-1 item on failure.
             reporter = reporter.inner
         try:
-            # Empty results: only the summary is re-posted; per-attribute
+            # Empty results: only the summary is re-posted. Per-attribute
             # statuses were already posted (or cached) inline.
             await reporter.build_finished(
                 event,
@@ -600,7 +600,7 @@ class CIService:
         cancelled = await q.cancel_attribute(self.pool, build_id=build_id, attr=attr)
         if cancelled != 1:
             return
-        # No running pipeline re-aggregates for us; without this the
+        # No running pipeline re-aggregates for us. Without this the
         # build stays non-terminal forever once all rows are settled.
         status, generation = await db.aggregate_build(self.pool, build_id)
         if status in BuildStatus.TERMINAL:
@@ -623,7 +623,7 @@ class CIService:
         self, build_id: int, status: str, generation: int
     ) -> None:
         """Post the terminal forge status for a build settled outside a
-        running pipeline; otherwise the commit status stays pending
+        running pipeline. Otherwise the commit status stays pending
         forever."""
         build = await builds_q.get_build(self.orchestrator.pool, id_=build_id)
         if build is None:
@@ -648,7 +648,7 @@ class CIService:
                 if not reconciled:
                     # Startup reconciliation needs discovery first
                     # (GitHub installation tokens are learned during
-                    # discovery); retried until one pass succeeds so a
+                    # discovery). Retried until one pass succeeds so a
                     # forge outage at startup does not skip it.
                     await self.reconcile_once()
                     reconciled = True

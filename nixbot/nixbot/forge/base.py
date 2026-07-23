@@ -118,11 +118,11 @@ def filter_repos(
     filters: RepoFilters, repos: list[DiscoveredRepo]
 ) -> list[DiscoveredRepo]:
     """Port of common.filter_repos: allow everything when both
-    allowlists are unset; otherwise a repo passes if its owner is in
+    allowlists are unset. Otherwise a repo passes if its owner is in
     the user allowlist or its full name in the repo allowlist.
 
     The topic is deliberately not a discovery filter: it is only the
-    one-shot legacy enablement import aid (projects.py); filtering on
+    one-shot legacy enablement import aid (projects.py). Filtering on
     it here would keep non-topic repos out of the projects table and
     thus impossible to enable in the web UI."""
     no_allowlists = filters.user_allowlist is None and filters.repo_allowlist is None

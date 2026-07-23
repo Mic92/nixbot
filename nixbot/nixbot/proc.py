@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
     from pathlib import Path
 
-# asyncio's StreamReader default; callers with long-line output (nix
+# asyncio's StreamReader default. Callers with long-line output (nix
 # build logs, deploy tooling) pass a larger limit.
 DEFAULT_STREAM_LIMIT = 2**16
 

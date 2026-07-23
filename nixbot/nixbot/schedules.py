@@ -2,10 +2,10 @@
 
 Ported from nix_eval.py:ScheduledEffectsEvaluateCommand:
 on each successful default-branch build the orchestrator discovers
-schedules via `nixbot-effects list-schedules` and persists them; a
+schedules via `nixbot-effects list-schedules` and persists them. A
 periodic loop runs due effects via `nixbot-effects run-scheduled`.
 
-Cron-like `when` specs; defaults resolve in
+Cron-like `when` specs. Defaults resolve in
 config.ScheduleWhen.resolved. All times are UTC.
 """
 
@@ -247,7 +247,7 @@ class ScheduledEffectsStore:
                 when = ScheduleWhen.model_validate(json.loads(row.when_spec))
                 occurrence = due_occurrence(when, row.schedule_name, now)
             except Exception:
-                # when-specs are repo-controlled; one malformed spec
+                # when-specs are repo-controlled. One malformed spec
                 # must not abort the sweep for all other projects.
                 logger.exception(
                     "invalid schedule spec, skipping",

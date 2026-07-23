@@ -1,7 +1,7 @@
 """Webhook ingestion.
 
 Endpoints `/webhooks/{github,gitea,gitlab}` plus the legacy buildbot
-alias `/change_hook/github` (identical validation; the GitHub App
+alias `/change_hook/github` (identical validation. The GitHub App
 webhook secret is deployment-wide, so legacy hooks still verify).
 GitHub
 payloads are verified against the App-level webhook secret
@@ -13,7 +13,7 @@ fast with 500 so the GitHub App redelivers (Gitea and GitLab are
 backstopped by startup reconciliation).
 
 All pull requests build (no trust gating — the Nix sandbox is the
-trust boundary); merge-queue branches always build.
+trust boundary). Merge-queue branches always build.
 """
 
 from __future__ import annotations
@@ -53,7 +53,7 @@ def should_build_branch(
     branches: BranchConfigDict, default_branch: str, branch: str
 ) -> bool:
     """Default branch, configured extra branches, and merge-queue
-    branches build; everything else is ignored (PRs always build and
+    branches build. Everything else is ignored (PRs always build and
     are decided separately)."""
     return is_merge_queue_branch(branch) or branches.do_run(default_branch, branch)
 
@@ -63,7 +63,7 @@ def should_build_branch(
 
 def _constant_time_eq(a: str, b: str) -> bool:
     """hmac.compare_digest with str args raises TypeError on non-ASCII
-    input; forge headers are attacker-controlled, so compare bytes."""
+    input. Forge headers are attacker-controlled, so compare bytes."""
     return hmac.compare_digest(a.encode("utf-8", "replace"), b.encode())
 
 
@@ -135,7 +135,7 @@ class PrClosed:
 @dataclass(frozen=True)
 class CheckRerequested:
     """GitHub "Re-run" button. build_id round-trips via the check
-    run's external_id (set by GitHubCheckRunPoster); name resolves the
+    run's external_id (set by GitHubCheckRunPoster). Name resolves the
     per-attr restart. check_suite carries neither — head_sha is the
     fallback."""
 
@@ -189,7 +189,7 @@ def _parse_pr_event(
         pr_number=number,
         pr_author=f"{forge}:{(pr.get('user') or {}).get('login', '')}",
         # base.sha is frozen at PR creation while the base branch moves
-        # on; merge into the branch tip (fetched alongside) so the PR is
+        # on. Merge into the branch tip (fetched alongside) so the PR is
         # tested against the current base.
         base_sha=f"refs/heads/{base_ref}" if base_ref else base.get("sha"),
     )
@@ -228,7 +228,7 @@ def _parse_github_check_event(
     event_type: str, repo_id: str, payload: dict[str, Any]
 ) -> CheckRerequested | None:
     # "requested" fires on every push (push hook already covers that)
-    # and "created"/"completed" are echoes of our own posts; only the
+    # and "created"/"completed" are echoes of our own posts. Only the
     # explicit Re-run button matters.
     if payload.get("action") != "rerequested":
         return None
@@ -261,7 +261,7 @@ def parse_gitea_event(event_type: str, payload: dict[str, Any]) -> WebhookEvent 
         head = payload.get("after", "")
         if not head or set(head) == {"0"}:
             return None
-        # Gitea lists `commits` oldest-first; the pushed head is
+        # Gitea lists `commits` oldest-first. The pushed head is
         # `head_commit` (fall back to the commit matching `after`).
         head_commit: dict[str, Any] = payload.get("head_commit") or next(
             (
@@ -324,14 +324,14 @@ def parse_gitlab_event(  # noqa: PLR0911
         action = attrs.get("action", "")
         if action == "close":
             return PrClosed(forge="gitlab", forge_repo_id=repo_id, pr_number=number)
-        # No cancel on merge; see parse_github_event.
+        # No cancel on merge. See parse_github_event.
         if action not in ("open", "update", "reopen"):
             return None
         # Metadata-only updates (labels, title, milestone) carry no
-        # oldrev; only head-moving updates trigger a build.
+        # oldrev. Only head-moving updates trigger a build.
         if action == "update" and not attrs.get("oldrev"):
             return None
-        # No commit_message; see parse_github_event.
+        # No commit_message. See parse_github_event.
         target_branch = attrs.get("target_branch", "")
         # payload["user"] is the event actor, not the MR author (only
         # the author's numeric id is in the payload). pr_author grants
@@ -349,7 +349,7 @@ def parse_gitlab_event(  # noqa: PLR0911
             commit_sha=(attrs.get("last_commit") or {}).get("id", ""),
             pr_number=number,
             pr_author=pr_author,
-            # The payload has no base sha; the target branch head was
+            # The payload has no base sha. The target branch head was
             # fetched alongside, so merge against its ref.
             base_sha=f"refs/heads/{target_branch}" if target_branch else None,
         )
@@ -357,7 +357,7 @@ def parse_gitlab_event(  # noqa: PLR0911
 
 
 def parse_webhook_body(request: Request, body: bytes) -> dict[str, Any]:
-    """Decode the webhook payload; malformed input is a client error
+    """Decode the webhook payload. Malformed input is a client error
     (400), never a 500 that would trigger pointless redeliveries."""
     content_type = request.headers.get("Content-Type", "")
     try:
@@ -390,7 +390,7 @@ async def read_body(request: Request) -> bytes:
 
 
 class ChangeSink(Protocol):
-    """Receives parsed webhook events; the orchestrator side implements
+    """Receives parsed webhook events. The orchestrator side implements
     this. Must raise on database outage (translated to 500)."""
 
     async def submit(self, event: WebhookEvent) -> None: ...

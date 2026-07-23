@@ -1,7 +1,7 @@
 """Schema migrations: versioned SQL scripts applied at startup.
 
 Scripts live in the `migrations/` package directory and are named
-`NNNN_description.sql`. Each script runs in its own transaction; the
+`NNNN_description.sql`. Each script runs in its own transaction. The
 whole run is guarded by a Postgres advisory lock so concurrent service
 starts cannot race. Applied versions are recorded in
 `schema_migrations`.
@@ -110,7 +110,7 @@ async def apply_migrations(dsn: str) -> None:
                     raise
                 await tx.commit()
         finally:
-            # A failed migration usually killed the connection too; the
+            # A failed migration usually killed the connection too. The
             # unlock error would replace the real failure. The lock is
             # session-scoped, so closing the connection releases it.
             try:

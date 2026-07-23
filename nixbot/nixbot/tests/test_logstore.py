@@ -85,7 +85,7 @@ def test_lines_with_phases_reinjects_markers() -> None:
     w.phase("pkg", "installPhase")
     w.line("pkg", "installing")
     r = LogContainerReader(w.finalize())
-    # Markers reconstructed from `ph`; plain lines() stays unchanged.
+    # Markers reconstructed from `ph`. Plain lines() stays unchanged.
     assert r.lines(0) == ["compiling", "installing"]
     assert r.lines_with_phases(0) == [
         "Running phase: buildPhase",
@@ -106,7 +106,7 @@ def test_phase_dedup() -> None:
 
 
 def test_grouping_shares_frame() -> None:
-    # Small drvs group into one frame; a big one forces a new frame.
+    # Small drvs group into one frame. A big one forces a new frame.
     w = LogContainerWriter(group_bytes=64)
     w.line("a", "x" * 10)
     w.line("b", "y" * 10)
@@ -155,7 +155,7 @@ def test_search_per_drv_cap() -> None:
 
 
 def test_search_across_grouped_frame() -> None:
-    # Two drvs in one frame; matches must attribute to the right drv/line.
+    # Two drvs in one frame. Matches must attribute to the right drv/line.
     w = LogContainerWriter(group_bytes=1 << 20)
     w.line("a", "alpha")
     w.line("a", "target here")

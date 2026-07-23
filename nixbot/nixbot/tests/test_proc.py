@@ -1,7 +1,7 @@
 """Direct tests for the shared ProcessGroup subprocess helper.
 
 These cover the kill semantics (whole group, including grandchildren;
-no zombie; idempotent when the child already exited) that the
+no zombie. Idempotent when the child already exited) that the
 executor, post-build and effects modules rely on.
 """
 

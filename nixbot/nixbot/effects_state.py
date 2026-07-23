@@ -2,7 +2,7 @@
 
 Effects persist small files between runs (`getStateFile`/
 `putStateFile` in hercules-ci-effects: nixops state, ssh known
-hosts). The agent proxies these to hercules-ci; we serve them from
+hosts). The agent proxies these to hercules-ci. We serve them from
 the state directory, scoped per project, authorized by a per-run
 bearer token that the service mints for each effect invocation.
 """
@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
 
 class TaskTokens:
-    """In-memory per-run tokens; an effect only runs while the service
+    """In-memory per-run tokens. An effect only runs while the service
     is up, so restart-safety is not needed."""
 
     def __init__(self) -> None:
@@ -37,7 +37,7 @@ class TaskTokens:
 
 
 def state_file_path(state_dir: Path, project_id: int, name: str) -> Path:
-    """State names come from untrusted flakes; percent-encode so they
+    """State names come from untrusted flakes. Percent-encode so they
     cannot escape the per-project directory. quote() keeps dots, so
     "." and ".." (the directory and its parent) need rejecting."""
     if name in {".", ".."}:

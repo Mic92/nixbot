@@ -97,7 +97,7 @@ async def maybe_run_effects(
     try:
         names = await list_effects(ctx)
     except (EffectsError, OSError):
-        # OSError: nixbot-effects not installed; effects are
+        # OSError: nixbot-effects not installed. Effects are
         # best-effort and must not fail the (already reported) build.
         logger.exception("effects discovery failed", extra={"build_id": build.id})
         return
@@ -113,7 +113,7 @@ async def _enqueue_effects(
     o: Orchestrator, event: ChangeEvent, build: BuildRecord, names: list[str]
 ) -> None:
     """One queue item per effect, on the build's dedup key."""
-    # Effect names are repo-controlled; a duplicate inside one batch
+    # Effect names are repo-controlled. A duplicate inside one batch
     # would make ON CONFLICT DO UPDATE fail with "cannot affect row a
     # second time".
     names = list(dict.fromkeys(names))
@@ -139,7 +139,7 @@ async def run_effect_item(
     """Dispatcher entry for one queued effect."""
     row = await q.effect_status(o.pool, build_id=build.id, name=name)
     if row != "pending":
-        # Swept after a crash mid-run, or already terminal; started
+        # Swept after a crash mid-run, or already terminal. Started
         # effects never auto-re-run (deploys are not idempotent).
         return
     async with o.rerun_worktree(info, build, "effect", credentials) as (
@@ -169,7 +169,7 @@ async def run_effect_item(
 async def post_effects_summary(
     o: Orchestrator, event: ChangeEvent, build: BuildRecord
 ) -> None:
-    """Post the aggregate status once all effects settle; the items run
+    """Post the aggregate status once all effects settle. The items run
     independently, so the last to finish reports it."""
     statuses = [e.status for e in await web_q.web_effects(o.pool, build_id=build.id)]
     if any(s in ("pending", "running") for s in statuses):
@@ -192,7 +192,7 @@ async def _run_one_effect(
     """One effect with its own row and log."""
     # A rerun resets the existing effect row.
     await builds_q.start_effect(o.pool, build_id=build.id, name=name, status="running")
-    # A green commit status on a failed deploy hides the failure; report
+    # A green commit status on a failed deploy hides the failure. Report
     # per-effect status so the forge reflects the real outcome.
     await o.reporter.effect_started(event, build, name)
     async with o.open_log(build.id, f"effect:{name}") as writer:

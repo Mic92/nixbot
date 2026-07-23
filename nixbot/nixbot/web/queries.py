@@ -73,7 +73,7 @@ class WebQueries:
         return dataclasses.asdict(row) if row else None
 
     async def repo_candidates(self, owner: str, name: str) -> list[dict[str, Any]]:
-        """All forges' rows for an unqualified owner/name; used by the
+        """All forges' rows for an unqualified owner/name. Used by the
         legacy-URL redirect to pick a target."""
         return _dicts(await gen.web_repo_candidates(self.pool, owner=owner, name=name))
 
@@ -97,7 +97,7 @@ class WebQueries:
         project_ids: list[int] | None = None,
         before: int | None = None,
     ) -> list[dict[str, Any]]:
-        """Activity feed; cursor on build id for infinite scroll."""
+        """Activity feed. Cursor on build id for infinite scroll."""
         return _dicts(
             await gen.web_recent_builds(
                 self.pool, project_ids=project_ids, before=before, limit_=limit

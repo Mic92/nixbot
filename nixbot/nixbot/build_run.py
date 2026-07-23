@@ -55,7 +55,7 @@ async def record_attributes(
     pool: asyncpg.Pool, build_id: int, jobs: Sequence[NixEvalJob]
 ) -> None:
     """Persist eval results as pending rows (with statically-known
-    outputs) so crash recovery can resume without a re-eval; eval
+    outputs) so crash recovery can resume without a re-eval. Eval
     failures are settled by the scheduler."""
     successes = [job for job in jobs if isinstance(job, NixEvalJobSuccess)]
     if not successes:
@@ -106,7 +106,7 @@ async def run_build(
     worktree_path: Path,
     credentials: FetchCredentials | None = None,
 ) -> None:
-    """Evaluate and build; every attribute completion is one
+    """Evaluate and build. Every attribute completion is one
     transactional DB write, then the result is re-aggregated."""
     try:
         await _run_build_inner(o, event, build, worktree_path, credentials)
@@ -130,7 +130,7 @@ async def run_build(
         if current is None or current.status not in BuildStatus.TERMINAL:
             await _settle_aborted(o, event, build, BuildStatus.FAILED, error=str(e))
     finally:
-        # Eval gc-roots only need to outlive the build; without
+        # Eval gc-roots only need to outlive the build. Without
         # cleanup the nix store grows unboundedly.
         shutil.rmtree(o.gcroots_dir(build), ignore_errors=True)
 
@@ -142,7 +142,7 @@ def _eval_settings(
     credentials: FetchCredentials | None,
 ) -> EvalSettings:
     # Auto-sized workers come with a matching per-worker memory
-    # limit; the configured limit acts as a ceiling. An explicit
+    # limit. The configured limit acts as a ceiling. An explicit
     # worker count keeps the configured limit as-is.
     if o.config.eval_worker_count:
         worker_count = o.config.eval_worker_count
@@ -154,7 +154,7 @@ def _eval_settings(
             o.config.eval_max_memory_size, worker_config.max_memory_mib
         )
     # PR-controlled eval can fetch arbitrary flake inputs with the
-    # netrc; an instance-wide token (Gitea/GitLab) would let a
+    # netrc. An instance-wide token (Gitea/GitLab) would let a
     # malicious PR read any private repo on the forge. Only
     # repo-scoped tokens (GitHub) reach PR evals.
     netrc_file = None
@@ -167,7 +167,7 @@ def _eval_settings(
         max_memory_size_mib=eval_max_memory,
         show_trace=o.config.show_trace_on_failure,
         netrc_file=netrc_file,
-        # The worktree's .git points into the central clone; the
+        # The worktree's .git points into the central clone. The
         # sandboxed evaluator needs to read it.
         extra_ro_paths=[o.repos.clone_path(event.repo.key)],
     )
@@ -302,7 +302,7 @@ async def _run_build_inner(
         await db.set_build_status(o.pool, build.id, BuildStatus.BUILDING)
         # Idempotent backstop for the streaming inserts above;
         # pending rows are what crash recovery resumes from. The
-        # scheduler drops unsupported systems; their pending rows
+        # scheduler drops unsupported systems. Their pending rows
         # would never turn terminal, so don't record them.
         buildable = [
             job
@@ -311,7 +311,7 @@ async def _run_build_inner(
             and job.system in o.config.build_systems
         ]
         await record_attributes(o.pool, build.id, buildable)
-        # The full eval result is recorded in build_attributes; a later
+        # The full eval result is recorded in build_attributes. A later
         # build of the same tree may reuse it instead of re-evaluating.
         await q.mark_eval_completed(o.pool, id_=build.id)
         await o.reporter.eval_finished(
@@ -491,7 +491,7 @@ class _ReadOnlyFailedBuildCache:
 
     Recovery/restart reruns rebuild jobs from DB rows without dependency
     closures, so dependents of one broken drv fail with their own build
-    error; recording those would poison the cache."""
+    error. Recording those would poison the cache."""
 
     def __init__(self, inner: FailedBuildCache) -> None:
         self._inner = inner
@@ -544,7 +544,7 @@ class _OrchestratorExecutor:
 
     async def _build_inner(self, job: NixEvalJobSuccess) -> BuildOutcome:
         # Flip to 'building' and stamp started_at so the web UI can
-        # distinguish running attributes from queued ones; returns no
+        # distinguish running attributes from queued ones. Returns no
         # row when the attribute is already terminal.
         marked = await q.mark_attribute_building(
             self.o.pool,

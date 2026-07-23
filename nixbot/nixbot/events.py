@@ -39,7 +39,7 @@ class ChangeEvent:
     repo: RepoInfo
     branch: str
     commit_sha: str
-    # PR-only fields; base_sha is the base branch head to merge into.
+    # PR-only fields. base_sha is the base branch head to merge into.
     pr_number: int | None = None
     pr_author: str | None = None
     base_sha: str | None = None
@@ -48,7 +48,7 @@ class ChangeEvent:
 
 def event_for_build(repo: RepoInfo, build: BuildRecord) -> ChangeEvent:
     """The triggering event of a build, reconstructed from its stored
-    fields; used by rerun and out-of-band reporting paths."""
+    fields. Used by rerun and out-of-band reporting paths."""
     return ChangeEvent(
         repo=repo,
         branch=build.branch,
@@ -60,7 +60,7 @@ def event_for_build(repo: RepoInfo, build: BuildRecord) -> ChangeEvent:
 def effects_event_for_build(repo: RepoInfo, build: BuildRecord) -> ChangeEvent:
     """Effects report on the ref that triggered them (e.g. a
     default-branch merge that reused a PR build), recorded at
-    mark_effects_started; pre-0018 builds fall back to the build ref."""
+    mark_effects_started. Pre-0018 builds fall back to the build ref."""
     if build.effects_commit_sha is None:
         return event_for_build(repo, build)
     return ChangeEvent(
@@ -74,7 +74,7 @@ def effects_event_for_build(repo: RepoInfo, build: BuildRecord) -> ChangeEvent:
 @dataclass(frozen=True)
 class EvalReport:
     """Evaluation-phase outcome reported to a forge. warnings and jobs
-    are populated on success; error carries the evaluator's log tail on
+    are populated on success. Error carries the evaluator's log tail on
     failure."""
 
     success: bool
@@ -95,7 +95,7 @@ class BuildResult:
 
 
 class StatusReporter(Protocol):
-    """Receives lifecycle events; forge integration implements this."""
+    """Receives lifecycle events. Forge integration implements this."""
 
     async def build_started(self, event: ChangeEvent, build: BuildRecord) -> None: ...
 

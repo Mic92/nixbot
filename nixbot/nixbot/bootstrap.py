@@ -421,7 +421,7 @@ async def _run_startup(service: CIService) -> None:
 
 
 # timeout_graceful_shutdown: open SSE event streams never close on
-# their own; without the cap uvicorn waits for them forever and
+# their own. Without the cap uvicorn waits for them forever and
 # systemd SIGKILLs the service on every stop.
 # lifespan="off": _serve runs the app lifespan once for all listeners.
 _UVICORN_OPTS: dict[str, Any] = {
@@ -475,7 +475,7 @@ async def _serve(app: FastAPI, configs: list[uvicorn.Config]) -> None:
     (per-server lifespans would start the app once per listener:
     duplicate LISTEN connection, double SSE event delivery).
 
-    Returns when the first server exits (signal); the rest are
+    Returns when the first server exits (signal). The rest are
     cancelled. Each uvicorn server installs its own signal handlers;
     with two servers only the last one wins, so the other would never
     stop on its own.
@@ -500,7 +500,7 @@ async def run_service(config: Config) -> None:
     # that a running dispatcher legitimately claimed in the meantime.
     await WorkQueue(service.pool).settle_interrupted()
 
-    # Startup can take minutes; it must not keep uvicorn from binding.
+    # Startup can take minutes. It must not keep uvicorn from binding.
     tasks = [
         asyncio.create_task(_run_startup(service)),
         asyncio.create_task(service.maintenance_loop()),
