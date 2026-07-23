@@ -1012,15 +1012,15 @@ details.webhook-setup summary {
 	border: 1px solid var(--border);
 	border-radius: 8px;
 }
-/* Whole log stays in the DOM (Ctrl-F, anchors, selection, a11y);
-   content-visibility skips off-screen layout/paint. Fixed 20px row +
-   matching contain-intrinsic-size keeps the scrollbar honest and lets
-   the phase bar map scrollTop -> line by ROW_H (see structured-logs.js). */
+/* Whole log stays in the DOM (Ctrl-F, anchors, selection, a11y).
+   content-visibility skips off-screen layout/paint.
+   contain-intrinsic-size is only a layout estimate for unrendered rows. */
 .log-lines .logline {
 	display: flex;
-	height: 20px;
+	min-height: 20px;
 	line-height: 20px;
-	white-space: pre;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
 	content-visibility: auto;
 	contain-intrinsic-size: auto 20px;
 	scroll-margin-top: 2rem;
