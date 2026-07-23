@@ -37,7 +37,7 @@ async def test_cancel_during_retry_window(tmp_path: Path) -> None:
         nonlocal attempts
         attempts += 1
         if attempts == 1:
-            # Transient failure; cancel lands while the retry is
+            # Transient failure. Cancel lands while the retry is
             # being considered.
             cancel_event.set()
             return BuildOutcome.failure, True

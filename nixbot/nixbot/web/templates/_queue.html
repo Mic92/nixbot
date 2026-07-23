@@ -2,7 +2,7 @@
 {% if queue %}
   <div class="section-row">
     <h2 class="section">Queue</h2>
-    {# UX only; the route enforces admin server-side. #}
+    {# UX only. The route enforces admin server-side. #}
     {% if can_cancel_queue %}
       <form method="post" action="/builds/cancel-all">
         <button>cancel all</button>

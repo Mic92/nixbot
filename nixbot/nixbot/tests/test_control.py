@@ -905,7 +905,7 @@ async def test_recovery_reports_interrupted_effects(
     postgres_dsn: str, tmp_path: Path
 ) -> None:
     """An effect left running by a crash is settled failed but never
-    re-runs; recovery must post that failure so the check run does not
+    re-runs. Recovery must post that failure so the check run does not
     stay pending forever (issue #58)."""
     config = make_config(postgres_dsn, tmp_path / "state")
     service, _app = await build_service(config)
@@ -966,7 +966,7 @@ async def test_work_dispatch(postgres_dsn: str, tmp_path: Path) -> None:
     service, _app = await build_service(config)
     pool = service.pool
     try:
-        # Scheduled payload roundtrip; the unknown project makes
+        # Scheduled payload roundtrip. The unknown project makes
         # execution a no-op, but parsing must succeed.
         await service.enqueue_work(
             "scheduled",
@@ -1026,7 +1026,7 @@ async def test_restart_resets_effects(postgres_dsn: str, tmp_path: Path) -> None
         assert not await pool.fetchval(
             "SELECT effects_started FROM builds WHERE id = $1", build_id
         )
-        # Stale log cleared by the reset; the failed rerun
+        # Stale log cleared by the reset. The failed rerun
         # (unfetchable URL) settled the row.
         row = await pool.fetchrow(
             "SELECT status, error, log_size FROM build_effects WHERE build_id = $1",

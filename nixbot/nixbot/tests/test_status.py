@@ -154,7 +154,7 @@ def make_reporter(
 
 async def test_posted_generations_bounded() -> None:
     """One entry per build forever is a slow leak in a long-lived
-    process; the generation guard only matters short-term."""
+    process. The generation guard only matters short-term."""
 
     reporter, _poster, _store = make_reporter()
     for build_id in range(POSTED_GENERATIONS_MAX + 100):
@@ -282,10 +282,10 @@ async def test_eval_finished_build_plan_in_nix_build_body() -> None:
     )
     text = poster.extras[build_post]["text"]
     assert "Building 2 attribute(s):" in text
-    # Sorted, so `a` precedes `b`; pending plan omits the status column.
+    # Sorted, so `a` precedes `b`. Pending plan omits the status column.
     assert text.index("checks.x86_64-linux.a") < text.index("checks.x86_64-linux.b")
     assert "status" not in text
-    # attribute name links to the live viewer; raw log is a separate link.
+    # attribute name links to the live viewer. Raw log is a separate link.
     assert (
         "[`checks.x86_64-linux.a`](https://ci.test/repos/github/acme/widget/builds/42/logs/checks.x86_64-linux.a)"
         in text
@@ -521,7 +521,7 @@ async def test_build_level_cancel_keeps_supersede_wording() -> None:
 
 
 async def test_attribute_descriptions_are_ansi_stripped() -> None:
-    """failure_excerpt keeps ANSI colors for the web UI; forge statuses
+    """failure_excerpt keeps ANSI colors for the web UI. Forge statuses
     must not carry raw escape codes."""
     reporter, poster, _ = make_reporter()
     await reporter.build_finished(
@@ -577,7 +577,7 @@ async def test_previously_failed_reposts_do_not_consume_budget() -> None:
 
 
 async def test_summary_counts_use_all_attribute_statuses() -> None:
-    """Reruns pass only the re-run subset as results; the summary
+    """Reruns pass only the re-run subset as results. The summary
     description must still cover the whole build."""
     reporter, poster, _ = make_reporter()
     all_statuses = {f"ok{i}": "succeeded" for i in range(99)} | {"flaky": "succeeded"}
@@ -596,7 +596,7 @@ async def test_summary_counts_use_all_attribute_statuses() -> None:
 
 
 async def test_failed_effect_posts_failure_status() -> None:
-    """A failed effect must flip the commit status to failure; a green
+    """A failed effect must flip the commit status to failure. A green
     status on a failed deploy hides the breakage (issue #30)."""
     reporter, poster, _ = make_reporter()
 
@@ -649,7 +649,7 @@ async def test_attr_prefix_follows_repo_configuration() -> None:
 
 async def test_poster_network_errors_do_not_propagate() -> None:
     """Transport failures on non-terminal posts must not wedge the
-    pipeline; the terminal summary propagates to drive the queued
+    pipeline. The terminal summary propagates to drive the queued
     retry (RetryingReporter catches it)."""
 
     class ExplodingPoster:
@@ -667,7 +667,7 @@ async def test_poster_network_errors_do_not_propagate() -> None:
 
 async def test_reporter_forwards_attr_and_text() -> None:
     """Per-attr posts carry the attr (so the check-run store records
-    it for rerequested) and the full error as markdown text; the eval
+    it for rerequested) and the full error as markdown text. The eval
     run carries the warnings."""
     reporter, poster, _ = make_reporter()
 
@@ -716,7 +716,7 @@ async def test_check_permission_error_does_not_disable_forge() -> None:
     )
     await reporter.build_started(EVENT, BUILD)
     await reporter.build_finished(EVENT, BUILD, BuildResult("succeeded", 1, []))
-    # Both phases still attempt to post; the forge is never latched off.
+    # Both phases still attempt to post. The forge is never latched off.
     assert calls == 2
 
 
@@ -729,7 +729,7 @@ def test_check_run_output_title_and_truncate() -> None:
 
 
 def test_build_plan_truncation_stays_within_check_run_budget() -> None:
-    """A huge attribute table must fit the check-run budget itself; if it
+    """A huge attribute table must fit the check-run budget itself. If it
     overshoots, _check_run_output chops it mid-row into invalid markdown."""
     attrs = [f"a{i:05d}" for i in range(20000)]
     statuses = dict.fromkeys(attrs, "succeeded")
@@ -830,7 +830,7 @@ async def test_github_check_run_poster_upsert() -> None:
 
 
 async def test_github_check_run_patch_404_recreates() -> None:
-    """The DB row outlives the GitHub run; without the fallback the
+    """The DB row outlives the GitHub run. Without the fallback the
     terminal summary would retry forever via the report work item."""
     methods: list[str] = []
 

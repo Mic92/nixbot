@@ -47,7 +47,7 @@ async def register_repo_hook(  # noqa: PLR0913
     repo: str,
     webhook_base_url: str,
 ) -> None:
-    """Idempotently register our webhook; remove legacy buildbot hooks
+    """Idempotently register our webhook. Remove legacy buildbot hooks
     only when they point at our own webhook base URL."""
     secret = await secrets_store.get_or_create(project_id)
     target_url = hook_url(webhook_base_url)

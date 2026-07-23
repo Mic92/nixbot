@@ -2,7 +2,7 @@
 
 Login: GitHub OAuth, Gitea OAuth, and generic OIDC. Sessions are
 signed cookies (HMAC-SHA256 over a JSON payload with expiry) with a
-two-key rotation window; the signing key is auto-generated in the
+two-key rotation window. The signing key is auto-generated in the
 state directory and can be overridden via LoadCredential. CSRF: all
 state-changing endpoints require a same-origin check
 (Origin/Sec-Fetch-Site) on top of SameSite=Lax cookies.
@@ -11,7 +11,7 @@ Authorization (port of the authz.py semantics): admin and allowlist
 entries are provider-qualified (`github:alice`, `gitea:bob`,
 `oidc:<issuer>:<sub>` — the OIDC identity claim defaults to the
 stable `sub` and is configurable via `mapping.username`) — the same
-username on a different provider never matches. Admins control everything; a PR author (matched by
+username on a different provider never matches. Admins control everything. A PR author (matched by
 forge identity on the same forge) may restart/cancel builds of their
 own PR; `allowUnauthenticatedControl` opens control for VPN/local-dev
 instances.
@@ -47,7 +47,7 @@ class User:
     provider: str  # "github" | "gitea" | "oidc:<issuer>"
     username: str
     avatar_url: str | None = None
-    # OIDC groups claim; drives "provider:group:<name>" viewer rules.
+    # OIDC groups claim. Drives "provider:group:<name>" viewer rules.
     groups: tuple[str, ...] = ()
 
     @property
@@ -115,7 +115,7 @@ class SessionSigner:
         if user.groups:
             payload["groups"] = list(user.groups)
         if session_id is not None:
-            # References the server-side forge-token row; the cookie is
+            # References the server-side forge-token row. The cookie is
             # signed, not encrypted, so the token itself never goes here.
             payload["sid"] = session_id
         return self.sign(payload)
@@ -208,7 +208,7 @@ def same_origin(request: Request, own_url: str) -> bool:
         return fetch_site in ("same-origin", "none")
     origin = request.headers.get("origin")
     if origin is None:
-        # Non-browser client (API token usage); cookies don't apply.
+        # Non-browser client (API token usage). Cookies don't apply.
         return True
     return origin.rstrip("/") == own_url.rstrip("/")
 
@@ -220,7 +220,7 @@ def same_origin(request: Request, own_url: str) -> bool:
 class AuthzConfig:
     admins: list[str]  # provider-qualified
     allow_unauthenticated_control: bool = False
-    # Per-repo private visibility rules; see can_view_private.
+    # Per-repo private visibility rules. See can_view_private.
     private_repo_viewers: dict[str, list[str]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -247,7 +247,7 @@ def matches_rule(user: User, rule: str) -> bool:
         return rest in ("*", user.username)
     group_provider, group_sep, group_marker = provider.rpartition(":")
     if group_sep and group_marker == "group":
-        # provider:group:<name>; rest is the group name
+        # provider:group:<name>. Rest is the group name
         return group_provider == user.provider and rest in user.groups
     return False
 
@@ -256,7 +256,7 @@ def relevant_groups(
     groups: tuple[str, ...], viewers: dict[str, list[str]]
 ) -> tuple[str, ...]:
     """Groups any viewer rule can match. The session cookie carries
-    these; the full OIDC claim can be dozens of LDAP groups and a
+    these. The full OIDC claim can be dozens of LDAP groups and a
     signed cookie past ~4KB hits header limits."""
     referenced = {
         rule.rpartition(":")[2]
@@ -274,7 +274,7 @@ def can_view_private(
     owner: str,
     name: str,
 ) -> bool:
-    """Per-repo private visibility; the most specific key wins
+    """Per-repo private visibility. The most specific key wins
     ("forge:owner/repo" > "forge:owner/*" > "*"), like the per-repo
     effects secrets."""
     if user is None:
@@ -381,7 +381,7 @@ class OAuthProvider:
             headers={"Accept": "application/json"},
         )
         # GitHub returns token-exchange errors (expired/reused code) as
-        # HTTP 200 with an {"error": ...} body; other providers use 4xx.
+        # HTTP 200 with an {"error": ...} body. Other providers use 4xx.
         if response.is_error:
             msg = f"token endpoint returned HTTP {response.status_code}"
             raise OAuthError(msg)
@@ -394,7 +394,7 @@ class OAuthProvider:
         if not access_token:
             msg = f"token exchange failed: {token_body.get('error', 'no access_token')}"
             raise OAuthError(msg)
-        # Gitea/OIDC tokens expire (typically 1h); record the lifetime
+        # Gitea/OIDC tokens expire (typically 1h). Record the lifetime
         # so the stored forge token is not trusted past it.
         raw_expires = token_body.get("expires_in")
         expires_in = int(raw_expires) if isinstance(raw_expires, (int, float)) else None
@@ -477,7 +477,7 @@ def github_oauth(
         client_secret=client_secret,
         # Private-repo visibility (GET /user/repos listing private
         # repositories) requires "repo", which GitHub only offers with
-        # write access; instances without private repos should not hold
+        # write access. Instances without private repos should not hold
         # write-capable tokens, so it is opt-in.
         scope="read:user repo" if private_repo_scope else "read:user",
         username_field="login",
@@ -539,7 +539,7 @@ async def oidc_provider(  # noqa: PLR0913
     response.raise_for_status()
     doc = response.json()
     issuer = doc["issuer"].removeprefix("https://").rstrip("/")
-    # Absent means client_secret_basic per OIDC discovery spec; only
+    # Absent means client_secret_basic per OIDC discovery spec. Only
     # fall back to body credentials if basic is explicitly not offered.
     methods = doc.get("token_endpoint_auth_methods_supported")
     client_auth: Literal["body", "basic"] = "basic"

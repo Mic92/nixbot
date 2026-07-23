@@ -119,7 +119,7 @@ def test_socket_activation_overrides_listeners(
 
 
 async def test_lifespan_runs_once_with_two_listeners(tmp_path: Path) -> None:
-    """Two uvicorn servers share one app; each running the ASGI
+    """Two uvicorn servers share one app. Each running the ASGI
     lifespan would start the app twice (duplicate LISTEN connection,
     double SSE event delivery)."""
     starts: list[str] = []
@@ -134,7 +134,7 @@ async def test_lifespan_runs_once_with_two_listeners(tmp_path: Path) -> None:
             stops.append("x")
 
     app = FastAPI(lifespan=lifespan)
-    # AF_UNIX paths cap at ~107 bytes; xdist's nested tmp_path easily
+    # AF_UNIX paths cap at ~107 bytes. Xdist's nested tmp_path easily
     # exceeds that, so bind under a short tempdir.
     sock_dir = Path(tempfile.mkdtemp(prefix="nb-"))
     sock = sock_dir / "web.sock"

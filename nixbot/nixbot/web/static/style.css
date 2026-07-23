@@ -300,7 +300,7 @@ h2 .status-icon {
 	opacity: 0.6;
 }
 
-/* Pill chrome on the build lists; headings keep plain text. No color
+/* Pill chrome on the build lists. Headings keep plain text. No color
    here: it would outweigh the .status.<state> variants below (higher
    specificity). currentColor keeps the border in sync with the state
    color. */
@@ -530,7 +530,7 @@ details.menu .menu-label {
 	}
 }
 @media (prefers-reduced-motion: reduce) {
-	/* A frozen ring reads as a rendering glitch; slow, small rotation
+	/* A frozen ring reads as a rendering glitch. Slow, small rotation
 	   is acceptable under reduced motion. */
 	.spinner {
 		animation-duration: 3s;
@@ -759,7 +759,7 @@ pre.log {
 .pipeline-meta {
 	font-size: 0.85rem;
 }
-/* Last ten builds, oldest to newest; bar height tracks duration. */
+/* Last ten builds, oldest to newest. Bar height tracks duration. */
 .pipeline-spark {
 	display: flex;
 	align-items: flex-end;
@@ -860,7 +860,7 @@ table td.empty-state {
 	align-self: center;
 }
 
-/* Wide tables scroll sideways inside a wrapper; display: block on
+/* Wide tables scroll sideways inside a wrapper. Display: block on
    the table itself would strip its screen-reader role. */
 .table-scroll {
 	overflow-x: auto;
@@ -910,7 +910,7 @@ details.webhook-setup summary {
 
 /* ======================================================================
    Structured log viewer (log.html + _macros.html drv_card).
-   Native <details> disclosure; only the summary chrome is styled.
+   Native <details> disclosure. Only the summary chrome is styled.
    Sections below: Cards, Log body, Phase bar, Search, Succeeded panel.
    ====================================================================== */
 
@@ -989,7 +989,7 @@ details.webhook-setup summary {
 	text-decoration: underline;
 }
 /* Log body: the scrolling line list htmx fetches into .log-lines.
-   Grow to fit, cap then scroll; smaller cap on phones. */
+   Grow to fit, cap then scroll. Smaller cap on phones. */
 .log-lines {
 	max-height: 21rem;
 	overflow: auto;
@@ -1048,7 +1048,7 @@ details.webhook-setup summary {
 	border-block: 1px dashed var(--border);
 	text-align: center;
 }
-/* Phase divider: inline separator the server splices in; sticky pins it
+/* Phase divider: inline separator the server splices in. Sticky pins it
    as the current-phase header. prev/next scroll siblings (see the JS). */
 .phase-sep {
 	position: sticky;

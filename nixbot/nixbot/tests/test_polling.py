@@ -62,7 +62,7 @@ async def test_polling_detects_changes(upstream: Path) -> None:
 
 
 async def test_poll_loop_survives_sink_errors(upstream: Path) -> None:
-    """A sink failure must not kill the loop; the head is retried."""
+    """A sink failure must not kill the loop. The head is retried."""
 
     @dataclass
     class FlakySink(RecordingSink):

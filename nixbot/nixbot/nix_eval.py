@@ -10,7 +10,7 @@ only the worktree, the nix store, the gc-roots dir, the nix daemon
 socket, and an optional per-build repo-scoped credential file are
 mounted — never $CREDENTIALS_DIRECTORY. Network stays available for
 flake input fetching. The process is launched in a transient systemd
-scope with a cgroup memory limit; eval OOM is a permanent failure.
+scope with a cgroup memory limit. Eval OOM is a permanent failure.
 A semaphore caps concurrent evaluations (default 1).
 """
 
@@ -77,9 +77,9 @@ class EvalSettings:
     worker_count: int = 1
     max_memory_size_mib: int = 4096
     show_trace: bool = False
-    # bwrap sandbox; disable only in tests.
+    # bwrap sandbox. Disable only in tests.
     sandbox: bool = True
-    # Transient systemd scope with MemoryMax; needs a systemd session.
+    # Transient systemd scope with MemoryMax. Needs a systemd session.
     systemd_scope: bool = True
     # Repo-scoped credential file mounted as $HOME/.netrc in the sandbox.
     netrc_file: Path | None = None
@@ -101,7 +101,7 @@ def build_eval_command(
     flake = f"{branch_config.flake_dir}#{branch_config.attribute}"
     return [
         "nix-eval-jobs",
-        # The service drives nix entirely through flakes; on hosts where
+        # The service drives nix entirely through flakes. On hosts where
         # the system nix.conf hasn't enabled them (single-user installs,
         # containers) the eval would crash on the first --flake.
         "--option",
@@ -151,7 +151,7 @@ SANDBOX_ETC_PATHS = (
 
 def build_sandbox_command(worktree_path: Path, settings: EvalSettings) -> list[str]:
     """bwrap wrapper: worktree + nix store + gc-roots dir + daemon socket
-    + per-build credential file only; never $CREDENTIALS_DIRECTORY."""
+    + per-build credential file only. Never $CREDENTIALS_DIRECTORY."""
     cmd = [
         "bwrap",
         "--unshare-all",
@@ -175,7 +175,7 @@ def build_sandbox_command(worktree_path: Path, settings: EvalSettings) -> list[s
             "--ro-bind",
             str(settings.nix_daemon_socket),
             str(settings.nix_daemon_socket),
-            # The db bind is read-only; always go through the daemon.
+            # The db bind is read-only. Always go through the daemon.
             "--setenv",
             "NIX_REMOTE",
             "daemon",
@@ -211,7 +211,7 @@ def build_sandbox_command(worktree_path: Path, settings: EvalSettings) -> list[s
 
 async def systemd_scope_available() -> bool:
     """Whether transient scopes can be created (running as root or with a
-    user session); system users without one fall back to no scope."""
+    user session). System users without one fall back to no scope."""
     try:
         proc = await asyncio.create_subprocess_exec(
             "systemd-run",
@@ -459,7 +459,7 @@ def cgroup_oom_killed(eval_cgroup: Path | None) -> bool:
 
 def _kill_process_tree(proc: asyncio.subprocess.Process) -> None:
     """Kill the evaluator and its children (systemd-run/bwrap wrap the
-    real evaluator); the process group exists because the subprocess is
+    real evaluator). The process group exists because the subprocess is
     started with start_new_session=True."""
     with contextlib.suppress(ProcessLookupError):
         try:
@@ -476,7 +476,7 @@ class EvalRunner:
     ) -> None:
         self._semaphore = asyncio.Semaphore(concurrency)
         self.limiter = limiter
-        # Probed on first use; system users without a session can't
+        # Probed on first use. System users without a session can't
         # create transient scopes.
         self._systemd_scope_ok: bool | None = None
 

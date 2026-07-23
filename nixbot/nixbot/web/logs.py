@@ -49,7 +49,7 @@ class LogRegistry:
 
     def __init__(self) -> None:
         self._writers: dict[tuple[int, str], LogWriter] = {}
-        # Scheduled-effect runs have no build_id; key them by run id in
+        # Scheduled-effect runs have no build_id. Key them by run id in
         # a separate map so the namespaces cannot collide.
         self._scheduled: dict[int, LogWriter] = {}
 
@@ -92,7 +92,7 @@ _RESET = _Style()
 def _apply_sgr(params: str, style: _Style) -> _Style:
     """SGR is stateful: codes modify the current style, they don't
     replace it. Unknown codes are ignored, which also covers colon
-    syntax (38:5:185 stays one unknown code); semicolon-separated
+    syntax (38:5:185 stays one unknown code). Semicolon-separated
     extended colors consume their arguments so e.g. 38;5;31 is not
     read as red."""
     fg, bold = style.fg, style.bold
@@ -119,7 +119,7 @@ def _apply_sgr(params: str, style: _Style) -> _Style:
 
 
 def _apply_osc(payload: str, style: _Style) -> _Style:
-    """OSC 8 opens/closes a hyperlink; every other OSC (window title
+    """OSC 8 opens/closes a hyperlink. Every other OSC (window title
     etc.) is dropped without touching the style."""
     if not payload.startswith("8;"):
         return style
@@ -146,7 +146,7 @@ def _render_segment(segment: str, style: _Style) -> str:
 
 
 def _ansi_convert(text: str, style: _Style) -> tuple[str, _Style]:
-    """Convert SGR colors to spans and OSC 8 to links; strip every
+    """Convert SGR colors to spans and OSC 8 to links. Strip every
     other sequence. `style` carries in from the previous chunk/line;
     the style left open at the end is returned for the next one."""
     out: list[str] = []
@@ -166,7 +166,7 @@ def ansi_to_html(text: str) -> str:
     return _ansi_convert(text, _RESET)[0]
 
 
-# Real escape sequences are tiny; a held-back "partial" larger than
+# Real escape sequences are tiny. A held-back "partial" larger than
 # this is an unterminated OSC that would buffer the live stream
 # forever.
 _TAIL_MAX = 4096
@@ -207,7 +207,7 @@ def render_log_lines(text: str) -> str:
             f'<span class="logline" id="L{i}">'
             f'<a class="lineno" href="#L{i}">{i}</a>{rendered}</span>'
         )
-    # .logline is display:block; a joining "\n" inside <pre> would
+    # .logline is display:block. A joining "\n" inside <pre> would
     # render as an extra blank line.
     return "".join(lines)
 
@@ -226,7 +226,7 @@ def phase_sep(name: str) -> str:
 
 
 def _phase_at(ph: list) -> dict[int, str]:
-    """0-based line -> phase name; empty phases collapse into the next."""
+    """0-based line -> phase name. Empty phases collapse into the next."""
     return {line: name for name, line in ph}
 
 
@@ -255,7 +255,7 @@ def render_rows(
 
 
 # A single huge derivation would insert tens of thousands of DOM nodes in
-# one swap and hang the tab. Render only a head+tail window; the elided
+# one swap and hang the tab. Render only a head+tail window. The elided
 # middle auto-loads as the reader scrolls, one bounded chunk at a time.
 _RENDER_HEAD = 2000
 _RENDER_TAIL = 3000
@@ -265,7 +265,7 @@ _RENDER_CHUNK = 2000
 
 def _chunk_marker(idx: int, base: str, start: int, end: int) -> str:
     """A marker that auto-loads lines [start, end) (0-based) once scrolled
-    into view, one bounded chunk at a time; htmx swaps the fetched rows
+    into view, one bounded chunk at a time. htmx swaps the fetched rows
     (and the next marker, if any) over it."""
     nxt = min(start + _RENDER_CHUNK, end)
     return (
@@ -285,12 +285,12 @@ def render_drv_window(
 ) -> str:
     """A derivation's log as anchored rows. The initial view (no range)
     is capped to a head+tail window with a load-more marker spanning the
-    gap; a range request renders lines [start, end) plus another marker
+    gap. A range request renders lines [start, end) plus another marker
     if more of the gap remains before the tail."""
     lines = reader.lines(idx)
     ph = _phase_at(reader.entry(idx)["ph"])
     n = len(lines)
-    gap_end = n - _RENDER_TAIL  # tail starts here; never render past it
+    gap_end = n - _RENDER_TAIL  # tail starts here. Never render past it
     if start is None:
         if n <= _RENDER_CAP:
             return render_rows(idx, 1, lines, phases=ph)[0]
@@ -377,7 +377,7 @@ async def _failure_summary(
     }
 
 
-# SSE history replay bound (lines); full logs stay available as raw
+# SSE history replay bound (lines). Full logs stay available as raw
 # downloads and in the static viewer.
 HISTORY_MAX_LINES = 2000
 
@@ -525,7 +525,7 @@ class _LogRoutes:
                 content = await asyncio.to_thread(render_log_lines, text)
             elif run.status == "running":
                 # Started but the writer is not registered yet (fetch /
-                # checkout runs before the first log byte); poll until it
+                # checkout runs before the first log byte). Poll until it
                 # appears instead of claiming the log is gone.
                 waiting = True
             else:
@@ -654,10 +654,10 @@ class _LogRoutes:
         idx: int,
     ) -> HTMLResponse:
         """Standalone, shareable page for one derivation's log. The
-        embedded card view caps its height; this page shows the same
+        embedded card view caps its height. This page shows the same
         rows full-width with working line permalinks. While the attribute
         is still running the rows come from the live capture (the client
-        follows the structured stream); once finished, from the container.
+        follows the structured stream). Once finished, from the container.
         Capture and container assign indices in the same registration
         order, so a link shared during the build stays valid after it."""
         project, build, path = await self._resolve(
@@ -720,7 +720,7 @@ class _LogRoutes:
         number: int,
         q: str = "",
     ) -> HTMLResponse:
-        """Search every attribute's container; per-derivation hit groups
+        """Search every attribute's container. Per-derivation hit groups
         (attr, name, line numbers), failures first. No container -> skipped.
         Returns rendered HTML the client swaps into #search-results."""
         _, build = await self._build_or_404(request, forge, owner, name, number)
@@ -789,7 +789,7 @@ class _LogRoutes:
             reader = await _load_container(path)
             if reader is not None:
                 # Structured viewer: per-derivation cards render lazily
-                # from /drv/{idx}; no flat body needed.
+                # from /drv/{idx}. No flat body needed.
                 toc = _toc_entries(reader)
             elif path is not None and path.exists():
                 data = await asyncio.to_thread(read_log, path)
@@ -798,7 +798,7 @@ class _LogRoutes:
                 )
             elif attr_status in ("pending", "building"):
                 # The build page links queued attributes before any
-                # log exists; show a waiting page instead of a 404.
+                # log exists. Show a waiting page instead of a 404.
                 waiting = True
             elif attr_status in NO_LOG_STATUSES:
                 # No build log, but eval failures carry a trace: show it
@@ -889,7 +889,7 @@ async def _stream_events(
 ) -> AsyncGenerator[str, None]:
     """History first, then live chunks (if a writer is running);
     everything rendered to HTML server-side so the client just
-    appends; the replayed history is tail-limited so a late
+    appends. The replayed history is tail-limited so a late
     subscriber to a huge log does not push megabytes through the
     ANSI renderer."""
     ansi = AnsiHtmlStream()

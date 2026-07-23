@@ -18,7 +18,7 @@ class GiteaClient(TokenForgeClient):
         return {"Authorization": f"token {self.token}"}
 
     async def paginated_pages(self, url: str) -> AsyncIterator[list[dict[str, Any]]]:
-        # Gitea does not emit RFC 5988 Link headers reliably; walk
+        # Gitea does not emit RFC 5988 Link headers reliably. Walk
         # ?page=N until an empty page.
         page = 1
         while True:

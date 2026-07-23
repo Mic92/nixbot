@@ -299,7 +299,7 @@ async def insert_project(  # noqa: PLR0913
     url: str = "u",
     private: bool = False,
 ) -> int:
-    """An enabled projects row; idempotent on (forge, forge_repo_id)."""
+    """An enabled projects row. Idempotent on (forge, forge_repo_id)."""
     return await pool.fetchval(
         """
         INSERT INTO projects (forge, forge_repo_id, owner, name,

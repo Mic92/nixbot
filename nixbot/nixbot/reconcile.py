@@ -1,7 +1,7 @@
 """Startup reconciliation: after downtime, build the
 default-branch head and open-PR heads that have no build record yet.
 
-Runs after crash recovery; duplicates are resolved by the
+Runs after crash recovery. Duplicates are resolved by the
 supersede rules. "Built" means any build record exists for the head
 commit in that project, regardless of result — exact merge-tree
 checking happens once the orchestrator computes the tree.
@@ -37,12 +37,12 @@ class RemoteHead:
     pr_number: int | None = None
     pr_author: str | None = None
     base_sha: str | None = None
-    # Forge-clock PR update time; feeds the reconcile watermark.
+    # Forge-clock PR update time. Feeds the reconcile watermark.
     updated_at: datetime | None = None
 
 
 def max_pr_updated(heads: list[RemoteHead]) -> datetime | None:
-    """Newest PR update time seen; the next reconcile's watermark."""
+    """Newest PR update time seen. The next reconcile's watermark."""
     times = [h.updated_at for h in heads if h.updated_at is not None]
     return max(times) if times else None
 
@@ -103,7 +103,7 @@ async def github_heads(
             commit_sha=pull["head"]["sha"],
             pr_number=pull["number"],
             pr_author=f"github:{pull['user']['login']}",
-            # base.sha is frozen at PR creation; merge into the current
+            # base.sha is frozen at PR creation. Merge into the current
             # base branch tip instead (see webhooks._parse_pr_event).
             base_sha=f"refs/heads/{pull['base']['ref']}",
             updated_at=datetime.fromisoformat(pull["updated_at"]),
@@ -172,7 +172,7 @@ async def gitlab_heads(
     mr_url = f"{repo_url}/merge_requests?state=opened&per_page=100"
     if updated_since is not None:
         # updated_after is exclusive, but the watermark equals a seen
-        # MR's updated_at; back off one second to keep the boundary
+        # MR's updated_at. Back off one second to keep the boundary
         # inclusive like the other forges (is_built dedupes overlap).
         cutoff = (updated_since - timedelta(seconds=1)).isoformat()
         mr_url += f"&updated_after={quote(cutoff, safe='')}"
@@ -183,7 +183,7 @@ async def gitlab_heads(
             commit_sha=pull["sha"],
             pr_number=pull["iid"],
             pr_author=f"gitlab:{pull['author']['username']}",
-            # The MR API exposes no base sha; merge against the
+            # The MR API exposes no base sha. Merge against the
             # target branch ref instead.
             base_sha=f"refs/heads/{pull['target_branch']}",
             updated_at=datetime.fromisoformat(pull["updated_at"]),

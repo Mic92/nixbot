@@ -119,7 +119,7 @@ def test_project_page_with_filters(client: WebHarness) -> None:
     assert "#3" in by_branch.text
     assert ">#2<" not in by_branch.text
 
-    # A numeric ref means a PR; build 3 is PR #5.
+    # A numeric ref means a PR. Build 3 is PR #5.
     by_pr = client.get("/repos/github/acme/widget?ref=%235")
     assert "#3" in by_pr.text
     assert ">#2<" not in by_pr.text
@@ -159,7 +159,7 @@ def test_build_page(client: WebHarness) -> None:
     response = client.get("/repos/github/acme/widget/builds/2")
     assert response.status_code == 200
     text = response.text
-    # Failures render eagerly in an open group; the succeeded bulk is
+    # Failures render eagerly in an open group. The succeeded bulk is
     # collapsed to a count.
     assert "x86_64-linux.bad" in text
     failed_group = re.search(r'<details[^>]*data-group="failed"[^>]*>', text)
@@ -228,7 +228,7 @@ def test_build_page_shows_eval_warning_groups(client: WebHarness) -> None:
 
 
 def test_build_page_renders_ansi_in_error(client: WebHarness) -> None:
-    """Eval failures carry nix's colored output; raw escape codes must
+    """Eval failures carry nix's colored output. Raw escape codes must
     not reach the HTML (the API already strips them)."""
 
     async def seed() -> None:
@@ -611,7 +611,7 @@ def test_ansi_sgr_is_stateful() -> None:
     assert ansi_to_html("\x1b[38;5;31mx") == "x"
     assert ansi_to_html("\x1b[38;2;1;2;3mx") == "x"
     # systemd uses ITU colon syntax: arguments ride along inside one
-    # parameter; the sequence must not leak into the output.
+    # parameter. The sequence must not leak into the output.
     out = ansi_to_html("\x1b[0;1;38:5:185meth1")
     assert out == '<span class="ansi-bold">eth1</span>'
     assert strip_ansi("\x1b[0;1;38:5:185meth1") == "eth1"
@@ -622,7 +622,7 @@ def test_osc8_hyperlinks() -> None:
     assert ansi_to_html(raw) == (
         '<a href="https://example.com" rel="nofollow">click</a> plain'
     )
-    # Colored link text nests; the link survives an SGR reset.
+    # Colored link text nests. The link survives an SGR reset.
     raw = "\x1b]8;;https://e.x\x07\x1b[31mred\x1b[0mplain\x1b]8;;\x07"
     assert ansi_to_html(raw) == (
         '<a href="https://e.x" rel="nofollow"><span class="ansi-red">red</span></a>'
@@ -651,7 +651,7 @@ def test_non_sgr_sequences_are_stripped() -> None:
 
 
 def test_render_log_lines_carries_color_across_lines() -> None:
-    # nix error blocks are colored over several lines; the reset
+    # nix error blocks are colored over several lines. The reset
     # arrives lines later.
     out = render_log_lines("\x1b[31mone\ntwo\x1b[0m\nthree")
     assert '<span class="ansi-red">one</span>' in out
@@ -955,7 +955,7 @@ def test_log_viewer_waits_for_queued_attribute(client: WebHarness) -> None:
 
 
 def test_log_viewer_unavailable_for_logless_status(client: WebHarness) -> None:
-    # failed_eval / skipped_local never produce a log; the viewer shows
+    # failed_eval / skipped_local never produce a log. The viewer shows
     # a placeholder instead of a 404 so build-page links resolve.
     async def make_failed_eval() -> None:
         await client.ctx.pool.execute(
@@ -987,7 +987,7 @@ def test_log_viewer_unavailable_for_logless_status(client: WebHarness) -> None:
 
 
 def test_eval_error_served_like_build_log(client: WebHarness) -> None:
-    """failed_eval attributes have no build log; the viewer and raw
+    """failed_eval attributes have no build log. The viewer and raw
     routes serve the stored eval trace with the same UI as build logs."""
     build_page = client.get("/repos/github/acme/widget/builds/2")
     assert "/builds/2/logs/x86_64-linux.evalfail" in build_page.text
@@ -1097,7 +1097,7 @@ def test_queue_sorts_active_before_pending(client: WebHarness) -> None:
         finally:
             await ctx.pool.execute("DELETE FROM builds WHERE number IN (90, 91)")
 
-    # Build 3 is evaluating; both active builds come before the
+    # Build 3 is evaluating. Both active builds come before the
     # earlier-submitted pending one.
     assert client.loop.run_until_complete(run()) == [3, 91, 90]
 
@@ -1224,7 +1224,7 @@ def test_log_sse_stream_caps_history_backlog(
     client: WebHarness, tmp_path: Path
 ) -> None:
     """Subscribing late to a huge log must not render the entire
-    history through the ANSI pipeline; only a bounded tail replays."""
+    history through the ANSI pipeline. Only a bounded tail replays."""
     ctx = client.ctx
     ctx.state_dir = tmp_path
     registry = client.app.state.log_registry
@@ -1502,7 +1502,7 @@ def test_attribute_search(client: WebHarness) -> None:
 
 
 def test_css_covers_every_status() -> None:
-    """Status values double as CSS classes; a missing rule silently
+    """Status values double as CSS classes. A missing rule silently
     renders a grey icon."""
     css = (Path(__file__).parent.parent / "web" / "static" / "style.css").read_text()
     statuses = (
@@ -1568,7 +1568,7 @@ def test_effect_log_raw_text(client: WebHarness, tmp_path: Path) -> None:
 
 
 def test_effect_changes_notify_build_events(client: WebHarness) -> None:
-    """The page's SSE refresh rides on build_events; without a trigger
+    """The page's SSE refresh rides on build_events. Without a trigger
     on build_effects the Effects section never updates live."""
 
     async def run() -> list[str]:
@@ -1672,7 +1672,7 @@ def test_logout_revokes_session_cookie(postgres_dsn: str) -> None:
 
 
 def test_gitlab_nested_group_routes(client: WebHarness) -> None:
-    """GitLab nested-group projects have "/" in the owner; the web and
+    """GitLab nested-group projects have "/" in the owner. The web and
     API routes must still resolve them."""
 
     async def setup() -> None:
@@ -1840,7 +1840,7 @@ def test_scheduled_run_history_lists_runs(client: WebHarness) -> None:
 
 def test_scheduled_run_history_special_chars(client: WebHarness) -> None:
     """schedule/effect names are repo-controlled and may contain
-    slashes; query params route them safely."""
+    slashes. Query params route them safely."""
     ctx = client.ctx
 
     async def setup() -> int:
@@ -1898,7 +1898,7 @@ def test_scheduled_run_stream_replays_history(
 
 def test_scheduled_run_notify_build_events(client: WebHarness) -> None:
     """Run INSERT (running) and terminal UPDATE both NOTIFY on
-    build_events; an unchanged status does not."""
+    build_events. An unchanged status does not."""
 
     async def run() -> list[dict]:
         ctx = client.ctx

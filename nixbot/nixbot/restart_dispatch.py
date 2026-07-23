@@ -1,7 +1,7 @@
 """Build rerun paths driven from the work queue: resuming pending
 attributes from stored eval results, falling back to re-evaluation,
 and effects-only restarts. State resets happen synchronously in the
-service; this module only re-executes.
+service. This module only re-executes.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Pause before handing a rerun of a still-unwinding build back to
-# the work queue; bounds the retry cadence without holding the
+# the work queue. Bounds the retry cadence without holding the
 # dedup key indefinitely.
 UNWIND_RETRY_SECONDS = 0.5
 
@@ -134,7 +134,7 @@ async def _reeval(
             worktree_path,
         ):
             # Stale rows (e.g. failed_eval with NULL drv_path) would
-            # wedge the aggregate; the re-eval rewrites them. Finished
+            # wedge the aggregate. The re-eval rewrites them. Finished
             # rows with a drv_path are kept: their results are valid
             # and the re-eval skips already-built attributes.
             # The flag must drop before the rows: a concurrent build
@@ -161,7 +161,7 @@ async def change_event_for(
 
 
 async def _report_interrupted(s: CIService, resumable: ResumableBuild) -> None:
-    """Post the failure to the forge; otherwise the commit status
+    """Post the failure to the forge. Otherwise the commit status
     stays pending forever after an interrupted evaluation."""
     build = await builds_q.get_build(s.orchestrator.pool, id_=resumable.build_id)
     event = await change_event_for(s, resumable)

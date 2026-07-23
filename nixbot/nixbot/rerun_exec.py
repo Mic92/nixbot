@@ -39,7 +39,7 @@ async def rerun_worktree(
     credentials: FetchCredentials | None,
 ) -> AsyncIterator[tuple[ChangeEvent, Path]]:
     """Event reconstruction plus a fresh worktree at the recorded
-    commit; shared by the rerun paths."""
+    commit. Shared by the rerun paths."""
     event = event_for_build(info, build)
     # PR head commits are only reachable via the PR refs.
     refspecs = ["+refs/heads/*:refs/heads/*"]
@@ -69,10 +69,10 @@ async def rerun_pending_attributes(
     the stored eval results — no re-evaluation (attribute restarts
     and crash recovery)."""
     if build.id in o.cancel_events:
-        # Already running; a concurrent rerun would double-write
+        # Already running. A concurrent rerun would double-write
         # attribute completions.
         return
-    # Claim the slot before the first await; concurrent reruns
+    # Claim the slot before the first await. Concurrent reruns
     # must not pass the guard together.
     cancel_event = o.cancel_events[build.id] = asyncio.Event()
     try:
@@ -95,7 +95,7 @@ async def rerun_pending_attributes(
             pending_jobs = [
                 job for job in pending_jobs if job.system in o.config.build_systems
             ]
-        # No re-eval happens on this path; go straight to building.
+        # No re-eval happens on this path. Go straight to building.
         await db.set_build_status(o.pool, build.id, BuildStatus.BUILDING)
         # Register so supersede/PR-close cancellation also covers
         # recovered and restarted builds.
@@ -124,7 +124,7 @@ async def rerun_pending_attributes(
                 cache_failures=False,
             )
             if status == BuildStatus.SUCCEEDED:
-                # Crash recovery before effects started; the
+                # Crash recovery before effects started. The
                 # started-flag keeps already-deployed builds from
                 # re-deploying.
                 await o.maybe_run_effects(event, build, worktree_path, credentials)

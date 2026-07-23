@@ -47,7 +47,7 @@
        running->running INSERT raised no further event to react to. */
     if (WAITING) setTimeout(() => location.reload(), 2000);
     /* Status changes for this run (INSERT running / terminal UPDATE)
-       arrive on the shared events channel; reload to re-render the
+       arrive on the shared events channel. Reload to re-render the
        header dot and, once finished, the server-side static log. */
     const events = new EventSource("/events?project={{ project.id }}");
     events.onmessage = (ev) => {

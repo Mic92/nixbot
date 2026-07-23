@@ -1,7 +1,7 @@
 """Branch config lookup with multiple matching globs.
 
 A branch may match several configured globs (e.g. "*" and
-"release-*"); merging their settings must not raise just because the
+"release-*"). Merging their settings must not raise just because the
 globs differ -- otherwise every webhook for such a branch 500s.
 """
 

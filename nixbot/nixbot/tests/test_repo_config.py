@@ -1,7 +1,7 @@
 """Per-repository config file loading.
 
 Repositories migrating from buildbot-nix still carry a
-`buildbot-nix.toml`; it must keep working until renamed.
+`buildbot-nix.toml`. It must keep working until renamed.
 """
 
 from __future__ import annotations

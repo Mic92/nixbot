@@ -1,6 +1,6 @@
 """Shared build persistence (sqlc-generated queries over asyncpg).
 
-Only multi-caller operations with real invariants live here; modules
+Only multi-caller operations with real invariants live here. Modules
 with a single call site use db_gen directly. The SQL lives in
 queries/builds.sql; `sqlc generate` produces db_gen/builds.py.
 
@@ -181,7 +181,7 @@ async def aggregate_build(pool: asyncpg.Pool, build_id: int) -> tuple[str, int]:
     """Recompute the build's aggregate result from its attributes.
 
     Serialized per build via a row lock taken before the statuses
-    are read (see LockBuildRow); bumps the monotonic status
+    are read (see LockBuildRow). Bumps the monotonic status
     generation. Returns (status, generation).
     """
     async with pool.acquire() as conn, conn.transaction():

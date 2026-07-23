@@ -36,7 +36,7 @@ class CachedStaticFiles(StaticFiles):
 
 
 def _static_version() -> str:
-    """Content hash over the static assets; bound into asset URLs so
+    """Content hash over the static assets. Bound into asset URLs so
     browser caches roll over on deploy."""
     digest = hashlib.sha256()
     for f in sorted(STATIC_DIR.rglob("*")):
@@ -105,7 +105,7 @@ def commit_url(project: dict[str, Any], sha: str) -> str:
 
 
 def repo_path(project: dict[str, Any]) -> str:
-    """Internal page path; accepts project rows and build rows joined
+    """Internal page path. Accepts project rows and build rows joined
     with the project (which carry the name as project_name)."""
     name = project.get("name") or project["project_name"]
     return f"/repos/{project['forge']}/{project['owner']}/{name}"
@@ -169,6 +169,6 @@ def make_env() -> Environment:
     env.globals["repo_path"] = repo_path
     env.globals["build_path"] = build_path
     env.globals["RUNNING_STATUSES"] = RUNNING_STATUSES
-    # Header login links; the service composition fills this in.
+    # Header login links. The service composition fills this in.
     env.globals["login_providers"] = []
     return env

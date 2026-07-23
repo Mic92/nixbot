@@ -3,7 +3,7 @@
 For push events on branches with `updateOutputs`, the store path of
 each attribute result is written to
 <outputs_path>/<forge>/<owner>/<repo>/<branch>/<attr> (URL-quoted,
-traversal-safe; forge-scoped so the same owner/repo on two forges
+traversal-safe. Forge-scoped so the same owner/repo on two forges
 cannot overwrite each other) so external tooling (e.g. deploys, nginx autoindex) can find the
 latest outputs. Per-branch gating (`match_glob`/`update_outputs`/
 `register_gcroots`) lives in config.BranchConfigDict.

@@ -1,5 +1,5 @@
 // @ts-check
-// Structured per-derivation log viewer. Cards are server-rendered; htmx
+// Structured per-derivation log viewer. Cards are server-rendered. htmx
 // fetches each card's rows (/drv/{idx}) lazily on first open. Phase
 // dividers are inline sticky elements the server splices in (see
 // phase_sep in logs.py); CSS pins them, so there is no scroll math here.
@@ -105,7 +105,7 @@
     else pending = { card, idx, line }; // afterSwap completes the jump
   }
 
-  // Search results are server-rendered; the client only jumps into a
+  // Search results are server-rendered. The client only jumps into a
   // card, waiting for htmx to load its rows when they aren't yet present.
   must("search-results").addEventListener("click", (e) => {
     const a = /** @type {HTMLElement} */ (e.target).closest("a[data-idx]");
@@ -269,7 +269,7 @@
     });
     src.addEventListener("delta", (ev) => apply(JSON.parse(ev.data)));
     src.addEventListener("done", () => src.close());
-    // EventSource reconnects ~every 1s; if the server stays gone (engine
+    // EventSource reconnects ~every 1s. If the server stays gone (engine
     // restart) give up and reload so the finished log renders server-side.
     src.onerror = () => {
       if (++errors >= 5) {

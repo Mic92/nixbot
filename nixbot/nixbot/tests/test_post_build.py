@@ -140,7 +140,7 @@ async def test_run_steps_hard_failure_continues(tmp_path: Path) -> None:
 async def test_run_steps_inherit_service_environment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Tools like cachix need HOME/XDG_*; the service environment must
+    # Tools like cachix need HOME/XDG_*. The service environment must
     # be inherited, with step.environment overlaid.
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("INHERITED_VAR", "from-service")

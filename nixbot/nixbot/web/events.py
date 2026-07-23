@@ -1,7 +1,7 @@
 """Live status events for the web frontend.
 
 Postgres triggers (migration 0005) NOTIFY on every build/attribute
-status change; the broker holds one LISTEN connection and fans the
+status change. The broker holds one LISTEN connection and fans the
 payloads out to SSE subscribers. Pages refetch fragments or patch
 rows when an event arrives instead of polling on a timer.
 """
@@ -31,13 +31,13 @@ logger = logging.getLogger(__name__)
 CHANNEL = "build_events"
 KEEPALIVE_SECONDS = 30.0
 RECONNECT_SECONDS = 5.0
-# A burst of status changes is one "refetch" cue to a subscriber; emit
+# A burst of status changes is one "refetch" cue to a subscriber. Emit
 # at most one SSE write per this interval.
 COALESCE_SECONDS = 0.25
 # Long-lived streams must not keep a revoked viewer's visibility
-# snapshot forever; re-resolve it periodically.
+# snapshot forever. Re-resolve it periodically.
 VISIBILITY_REFRESH_SECONDS = 300.0
-# A slow client just loses events; each one only triggers a refetch
+# A slow client just loses events. Each one only triggers a refetch
 # of current state.
 QUEUE_SIZE = 64
 
@@ -72,7 +72,7 @@ class EventBroker:
         self._conn = await self.pool.acquire()
         await self._conn.add_listener(CHANNEL, self._on_notify)
         # A killed connection (postgres restart) would silence events
-        # forever; reconnect in the background.
+        # forever. Reconnect in the background.
         self._conn.add_termination_listener(self._on_termination)
 
     async def stop(self) -> None:
@@ -164,7 +164,7 @@ async def event_stream(
             if payload is None:
                 yield ": keepalive\n\n"
                 continue
-            # Drop the rest of the burst; one refetch covers them all.
+            # Drop the rest of the burst. One refetch covers them all.
             while not sub.queue.empty():
                 sub.queue.get_nowait()
             yield f"data: {payload}\n\n"

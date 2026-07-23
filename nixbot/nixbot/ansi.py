@@ -7,7 +7,7 @@ import re
 
 # One token per escape sequence. Colons in SGR: ITU T.416 syntax for
 # extended colors (38:5:185), used by systemd among others. OSC is
-# BEL- or ST-terminated; charset selects and other two-character
+# BEL- or ST-terminated. Charset selects and other two-character
 # escapes are matched so their final byte does not leak as text.
 ANSI_TOKEN_RE = re.compile(
     r"\x1b\[(?P<sgr>[0-9;:]*)m"

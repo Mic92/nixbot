@@ -20,7 +20,7 @@ _PREFIX_RE = re.compile(r"^(?:evaluation warning:|warning:|error:)\s*")
 _WS_RE = re.compile(r"\s+")
 
 MAX_GROUPS = 50
-# Warning text is repo-controlled; keep single messages bounded.
+# Warning text is repo-controlled. Keep single messages bounded.
 MAX_MESSAGE_LEN = 500
 
 _IGNORED_WARNINGS = (
@@ -43,7 +43,7 @@ def normalize_warning(line: str) -> tuple[str, str]:
 
 
 class LiveWarningAggregator:
-    """Counts occurrences per normalized warning; bounded group count."""
+    """Counts occurrences per normalized warning. Bounded group count."""
 
     def __init__(self, max_groups: int = MAX_GROUPS) -> None:
         self._groups: dict[tuple[str, str], int] = {}

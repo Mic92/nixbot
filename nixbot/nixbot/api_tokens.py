@@ -1,8 +1,8 @@
 """Personal API tokens.
 
 Tokens are generated in the UI after login, shown exactly once, and
-stored only as SHA-256 hashes. Optional expiry; revocation deletes the
-row and takes effect immediately; expired rows are pruned
+stored only as SHA-256 hashes. Optional expiry. Revocation deletes the
+row and takes effect immediately. Expired rows are pruned
 opportunistically. A valid token authenticates as its owner for both
 read and control API usage.
 """
@@ -83,7 +83,7 @@ class ApiTokenStore:
         ]
 
     async def revoke(self, user: User, token_id: int) -> bool:
-        """Immediate revocation; only the owner may revoke."""
+        """Immediate revocation. Only the owner may revoke."""
         result = await q.revoke_api_token(
             self.pool, id_=token_id, user_qualified=user.qualified
         )

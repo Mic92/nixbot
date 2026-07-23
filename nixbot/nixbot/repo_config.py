@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
-# Preference order; the legacy buildbot-nix name keeps repositories
+# Preference order. The legacy buildbot-nix name keeps repositories
 # migrating from buildbot-nix working without a rename.
 CONFIG_FILENAMES = ("nixbot.toml", "buildbot-nix.toml")
 
@@ -50,7 +50,7 @@ class BranchConfig(BaseModel):
     @classmethod
     def load(cls, repo_root: Path) -> Self:
         """Read `nixbot.toml` (or the legacy `buildbot-nix.toml`)
-        from a checkout; defaults on absence or invalid content
+        from a checkout. Defaults on absence or invalid content
         (matching the buildbot-era behavior)."""
         for filename in CONFIG_FILENAMES:
             try:

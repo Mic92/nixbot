@@ -93,7 +93,7 @@ FILTER_REPOS = [
             id="union-of-allowlists",
         ),
         # The topic only drives the one-shot legacy enablement import
-        # (projects.py); it must not exclude repos from discovery.
+        # (projects.py). It must not exclude repos from discovery.
         pytest.param(
             RepoFilters(topic="build-with-buildbot"),
             [0, 1, 2],
@@ -272,7 +272,7 @@ async def test_github_fetch_credentials_repo_scoped(
 async def test_github_credentials_before_discovery(
     github_client: GitHubAppClient,
 ) -> None:
-    """Webhooks are served before the initial discovery finishes; an
+    """Webhooks are served before the initial discovery finishes. An
     unknown repo's installation must be looked up on demand instead of
     dropping credentials (private fetch and statuses would fail)."""
     base = github_transport()
@@ -327,7 +327,7 @@ async def test_gitea_discovery() -> None:
                 "permissions": None,
             },
             {
-                # No admin permission: still discovered; hook
+                # No admin permission: still discovered. Hook
                 # registration degrades to a manual-setup hint.
                 "id": 8,
                 "name": "readonly",
@@ -348,7 +348,7 @@ async def test_gitea_discovery() -> None:
 
 
 async def test_gitea_discovery_skips_topics_by_default() -> None:
-    """Topics are only the one-shot legacy import aid; the hourly sync
+    """Topics are only the one-shot legacy import aid. The hourly sync
     must not pay one extra request per repo for them."""
     forge = FakeGitea(
         [
@@ -369,7 +369,7 @@ async def test_gitea_discovery_skips_topics_by_default() -> None:
 
 
 async def test_gitea_discovery_null_topics() -> None:
-    """Gitea returns {"topics": null} for repos without topics; that
+    """Gitea returns {"topics": null} for repos without topics. That
     must not crash discovery."""
     forge = FakeGitea(
         [
@@ -429,7 +429,7 @@ async def test_project_store_sync_and_legacy_import(pool: asyncpg.Pool) -> None:
 
 
 async def test_legacy_import_runs_despite_pull_based_rows(pool: asyncpg.Pool) -> None:
-    """sync_pull_based fills the projects table before discovery; that
+    """sync_pull_based fills the projects table before discovery. That
     must not suppress the one-shot legacy topic import."""
 
     await pool.execute("TRUNCATE projects CASCADE")
@@ -468,7 +468,7 @@ async def test_legacy_import_scopes_topics_per_forge(pool: asyncpg.Pool) -> None
 
 
 async def test_prune_missing_disabled_projects(pool: asyncpg.Pool) -> None:
-    """Disabled repos missing from discovery are pruned; enabled and
+    """Disabled repos missing from discovery are pruned. Enabled and
     pull-based rows survive."""
 
     await pool.execute("TRUNCATE projects CASCADE")
@@ -586,7 +586,7 @@ async def test_gitea_hook_registration(pool: asyncpg.Pool) -> None:
 
 
 async def test_gitlab_heads_carry_target_branch_base(pool: asyncpg.Pool) -> None:
-    """GitLab's MR API has no base sha; reconciliation must still merge
+    """GitLab's MR API has no base sha. Reconciliation must still merge
     MR heads into the target branch."""
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -724,7 +724,7 @@ async def test_reconcile_unbuilt_heads(pool: asyncpg.Pool) -> None:
 
 
 async def test_gitea_watermark_stops_pagination(pool: asyncpg.Pool) -> None:
-    """PRs are fetched newest-update-first; pagination must stop at
+    """PRs are fetched newest-update-first. Pagination must stop at
     the first PR older than the watermark instead of walking the
     whole open-PR backlog (nixpkgs-scale repos)."""
     requested_pages: list[int] = []
@@ -846,7 +846,7 @@ async def test_reconcile_watermark_store(pool: asyncpg.Pool) -> None:
 @pytest.mark.skipif(shutil.which("openssl") is None, reason="openssl required")
 async def test_github_check_run_post(github_client: GitHubAppClient) -> None:
     """End-to-end through the real App client (JWT, installation
-    token, repo lookup); the upsert/PATCH details are covered in
+    token, repo lookup). The upsert/PATCH details are covered in
     test_status."""
     posted: list[dict] = []
     fallback = github_transport()
@@ -1069,7 +1069,7 @@ async def test_register_repo_hook_500_with_403_in_body_raises(
 async def test_gitlab_register_repo_hook_status_classification(
     pool: asyncpg.Pool, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """403 degrades to a manual-setup warning; a 500 whose body
+    """403 degrades to a manual-setup warning. A 500 whose body
     contains "403" propagates as ForgeError."""
     status = 403
 
@@ -1121,7 +1121,7 @@ async def test_gitea_legacy_hook_delete_failure_warns(
     pool: asyncpg.Pool, caplog: pytest.LogCaptureFixture
 ) -> None:
     """A failed legacy-hook DELETE silently leaves the old hook
-    delivering forever; it must at least be logged."""
+    delivering forever. It must at least be logged."""
     forge = FakeGitea(
         hooks=[
             {"id": 1, "config": {"url": "https://ci.example.com/change_hook/gitea"}},

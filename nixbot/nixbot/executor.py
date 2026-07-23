@@ -11,8 +11,8 @@ Runs `nix build` per derivation with:
   once cancellation is requested,
 - process-group kill on cancel/timeout,
 - frame-chunked zstd log capture: one zstd frame per flush so live
-  tailing only decompresses new frames; a single reader fans out to all
-  subscribers; compression runs off the event loop; logs are capped
+  tailing only decompresses new frames. A single reader fans out to all
+  subscribers. Compression runs off the event loop. Logs are capped
   (default 64 MB) keeping head and tail.
 
 The eval gc-roots directory is owned by the orchestrator and held for
@@ -55,12 +55,12 @@ logger = logging.getLogger(__name__)
 STREAM_LIMIT = 16 * 1024 * 1024
 
 # Cap per-subscriber backlog so a stalled SSE client cannot buffer the
-# whole build output in memory; the oldest chunks are dropped.
+# whole build output in memory. The oldest chunks are dropped.
 SUBSCRIBER_QUEUE_MAXSIZE = 256
 STRUCTURED_QUEUE_MAXSIZE = 4096  # per-line deltas, chattier than byte chunks
 RECENT_BUFFER_SIZE = 4096
 
-# Batch log output into zstd frames of at least this size; one frame
+# Batch log output into zstd frames of at least this size. One frame
 # per output line would make "compressed" logs larger than plaintext.
 FRAME_FLUSH_THRESHOLD = 64 * 1024
 
@@ -100,7 +100,7 @@ async def iter_lines(
 
     readline() raises LimitOverrunError on lines over the StreamReader
     limit, killing the pump while nix blocks on the full pipe. Reading
-    chunks never raises; lines beyond max_line are flushed in pieces so
+    chunks never raises. Lines beyond max_line are flushed in pieces so
     one pathological line cannot buffer unboundedly.
     """
     buffer = bytearray()
@@ -235,7 +235,7 @@ class LogWriter:
 
     @staticmethod
     def _offer(queue: asyncio.Queue[bytes | None], item: bytes | None) -> None:
-        """Enqueue without blocking; drop the oldest chunk when the
+        """Enqueue without blocking. Drop the oldest chunk when the
         subscriber has stalled (no backpressure toward the writer)."""
         while True:
             try:
@@ -267,7 +267,7 @@ class LogWriter:
 
         Subscribe first, then snapshot: a chunk written during the
         snapshot's await points would otherwise be in neither. Chunks
-        written during the snapshot land in both; the overlap is
+        written during the snapshot land in both. The overlap is
         dropped from the queue by byte count."""
         queue = self.subscribe()
         start_offset = self.bytes_seen
@@ -278,10 +278,10 @@ class LogWriter:
                 chunk = queue.get_nowait()
             except asyncio.QueueEmpty:
                 # A stalled-queue drop during the snapshot: fewer bytes
-                # queued than written; nothing left to dedupe.
+                # queued than written. Nothing left to dedupe.
                 break
             if chunk is None:
-                break  # close() ran during the snapshot; re-signalled below
+                break  # close() ran during the snapshot, re-signalled below
             overlap -= len(chunk)
         if self.closed:
             # Closed but not yet unregistered: terminate immediately
@@ -319,7 +319,7 @@ class LogWriter:
 
     async def _append_frame(self, data: bytes) -> None:
         # Batch into frames so tiny writes (one per output line) don't
-        # blow up storage with per-frame overhead; compression runs off
+        # blow up storage with per-frame overhead. Compression runs off
         # the event loop.
         self._frame_buffer += data
         if len(self._frame_buffer) >= FRAME_FLUSH_THRESHOLD:
@@ -376,7 +376,7 @@ def build_nix_command(
         "build",
         # internal-json keeps the ANSI colors that the terminal loggers
         # strip from non-tty output and tags every build-log line with
-        # its derivation; render_log_event turns that back into
+        # its derivation. render_log_event turns that back into
         # attributed, colored text.
         "--log-format",
         "internal-json",
@@ -387,7 +387,7 @@ def build_nix_command(
         "--max-silent-time",
         str(settings.max_silent_time),
         # Hosts without flakes enabled in nix.conf (single-user
-        # installs, containers) must still build; the eval command
+        # installs, containers) must still build. The eval command
         # carries the same override.
         "--option",
         "extra-experimental-features",
@@ -425,11 +425,11 @@ _LINE_CHAR_LIMIT = 650
 
 def _limit_line(line: str, limit: int = _LINE_CHAR_LIMIT) -> str:
     """Cap a line at `limit` visible characters, escapes not counted and
-    never severed; a dropped tail's SGR reset is re-appended so color
+    never severed. A dropped tail's SGR reset is re-appended so color
     does not bleed into later lines."""
     visible = 0
     pos = 0
-    # ANSI_TOKEN_RE spans are escapes; the gaps between them are text.
+    # ANSI_TOKEN_RE spans are escapes, the gaps between them are text.
     for start, end in [(m.start(), m.end()) for m in ANSI_TOKEN_RE.finditer(line)] + [
         (len(line), len(line))
     ]:
@@ -447,7 +447,7 @@ def _limit_line(line: str, limit: int = _LINE_CHAR_LIMIT) -> str:
 def failure_excerpt(tail: str, max_lines: int = 8) -> str:
     """The interesting part of a failed build's output: the builder's
     log lines (name>-prefixed from internal-json, deduped against
-    nix's bare-'>' prose re-quote) plus one Reason line; without any,
+    nix's bare-'>' prose re-quote) plus one Reason line. Without any,
     the tail minus nix's boilerplate. Lines are matched ANSI-stripped
     but emitted raw, so colors survive."""
     quoted: dict[str, str] = {}
@@ -482,7 +482,7 @@ def _drv_display_name(drv_path: str) -> str:
 class StructuredCapture:
     """Demux the internal-json stream into a per-derivation container.
 
-    Activity ids map to full drv paths; log lines, phases and stop
+    Activity ids map to full drv paths. Log lines, phases and stop
     timestamps attach to the owning derivation. Unattributed output (nix's
     own evaluation/scheduling/copy messages) collects under a synthetic
     ``setup`` entry.
@@ -518,7 +518,7 @@ class StructuredCapture:
     @staticmethod
     def _put(q: asyncio.Queue[dict | None], item: dict | None) -> None:
         # Drop the oldest delta for a stalled subscriber rather than grow
-        # unbounded; the missing line is a cosmetic gap the finish reload
+        # unbounded. The missing line is a cosmetic gap the finish reload
         # heals. Matches LogWriter's stalled-subscriber policy.
         while True:
             try:
@@ -534,7 +534,7 @@ class StructuredCapture:
             self._put(q, delta)
 
     def subscribe(self) -> asyncio.Queue[dict | None]:
-        """Live deltas for a viewer; a full snapshot comes from state().
+        """Live deltas for a viewer. A full snapshot comes from state().
         Subscribe then snapshot with no await between so no delta is lost
         or duplicated (single event loop, atomic)."""
         q: asyncio.Queue[dict | None] = asyncio.Queue(maxsize=STRUCTURED_QUEUE_MAXSIZE)
@@ -583,7 +583,7 @@ class StructuredCapture:
     def log_line(self, act_id: int, text: str) -> None:
         drv = self._act.get(act_id, self.SETUP)
         if strip_ansi(text).startswith(_PHASE_ECHO):
-            # RES_SET_PHASE already records this; drop stdenv's echo.
+            # RES_SET_PHASE already records this. Drop stdenv's echo.
             return
         self._w.line(drv, text, ts=self._ts())
         self._emit(
@@ -619,7 +619,7 @@ class StructuredCapture:
         self._emit(
             {"t": "line", "idx": 0, "from": self._bump(self.SETUP), "text": text}
         )
-        # A nix error block arrives as one multiline msg event; scrape per
+        # A nix error block arrives as one multiline msg event. Scrape per
         # line so the "Cannot build" and its "Reason:" line pair up.
         for line in strip_ansi(text).splitlines():
             self._scrape_failure(line)
@@ -661,7 +661,7 @@ class StructuredCapture:
             # else the setup bucket keeps its default "built" (succeeded).
             self._w.status(self.SETUP, "failed")
             self._emit({"t": "status", "idx": 0, "status": "failed"})
-        # else: a leaf drv already carries the failure; adding the
+        # else: a leaf drv already carries the failure. Adding the
         # top-level as a phantom "no output" card only duplicates it.
 
     def build_failure(
@@ -931,6 +931,6 @@ def read_log(path: Path) -> bytes:
     """Decompress a frame-chunked zstd log file (one frame per flush)."""
     data = path.read_bytes()
     dctx = zstandard.ZstdDecompressor()
-    # One streaming pass; re-slicing unused_data per frame is quadratic.
+    # One streaming pass. Re-slicing unused_data per frame is quadratic.
     with dctx.stream_reader(io.BytesIO(data), read_across_frames=True) as reader:
         return reader.read()

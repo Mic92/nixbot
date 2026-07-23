@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 
 SESSION_COOKIE = "nixbot_session"
 STATE_COOKIE = "nixbot_oauth_state"
-# Server-generated states are token_urlsafe; the callback echoes the
+# Server-generated states are token_urlsafe. The callback echoes the
 # state into a cookie name, so reject anything else outright.
 _STATE_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")
 

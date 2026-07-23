@@ -1,7 +1,7 @@
 """Live behavior: SSE-driven attribute refresh and log streaming.
 
 These exercise the JavaScript in base.html/log.html against a real
-browser; the httpx web tests can only assert the markers exist.
+browser. The httpx web tests can only assert the markers exist.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ def test_attribute_table_refreshes_while_building(
     page: Page, server: TestServer
 ) -> None:
     page.goto("/repos/github/acme/widget/builds/3")
-    # Succeeded attributes are collapsed; expand to lazy-load the rows.
+    # Succeeded attributes are collapsed. Expand to lazy-load the rows.
     page.get_by_text("succeeded", exact=False).first.click()
     row = page.locator('tr[data-attr="aarch64-linux.other"]')
     row.locator(".status-icon.succeeded").wait_for()
@@ -44,7 +44,7 @@ def test_attribute_table_refreshes_while_building(
         )
 
     server.run(fail_attribute())
-    # The status event refreshes the page; the failed attribute moves
+    # The status event refreshes the page. The failed attribute moves
     # into the inline failure table.
     row.locator(".status-icon.failed").wait_for(timeout=15_000)
     assert "flipped by e2e test" in page.content()
@@ -98,7 +98,7 @@ def test_log_page_streams_live_output(page: Page, server: TestServer) -> None:
         server.run(emit("second line arrives later"))
         lines.get_by_text("second line arrives later").wait_for(timeout=15_000)
 
-        # close() ends the SSE stream; streamed content stays visible.
+        # close() ends the SSE stream. Streamed content stays visible.
         server.run(finish())
         card = page.locator(".log-card", has_text="hello-2.12")
         assert "hello from the build" in card.inner_text()

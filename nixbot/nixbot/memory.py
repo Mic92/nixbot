@@ -76,7 +76,7 @@ def calculate_eval_workers(
     if memory_info is None:
         memory_info = get_memory_info()
 
-    # ZFS ARC can shrink under pressure; treat 75% of it as reclaimable.
+    # ZFS ARC can shrink under pressure. Treat 75% of it as reclaimable.
     effective_available_memory = memory_info.available_memory_mib
     if memory_info.zfs_arc_used > 0:
         reclaimable_arc = int(memory_info.zfs_arc_used * 0.75)

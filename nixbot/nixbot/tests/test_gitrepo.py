@@ -116,7 +116,7 @@ async def test_merge_conflict_raises(manager: RepoManager, upstream: Path) -> No
 async def test_reclone_on_corruption(manager: RepoManager, upstream: Path) -> None:
     await fetch(manager, upstream)
     clone = manager.clone_path(KEY)
-    # Destroy the object store; next fetch must transparently re-clone.
+    # Destroy the object store. Next fetch must transparently re-clone.
     shutil.rmtree(clone / "objects")
     await fetch(manager, upstream)
     sha = git(upstream, "rev-parse", "HEAD")
@@ -141,7 +141,7 @@ async def test_transient_fetch_error_keeps_clone(
 
 
 async def test_cleanup_resolves_symlinked_paths(tmp_path: Path, upstream: Path) -> None:
-    # git reports symlink-resolved worktree paths; cleanup must compare
+    # git reports symlink-resolved worktree paths. Cleanup must compare
     # resolved paths or it deletes live worktrees.
     real_state = tmp_path / "real-state"
     real_state.mkdir()
@@ -157,7 +157,7 @@ async def test_cleanup_resolves_symlinked_paths(tmp_path: Path, upstream: Path) 
 
 @pytest.fixture
 def submodule(upstream: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Add a file:// submodule to upstream; allows the file protocol
+    """Add a file:// submodule to upstream. Allows the file protocol
     (blocked by default since CVE-2022-39253) via environment-based
     git config passed through by run_git."""
     monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
@@ -264,7 +264,7 @@ async def test_cleanup_removes_stale_orphan_files(
     manager: RepoManager, upstream: Path
 ) -> None:
     """Crash-leaked side-files next to worktrees (e.g. effects secrets)
-    must be swept once old enough; fresh files stay."""
+    must be swept once old enough. Fresh files stay."""
     await fetch(manager, upstream)
     stale = manager.worktrees_dir / "stale-secret"
     stale.write_text("s3cret")

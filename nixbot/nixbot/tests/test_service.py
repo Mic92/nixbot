@@ -236,7 +236,7 @@ async def test_restart_gitlab_mr_build_fetches_mr_refs(
             forge_repo_id=f"svc-{time.monotonic_ns()}",
             url=f"file://{repo}",
         )
-        # file:// forces the full transfer protocol; clone before
+        # file:// forces the full transfer protocol. Clone before
         # the MR ref exists so only the fetch refspec can bring it
         # in (see test_orchestrator.make_gitlab_mr_env).
         await service.orchestrator.repos.fetch(
@@ -274,7 +274,7 @@ async def test_restart_eval_failed_build_reevaluates(
     service: CIService, git_repo: tuple[Path, str]
 ) -> None:
     """A build that failed before eval produced attributes has nothing
-    to resume; restarting it must re-evaluate instead of aggregating an
+    to resume. Restarting it must re-evaluate instead of aggregating an
     empty attribute set to 'succeeded'."""
     repo, sha = git_repo
 
@@ -375,7 +375,7 @@ async def test_restart_unknown_attribute_is_a_noop(
 async def test_restart_failed_eval_attribute_reevaluates(
     service: CIService, git_repo: tuple[Path, str]
 ) -> None:
-    """failed_eval attributes have no drv_path; resetting them to
+    """failed_eval attributes have no drv_path. Resetting them to
     pending must trigger a re-eval, not wedge the build in 'building'."""
     repo, sha = git_repo
 
@@ -491,7 +491,7 @@ async def test_restart_while_unwinding_waits_then_runs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Restart clicked while the old run is still unwinding (e.g.
-    right after a cancel) resets state immediately; the rerun must
+    right after a cancel) resets state immediately. The rerun must
     requeue until the slot clears, not be dropped silently."""
     repo, sha = git_repo
     monkeypatch.setattr("nixbot.restart_dispatch.UNWIND_RETRY_SECONDS", 0.0)
@@ -524,7 +524,7 @@ async def test_restart_while_unwinding_waits_then_runs(
     # Simulate the cancelled run still unwinding.
     service.orchestrator.cancel_events[build_id] = asyncio.Event()
     await service.restart_build(build_id)
-    # Reset already applied; the UI sees pending without a worker.
+    # Reset already applied. The UI sees pending without a worker.
     assert (
         await pool.fetchval("SELECT status FROM builds WHERE id = $1", build_id)
         == "pending"
@@ -541,7 +541,7 @@ async def test_restart_while_unwinding_waits_then_runs(
     )
     assert pending == 1  # the intent survived
 
-    # Old run finished; the queued rerun now goes through.
+    # Old run finished. The queued rerun now goes through.
     del service.orchestrator.cancel_events[build_id]
     await service.drain_work()
     await asyncio.gather(*service._tasks)  # noqa: SLF001
@@ -615,7 +615,7 @@ async def test_check_rerequested_dispatch(service: CIService) -> None:
     await service.submit(
         CheckRerequested(**base, build_id=build_id, name="nixbot/nix-build")
     )
-    # check_suite: no build_id, no name; resolved via LatestBuildForSha.
+    # check_suite: no build_id, no name. Resolved via LatestBuildForSha.
     await service.submit(CheckRerequested(**base))
     # external_id from another project's app must not be honoured.
     await service.submit(CheckRerequested(**base, build_id=99999999))
@@ -659,7 +659,7 @@ async def test_cancel_not_running_settles_attribute_rows(service: CIService) -> 
 async def test_cancel_attribute_not_running_reaggregates_build(
     service: CIService,
 ) -> None:
-    """Direct attribute cancel must re-aggregate the build; otherwise
+    """Direct attribute cancel must re-aggregate the build. Otherwise
     the build stays 'building' forever with all rows terminal."""
 
     pool = service.pool
@@ -755,7 +755,7 @@ class StubGitHub:
 async def test_topic_does_not_hard_filter_discovery(
     make_service: ServiceFactory, tmp_path: Path
 ) -> None:
-    """The topic is a one-shot legacy import aid; repos without it must
+    """The topic is a one-shot legacy import aid. Repos without it must
     still be discovered (disabled) so admins can enable them in the UI."""
 
     secret = tmp_path / "gh.pem"
@@ -818,7 +818,7 @@ async def test_startup_reevaluates_interrupted_eval(
 async def test_rerun_of_interrupted_eval_reevaluates(
     service: CIService, git_repo: tuple[Path, str]
 ) -> None:
-    """A crash mid-evaluation leaves a partial attribute set; resuming
+    """A crash mid-evaluation leaves a partial attribute set. Resuming
     only those rows would report success for a build that never
     finished evaluating. It must re-evaluate."""
     repo, sha = git_repo
@@ -845,7 +845,7 @@ async def test_rerun_resumes_building_rows_and_keeps_finished(
     service: CIService, git_repo: tuple[Path, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A build that crashed with an attribute in 'building' resumes that
-    attribute; already-finished rows are kept, not re-evaluated away."""
+    attribute. Already-finished rows are kept, not re-evaluated away."""
     repo, sha = git_repo
 
     async def all_valid(paths: list[str]) -> set[str]:

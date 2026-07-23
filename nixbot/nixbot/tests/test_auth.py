@@ -147,7 +147,7 @@ def test_signing_key_file_permissions(tmp_path: Path) -> None:
     load_signing_keys(tmp_path)
     assert (tmp_path / "session-key").stat().st_mode & 0o777 == 0o600
     rotate_signing_key(tmp_path)
-    # The previous key still verifies sessions; must not be world-readable.
+    # The previous key still verifies sessions. Must not be world-readable.
     assert (tmp_path / "session-key.previous").stat().st_mode & 0o777 == 0o600
 
 
@@ -232,7 +232,7 @@ async def test_oauth_login_flow() -> None:
         assert session_user is not None
         assert session_user.qualified == ALICE.qualified
         assert session_user.avatar_url == "https://avatars.test/alice"
-        # The forge token lives server-side; the cookie only carries
+        # The forge token lives server-side. The cookie only carries
         # an opaque session id.
         payload = signer.verify(session)
         assert payload is not None
@@ -272,7 +272,7 @@ async def test_oauth_login_flow() -> None:
 
 async def test_forge_token_lifetime_capped_by_expires_in() -> None:
     """Gitea access tokens expire after ~1h while the session lives
-    30 days; the stored forge token must expire with the token, not
+    30 days. The stored forge token must expire with the token, not
     the session, so visibility falls back to public instead of
     re-firing failing forge calls."""
     provider = github_oauth("cid", "csecret")
@@ -313,7 +313,7 @@ async def test_forge_token_lifetime_capped_by_expires_in() -> None:
 
 
 async def test_callback_stores_refresh_token() -> None:
-    """Gitea returns a refresh token; it must be persisted with the
+    """Gitea returns a refresh token. It must be persisted with the
     provider name so the ~1h access token can be renewed later."""
     provider = gitea_oauth("https://gitea.test", "cid", "cs")
     vault = DictVault()
@@ -371,7 +371,7 @@ class ExpiringVault(DictVault):
 
 async def test_refresher_renews_expired_access_token() -> None:
     """Regression for #81: the Gitea access token dies after ~1h while
-    the session cookie lives 30 days; the refresher must renew it via
+    the session cookie lives 30 days. The refresher must renew it via
     the refresh token instead of degrading to public visibility."""
     provider = gitea_oauth("https://gitea.test", "cid", "cs")
     calls: list[dict[str, str]] = []
@@ -470,7 +470,7 @@ async def test_concurrent_logins_do_not_clobber_oauth_state() -> None:
 
 async def test_oauth_callback_handles_token_exchange_errors() -> None:
     """GitHub returns expired/reused-code errors as HTTP 200 with an
-    error body; the callback must answer 403, not crash with a 500."""
+    error body. The callback must answer 403, not crash with a 500."""
     provider = github_oauth("cid", "csecret")
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -540,7 +540,7 @@ def test_github_oauth_scope_and_enterprise_urls() -> None:
     default = github_oauth("cid", "cs")
     assert default.scope.split() == ["read:user"]
     # Private-repo visibility needs "repo" (GitHub has no read-only
-    # repo scope); explicit opt-in.
+    # repo scope). Explicit opt-in.
     private = github_oauth("cid", "cs", private_repo_scope=True)
     assert private.scope.split() == ["read:user", "repo"]
     assert default.authorize_url == "https://github.com/login/oauth/authorize"
@@ -592,7 +592,7 @@ def test_gitea_oauth_urls() -> None:
 
 async def test_oidc_exchange_uses_basic_auth() -> None:
     """OIDC servers only have to support client_secret_basic (RFC
-    6749 section 2.3.1); authelia rejects body credentials with 401."""
+    6749 section 2.3.1). Authelia rejects body credentials with 401."""
     seen: dict[str, str] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -630,7 +630,7 @@ async def test_oidc_exchange_uses_basic_auth() -> None:
 
 async def test_oidc_provider_honors_advertised_auth_methods() -> None:
     """A provider that only offers client_secret_post (e.g. older
-    PocketID) gets body credentials; everyone else gets basic."""
+    PocketID) gets body credentials. Everyone else gets basic."""
 
     def discovery(methods: list[str] | None) -> httpx.MockTransport:
         doc: dict[str, object] = {
@@ -694,7 +694,7 @@ def test_can_view_private_per_repo_precedence() -> None:
 
 
 def test_relevant_groups_keeps_only_rule_groups() -> None:
-    """LDAP users can be in dozens of groups; a signed cookie past
+    """LDAP users can be in dozens of groups. A signed cookie past
     ~4KB hits header limits, so the session only carries groups that
     a viewer rule can actually match."""
     viewers = {

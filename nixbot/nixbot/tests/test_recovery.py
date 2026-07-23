@@ -114,7 +114,7 @@ async def test_retention_cleanup(pool: asyncpg.Pool, tmp_path: Path) -> None:
 
 
 class _FakePool:
-    """Returns the given build ids; optionally runs a callback first."""
+    """Returns the given build ids. Optionally runs a callback first."""
 
     def __init__(
         self, ids: set[int], on_fetch: Callable[[], None] | None = None
@@ -181,7 +181,7 @@ async def test_retention_skips_restarted_builds(
     pool: asyncpg.Pool, tmp_path: Path
 ) -> None:
     # A restarted build briefly keeps its old finished_at while its
-    # status is 'building' again; the hourly sweep must not delete it
+    # status is 'building' again. The hourly sweep must not delete it
     # mid-rerun.
     build_id = await make_build(pool, "restarted-old")
     await pool.execute(

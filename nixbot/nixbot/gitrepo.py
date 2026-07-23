@@ -1,6 +1,6 @@
 """Git clone and worktree management.
 
-One central persistent bare clone per project; each build gets its own
+One central persistent bare clone per project. Each build gets its own
 git worktree from that clone so concurrent builds of the same project
 never re-fetch. Worktrees are removed after the build. Clones are a
 cache: on corruption they are deleted and re-cloned. A per-project lock
@@ -8,7 +8,7 @@ serializes fetches; `git worktree prune` plus an orphan sweep runs at
 startup and periodically, as does `git gc`.
 
 PR builds merge the PR head into the base branch locally in the
-worktree; a conflict is a failed build. Build identity is the
+worktree. A conflict is a failed build. Build identity is the
 post-merge tree hash (`HEAD^{tree}`).
 
 Fetch credentials come from a provider interface. The static/netrc
@@ -34,7 +34,7 @@ from .environ import passthrough_env
 logger = logging.getLogger(__name__)
 
 # PR/MR refs are fetched per PR and never covered by --prune of later
-# fetches; without an age-based sweep they accumulate forever.
+# fetches. Without an age-based sweep they accumulate forever.
 PR_REF_MAX_AGE = 90 * 86400
 # Crash-leaked plain files next to worktrees (e.g. effects side-files)
 # are swept once clearly older than any running build.
@@ -70,7 +70,7 @@ class FetchCredentials:
     """Credentials for fetching a repository.
 
     `netrc_file` is bind-mounted/read for the duration of one fetch or
-    eval only; it must be scoped to the repository being fetched.
+    eval only. It must be scoped to the repository being fetched.
     SSH key/known-hosts files cover per-repo SSH fetch (pull-based
     repos and the gitea.sshPrivateKeyFile option).
     """
@@ -141,7 +141,7 @@ async def run_git(
         if ssh_command is not None:
             env["GIT_SSH_COMMAND"] = ssh_command
     if credentials is not None and credentials.netrc_file is not None:
-        # git's libcurl reads $HOME/.netrc (CURL_NETRC_OPTIONAL); point
+        # git's libcurl reads $HOME/.netrc (CURL_NETRC_OPTIONAL). Point
         # HOME at a throwaway directory containing only the scoped netrc.
         home = Path(tempfile.mkdtemp(prefix="git-netrc-"))
         (home / ".netrc").symlink_to(credentials.netrc_file)
@@ -198,7 +198,7 @@ class Worktree:
     ) -> None:
         """Merge `head_sha` into the currently checked-out base branch.
 
-        Raises MergeConflictError on conflict; the caller fails the
+        Raises MergeConflictError on conflict. The caller fails the
         build and reports the status on the head SHA.
         """
         try:
@@ -219,7 +219,7 @@ class Worktree:
             )
         except GitError as e:
             # Only a genuine content conflict (unmerged index entries)
-            # is a permanent MergeConflictError; everything else
+            # is a permanent MergeConflictError. Everything else
             # (index.lock contention, missing objects, disk full) must
             # stay a GitError so callers treat it as transient/infra.
             conflicted = False
@@ -249,7 +249,7 @@ class RepoManager:
         self._active_worktrees: set[Path] = set()
 
     def clone_path(self, project_key: str) -> Path:
-        # project_key like "github/owner/repo"; one directory per project.
+        # project_key like "github/owner/repo". One directory per project.
         return self.clones_dir / project_key / "clone.git"
 
     def _lock(self, project_key: str) -> asyncio.Lock:
@@ -371,7 +371,7 @@ class RepoManager:
                 await run_git(["worktree", "prune"], cwd=worktree.clone_path)
 
     async def cleanup(self) -> None:
-        """Prune stale worktrees/PR refs and sweep orphans; run at
+        """Prune stale worktrees/PR refs and sweep orphans. Run at
         startup and periodically."""
         for clone in self.clones_dir.rglob("clone.git"):
             await self._prune_stale_pr_refs(clone)
@@ -465,7 +465,7 @@ class RepoManager:
                     credentials=submodule_credentials,
                 )
         except BaseException:
-            # Callers only remove worktrees they received; a failed
+            # Callers only remove worktrees they received. A failed
             # merge or submodule checkout (or cancellation) must not
             # leak a registered worktree.
             await self.remove_worktree(worktree)

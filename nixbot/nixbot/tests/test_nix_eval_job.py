@@ -29,5 +29,5 @@ def test_impure_job_with_null_out_parses() -> None:
 
     assert isinstance(job, NixEvalJobSuccess)
     assert job.outputs == {"out": None}
-    # Downstream code does `job.outputs["out"] or None`; ensure that still works.
+    # Downstream code does `job.outputs["out"] or None`. Ensure that still works.
     assert (job.outputs["out"] or None) is None

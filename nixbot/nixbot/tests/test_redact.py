@@ -7,7 +7,7 @@ from nixbot.redact import Redactor, secret_literals
 
 def test_secret_literals_extracts_json_values_over_threshold() -> None:
     literals = secret_literals('{"token": "supersecret", "n": 1, "x": "ab"}')
-    # Full payload plus the long leaf value; short "ab" and non-strings
+    # Full payload plus the long leaf value. Short "ab" and non-strings
     # are dropped.
     assert b"supersecret" in literals
     assert b"ab" not in literals

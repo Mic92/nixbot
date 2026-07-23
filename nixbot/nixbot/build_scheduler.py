@@ -13,10 +13,10 @@ Port of the behavioral core of nixbot/build_trigger.py
   previously failed status); `cached` jobs are scheduled so nix
   substitutes them,
 - per-attribute failed-eval records,
-- opt-in failed-build cache skip (storage interface; wired in 2.3).
+- opt-in failed-build cache skip (storage interface. Wired in 2.3).
 
 Build execution and the global concurrency cap live behind the
-BuildExecutor protocol; status reporting is layered on top
+BuildExecutor protocol. Status reporting is layered on top
 by forge integration.
 """
 
@@ -86,7 +86,7 @@ class BuildOutcome(StrEnum):
 
 
 class BuildExecutor(Protocol):
-    """Builds one attribute; implements the global concurrency cap."""
+    """Builds one attribute. Implements the global concurrency cap."""
 
     async def build(self, job: NixEvalJobSuccess) -> BuildOutcome: ...
 
@@ -250,7 +250,7 @@ class _ResultEmitter:
 
 
 def _fail_unresolvable(state: _State) -> None:
-    """Dependency cycle or external dep: should not happen; fail the
+    """Dependency cycle or external dep: should not happen. Fail the
     remainder instead of spinning."""
     for job in state.pending:
         state.result.results.append(
@@ -465,7 +465,7 @@ class JobScheduler:
                 await self._finish_job(state, state.running.pop(task), task.result())
                 await flush()
         elif done_get is not None:
-            done_get.cancel()  # a batch arrived first; no build consumed
+            done_get.cancel()  # a batch arrived first. No build consumed
         return get_task
 
     def _on_queue_item(
@@ -474,7 +474,7 @@ class JobScheduler:
         queue: asyncio.Queue[list[NixEvalJob] | None],
         batch: list[NixEvalJob] | None,
     ) -> asyncio.Task[list[NixEvalJob] | None] | None:
-        """Ingest one queue item; returns the next reader task, or None
+        """Ingest one queue item. Returns the next reader task, or None
         on the end-of-input sentinel."""
         if batch is None:
             return None
@@ -508,7 +508,7 @@ class JobScheduler:
                 blocking = deps & state.failed_drvs
                 if blocking:
                     state.failed_drvs.add(job.drv_path)
-                    # A genuine failure among the deps wins; only purely
+                    # A genuine failure among the deps wins. Only purely
                     # cancelled deps propagate cancellation.
                     if blocking <= state.cancelled_drvs:
                         state.cancelled_drvs.add(job.drv_path)
@@ -521,7 +521,7 @@ class JobScheduler:
                     remaining.append(job)
             candidates = remaining
         state.pending = candidates
-        # Only pending jobs get closures; running builds (which can be in
+        # Only pending jobs get closures. Running builds (which can be in
         # the thousands) merely stay in the intersection set. Keeps each
         # batch O(pending), not O(pending + running).
         running_drvs = frozenset(j.drv_path for j in state.running.values())

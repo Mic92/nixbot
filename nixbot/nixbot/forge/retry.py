@@ -28,7 +28,7 @@ def retry_after_seconds(response: httpx.Response) -> float | None:
     if value is not None:
         try:
             seconds = float(value)
-            # float() accepts nan/inf; nan would poison every later
+            # float() accepts nan/inf. Nan would poison every later
             # min/max comparison down to asyncio.sleep.
             if math.isfinite(seconds):
                 return max(0.0, seconds)
@@ -72,7 +72,7 @@ class RetryTransport(httpx.AsyncBaseTransport):
                     raise
             else:
                 # A Retry-After hint (on 429 or 503) always wins over the
-                # backoff schedule; otherwise retry only transient 5xx.
+                # backoff schedule. Otherwise retry only transient 5xx.
                 hint = retry_after_seconds(response)
                 delay = max(backoff, hint or 0.0)
                 retryable = (

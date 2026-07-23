@@ -105,13 +105,13 @@ async def run_scheduled(
     store = ScheduledEffectsStore(s.pool)
     project = await s.repo_store.by_id(due.project_id)
     if project is None or not project.enabled:
-        # Manual runs pass a pre-created row; close it instead of
+        # Manual runs pass a pre-created row. Close it instead of
         # leaving it stuck running.
         if run_id is not None:
             await store.finish_run(run_id, success=False, error="project disabled")
         return
     info = repo_info(project)
-    # Manual runs pre-create the row; the sweep loop does not.
+    # Manual runs pre-create the row. The sweep loop does not.
     if run_id is None:
         run_id = await store.start_run(due)
     try:

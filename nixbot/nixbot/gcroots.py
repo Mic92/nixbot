@@ -29,7 +29,7 @@ def safe_attr_filename(attr: str) -> str:
     """Encode a flake attribute name as a single safe path component.
 
     Attribute names are repository-controlled and may contain `/` and
-    `..` via quoted Nix attributes; used verbatim in paths they allow
+    `..` via quoted Nix attributes. Used verbatim in paths they allow
     traversal outside the intended directory. Typical attribute names
     (letters, digits, `.`, `-`, `_`) are preserved unchanged.
     """

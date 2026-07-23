@@ -121,7 +121,7 @@ class LogContainerWriter:
         return [(d.name, d.lines) for d in self._drvs.values() if d.status == "failed"]
 
     def state(self) -> list[dict]:
-        """Current per-derivation state for a live snapshot burst; mirrors
+        """Current per-derivation state for a live snapshot burst. Mirrors
         the finalized TOC plus the lines seen so far."""
         return [
             {
@@ -190,7 +190,7 @@ def is_container(blob: bytes) -> bool:
 
 
 class LogContainerReader:
-    """Random-access reader; decompresses one group frame (cached) per drv."""
+    """Random-access reader. Decompresses one group frame (cached) per drv."""
 
     def __init__(self, blob: bytes) -> None:
         (tlen,) = struct.unpack("<I", blob[-8:-4])
@@ -235,7 +235,7 @@ class LogContainerReader:
 
     def search(self, query: str, per_drv_cap: int = 100) -> list[dict]:
         """Case-insensitive scan, grouped by drv. Fast-rejects frames
-        lacking the term; attributes matches by byte bisect. No index."""
+        lacking the term. Attributes matches by byte bisect. No index."""
         qb = query.lower().encode()
         toc = self.toc
         groups: dict[int, list[tuple[int, int]]] = {}

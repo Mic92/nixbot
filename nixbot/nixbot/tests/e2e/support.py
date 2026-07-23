@@ -51,7 +51,7 @@ def _seed_container(*, failed: bool) -> bytes:
 
 
 # A realistic multi-line nix eval trace (with ANSI colors) for the
-# failed_eval attribute; exercises the viewer/raw eval-error fallback.
+# failed_eval attribute. Exercises the viewer/raw eval-error fallback.
 _EVAL_ERROR = """\
 \x1b[31;1merror:\x1b[0m attribute 'x86_64-linux.evalfail' failed to evaluate
 

@@ -36,7 +36,7 @@ def has_skip_ci_marker(commit_message: str) -> bool:
 
 
 def branch_key(branch: str, pr_number: int | None = None) -> str:
-    """Context key for supersede tracking; one in-flight build per key.
+    """Context key for supersede tracking. One in-flight build per key.
 
     Ports branch_key_for_pr: PRs collapse to one key regardless of
     merge/head ref form.
@@ -88,12 +88,12 @@ class CancellationManager:
 
         `incoming_is_ancestor_of_running` should be the result of a
         `git merge-base --is-ancestor <incoming> <running>` check by the
-        caller; when true the event is out-of-order and ignored.
+        caller. When true the event is out-of-order and ignored.
         """
         build = self._builds.get(build_id)
         if build is not None:
             # Re-registration (e.g. crash recovery) comes with a fresh
-            # cancel event; keeping the old one would make the build
+            # cancel event. Keeping the old one would make the build
             # uncancellable via supersede.
             build.cancel_event = cancel_event
         context = (project_id, context_key)

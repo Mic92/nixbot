@@ -114,20 +114,20 @@ class Orchestrator:
     eval_runner: EvalRunnerLike
     executor: AttributeExecutor
     reporter: StatusReporter = field(default_factory=NullStatusReporter)
-    # Project id -> cache; scoped so one project's failures cannot
+    # Project id -> cache. Scoped so one project's failures cannot
     # affect another's builds.
     failed_build_cache: Callable[[int], FailedBuildCache] | None = None
     # build id -> cancel event, set by the cancellation manager.
     cancel_events: dict[int, asyncio.Event] = field(default_factory=dict)
     # (build id, attr) -> cancel event for a single queued/running
-    # attribute; registered for the lifetime of the executor job.
+    # attribute. Registered for the lifetime of the executor job.
     attr_cancel_events: dict[tuple[int, str], asyncio.Event] = field(
         default_factory=dict
     )
-    # Injectable for tests; defaults to the real implementations.
+    # Injectable for tests. Defaults to the real implementations.
     register_gcroot: GcrootRegistrar = gcroots.register_gcroot
     write_output_path: OutputWriter = outputs.write_output_path
-    # Store-path validity probe for eval reuse; injectable for tests.
+    # Store-path validity probe for eval reuse. Injectable for tests.
     check_store_paths: Callable[[list[str]], Awaitable[set[str]]] = (
         recovery.check_store_paths
     )
@@ -145,7 +145,7 @@ class Orchestrator:
     def reset_build_logs(self, build_id: int, attr: str | None) -> None:
         """Drop the previous run's log files when a build is reset to
         pending. A full restart (attr None) also re-runs effects, so it
-        clears the whole build log directory; a single-attribute restart
+        clears the whole build log directory. A single-attribute restart
         removes only that attribute's log."""
         if attr is None:
             shutil.rmtree(self._log_dir(build_id), ignore_errors=True)
@@ -323,13 +323,13 @@ class Orchestrator:
         worktree_path: Path,
         credentials: FetchCredentials | None = None,
     ) -> None:
-        """Evaluate and build; every attribute completion is one
+        """Evaluate and build. Every attribute completion is one
         transactional DB write, then the result is re-aggregated."""
         await build_run.run_build(self, event, build, worktree_path, credentials)
 
     async def refresh_schedules(self, event: ChangeEvent) -> None:
         """Queue `onSchedule` re-discovery after a successful
-        default-branch build; the service's scheduled-effects loop only
+        default-branch build. The service's scheduled-effects loop only
         sweeps what the executor stores."""
         if event.pr_number is not None or event.branch != event.repo.default_branch:
             return
@@ -347,7 +347,7 @@ class Orchestrator:
         credentials: FetchCredentials | None,
     ) -> AbstractAsyncContextManager[tuple[ChangeEvent, Path]]:
         """Event reconstruction plus a fresh worktree at the recorded
-        commit; shared by the rerun paths."""
+        commit. Shared by the rerun paths."""
         return rerun_exec.rerun_worktree(self, info, build, prefix, credentials)
 
     async def rerun_pending_attributes(
@@ -404,7 +404,7 @@ class Orchestrator:
 
     @asynccontextmanager
     async def open_log(self, build_id: int, key: str) -> AsyncIterator[LogWriter]:
-        """LogWriter registered for live streaming; closed and
+        """LogWriter registered for live streaming. Closed and
         unregistered on exit. Shared by attribute and effect runs."""
         path = log_path_for_key(self.config.state_dir, build_id, key)
         writer = LogWriter(path=path, size_limit=self.config.log_size_limit)
@@ -423,7 +423,7 @@ class Orchestrator:
         eval_success: bool | None = None,
     ) -> None:
         """Final status fan-out for second contexts attached to this
-        build; eval_success is None when no eval result exists."""
+        build. eval_success is None when no eval result exists."""
         await build_reuse.finish_linked(self, build, result, eval_success=eval_success)
 
     async def post_process_skipped(

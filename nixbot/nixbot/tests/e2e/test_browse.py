@@ -26,7 +26,7 @@ def test_navigate_sidebar_to_failed_build(page: Page) -> None:
 
     page.locator('a[href$="/builds/2"]').first.click()
     page.wait_for_url("**/builds/2")
-    # Content semantics live in the httpx test_build_page; expanding
+    # Content semantics live in the httpx test_build_page. Expanding
     # the collapsed succeeded group lazy-loads its rows.
     assert "x86_64-linux.ok" not in page.content()
     page.get_by_text("2 succeeded").click()
@@ -43,7 +43,7 @@ def test_build_prev_next_navigation(page: Page) -> None:
 
 def test_structured_log_viewer(page: Page) -> None:
     page.goto("/repos/github/acme/widget/builds/2/logs/x86_64-linux.bad")
-    # Failing derivation card is open with inline phase dividers; log rows
+    # Failing derivation card is open with inline phase dividers. Log rows
     # load lazily from /drv/{idx}.
     card = page.locator('.log-card[data-idx="0"]')
     card.get_by_text("hello-2.12").wait_for()
@@ -65,7 +65,7 @@ def test_structured_log_viewer(page: Page) -> None:
     assert down > 0
     seps.nth(1).locator(".phase-prev").click()
     assert lines.evaluate("el => el.scrollTop") < down
-    # Past the last phase falls through to the bottom; before the first
+    # Past the last phase falls through to the bottom. Before the first
     # falls through to the top.
     lines.evaluate("el => el.scrollTop = 0")
     seps.nth(1).locator(".phase-next").click()
@@ -199,7 +199,7 @@ def test_attribute_search_filters_groups(page: Page) -> None:
 
 
 def test_groups_keep_identity_when_one_appears(page: Page, server: TestServer) -> None:
-    """A new group shifts the list; positional morphing used to merge
+    """A new group shifts the list. Positional morphing used to merge
     one group's rows into another."""
 
     async def seed() -> None:
