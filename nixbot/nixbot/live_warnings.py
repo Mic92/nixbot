@@ -23,9 +23,7 @@ MAX_GROUPS = 50
 # Warning text is repo-controlled. Keep single messages bounded.
 MAX_MESSAGE_LEN = 500
 
-_IGNORED_WARNINGS = (
-    "because it is a restricted setting and you are not a trusted user",
-)
+_IGNORED_WARNINGS = ("you are not a trusted user",)
 
 
 def normalize_warning(line: str) -> tuple[str, str]:
