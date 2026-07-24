@@ -195,6 +195,23 @@ class NixbotClient:
                 raise ApiError(response.status_code, response.text)
             yield from _iter_sse(response)
 
+    def events(self, *, build: int | None = None) -> Iterator[dict]:
+        """Change hints from /api/events, filtered to one build (by DB id).
+        Keepalive comments are yielded as {} so callers can refresh
+        periodically. Only returns when the server closes the stream."""
+        params = {"build": build} if build is not None else {}
+        with self.http.stream(
+            "GET", "/api/events", params=params, timeout=None
+        ) as response:
+            if response.is_error:
+                response.read()
+                raise ApiError(response.status_code, response.text)
+            for line in response.iter_lines():
+                if line.startswith("data:"):
+                    yield json.loads(line.removeprefix("data:"))
+                elif line.startswith(":"):
+                    yield {}
+
 
 def _iter_sse(response: httpx.Response) -> Iterator[tuple[str, Any]]:
     """Parse an SSE body into (event, decoded JSON data) pairs."""

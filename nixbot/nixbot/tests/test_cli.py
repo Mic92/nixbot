@@ -303,3 +303,58 @@ def test_log_follow_renders_live_stream(capsys: pytest.CaptureFixture[str]) -> N
     assert "── hello-1.0: buildPhase ──" in out
     assert "CC main.o" in out
     assert "hello-1.0: ✗ failed" in out
+
+
+def test_build_watch_reports_progress_and_failures(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """watch prints one verdict per finished attribute as events arrive
+    and ends with the failure summary once the build is terminal."""
+    build = {"id": 9, "number": 5, "status": "building"}
+    attrs = [
+        {"attr": "good", "status": "succeeded", "cached": True},
+        {"attr": "bad", "status": "building", "cached": False},
+    ]
+    hint = 'data: {"build_id":9,"attr":"bad","status":"failed"}\n\n'
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/builds/5"):
+            return httpx.Response(200, json={"build": build, "attributes": attrs})
+        if path == "/api/events":
+            assert request.url.params["build"] == "9"
+            # After the hint the build finishes with one failed attribute.
+            attrs[1] = {"attr": "bad", "status": "failed", "cached": False}
+            build["status"] = "failed"
+            return httpx.Response(
+                200, content=hint, headers={"content-type": "text/event-stream"}
+            )
+        if path.endswith("/failures"):
+            return httpx.Response(
+                200,
+                json={
+                    "status": "failed",
+                    "error": None,
+                    "failures": [
+                        {
+                            "attr": "bad",
+                            "status": "failed",
+                            "error": "builder failed",
+                            "log_tail": "error: boom",
+                        }
+                    ],
+                },
+            )
+        raise AssertionError(path)
+
+    client = NixbotClient(
+        http=httpx.Client(
+            base_url="http://test", transport=httpx.MockTransport(handler)
+        )
+    )
+    assert cli.watch_build(client, REPO, 5) == 1
+    out = capsys.readouterr().out
+    assert "✓ succeeded good (cached)" in out
+    assert "✗ failed bad" in out
+    assert "build #5: 2 finished, 1 failed" in out
+    assert "error: boom" in out

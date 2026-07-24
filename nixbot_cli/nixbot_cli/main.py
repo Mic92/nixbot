@@ -13,7 +13,7 @@ from .api import ApiError, NixbotClient, RepoRef
 from .config import Settings, config_path
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Iterator, Sequence
 
 EXIT_OK = 0
 EXIT_BUILD_FAILED = 1
@@ -204,6 +204,52 @@ def cmd_build_view(client: NixbotClient, args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+RUNNING_STATUSES = {"pending", "evaluating", "building"}
+
+
+def cmd_build_watch(client: NixbotClient, args: argparse.Namespace) -> int:
+    repo = resolve_repo(client, args.repo)
+    number = resolve_build(client, repo, args.number)
+    return watch_build(client, repo, number)
+
+
+def watch_build(client: NixbotClient, repo: RepoRef, number: int) -> int:
+    """Append-only progress: one verdict line per finished attribute,
+    then the failure summary. Refetches on every /api/events hint."""
+    reported: set[str] = set()
+    events: Iterator[dict] | None = None
+    while True:
+        detail = client.build(repo, number)
+        build = detail["build"]
+        for a in detail["attributes"]:
+            if a["attr"] in reported or a["status"] in RUNNING_STATUSES:
+                continue
+            reported.add(a["attr"])
+            cached = " (cached)" if a.get("cached") else ""
+            print(f"{status_str(a['status'])} {a['attr']}{cached}", flush=True)
+        if build["status"] not in RUNNING_STATUSES:
+            break
+        if events is None:
+            events = client.events(build=build["id"])
+        # Any change hint or keepalive triggers a refetch. A closed
+        # stream reconnects on the next round.
+        if next(events, None) is None:
+            events = None
+
+    summary = client.failures(repo, number, tail=20)
+    counts = f"{len(reported)} finished, {len(summary['failures'])} failed"
+    print(f"{status_str(build['status'])} build #{number}: {counts}")
+    if summary.get("error"):
+        print(summary["error"])
+    for failure in summary["failures"]:
+        print(f"\n── {failure['attr']} ── {status_str(failure['status'])}")
+        if failure.get("error"):
+            print(failure["error"])
+        if failure.get("log_tail"):
+            print(failure["log_tail"])
+    return EXIT_BUILD_FAILED if build["status"] in FAILED_STATUSES else EXIT_OK
+
+
 def cmd_build_restart(client: NixbotClient, args: argparse.Namespace) -> int:
     repo = resolve_repo(client, args.repo)
     number = resolve_build(client, repo, args.number)
@@ -387,6 +433,11 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     _add_json_arg(b_view)
     b_view.add_argument("--web", action="store_true", help="open in the browser")
     b_view.set_defaults(func=cmd_build_view)
+
+    b_watch = build.add_parser("watch", help="follow a build until it finishes")
+    b_watch.add_argument("number", type=int, nargs="?")
+    _add_repo_arg(b_watch)
+    b_watch.set_defaults(func=cmd_build_watch)
 
     b_restart = build.add_parser(
         "restart", help="restart a build, attribute or effects"
