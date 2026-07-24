@@ -120,9 +120,10 @@ class LogContainerWriter:
         """(name, lines) for derivations left in a failed status."""
         return [(d.name, d.lines) for d in self._drvs.values() if d.status == "failed"]
 
-    def state(self) -> list[dict]:
+    def state(self, *, with_lines: bool = True) -> list[dict]:
         """Current per-derivation state for a live snapshot burst. Mirrors
-        the finalized TOC plus the lines seen so far."""
+        the finalized TOC plus the lines seen so far. with_lines=False
+        (the JSON API) omits the line history and keeps only counts."""
         return [
             {
                 "idx": i,
@@ -130,7 +131,7 @@ class LogContainerWriter:
                 "name": d.name,
                 "status": d.status,
                 "ph": d.phases,
-                "lines": d.lines,
+                **({"lines": d.lines} if with_lines else {}),
                 "t0": d.t0,
                 "t1": d.t1,
                 "n": d.count,

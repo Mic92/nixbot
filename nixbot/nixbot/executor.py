@@ -548,8 +548,8 @@ class StructuredCapture:
         with contextlib.suppress(ValueError):
             self._subs.remove(q)
 
-    def state(self) -> list[dict]:
-        st = self._w.state()
+    def state(self, *, with_lines: bool = True) -> list[dict]:
+        st = self._w.state(with_lines=with_lines)
         for e in st:
             if e["idx"] in self._running_idx:
                 e["status"] = "running"

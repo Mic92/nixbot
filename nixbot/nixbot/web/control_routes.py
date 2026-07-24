@@ -57,6 +57,12 @@ class ControlAction(BaseModel):
     action: str  # restart | cancel
 
 
+class AttrControlAction(ControlAction):
+    """Acknowledgement of a per-attribute restart/cancel request."""
+
+    attr: str
+
+
 class EnableResult(BaseModel):
     owner: str
     name: str
@@ -199,6 +205,55 @@ class _ControlRoutes:
         await self.backend.cancel_build(build["id"])
         return {"number": number, "action": "cancel"}
 
+    async def api_restart_attribute(  # noqa: PLR0913
+        self,
+        request: Request,
+        forge: str,
+        owner: str,
+        name: str,
+        number: int,
+        attr: str,
+    ) -> dict:
+        """Re-run one attribute using its stored eval result (no re-eval).
+        Authz: admins, the PR author, or repo writers."""
+        build = await self._authorize(request, forge, owner, name, number)
+        known = await maint_gen.attribute_known(
+            self.ctx.pool, build_id=build["id"], attr=attr
+        )
+        if known is None:
+            raise HTTPException(status_code=404, detail="unknown attribute")
+        await self.backend.restart_attribute(build["id"], attr)
+        return {"number": number, "attr": attr, "action": "restart"}
+
+    async def api_cancel_attribute(  # noqa: PLR0913
+        self,
+        request: Request,
+        forge: str,
+        owner: str,
+        name: str,
+        number: int,
+        attr: str,
+    ) -> dict:
+        """Cancel one pending/running attribute. Authz: admins, the PR
+        author, or repo writers."""
+        build = await self._authorize(request, forge, owner, name, number)
+        known = await maint_gen.attribute_known(
+            self.ctx.pool, build_id=build["id"], attr=attr
+        )
+        if known is None:
+            raise HTTPException(status_code=404, detail="unknown attribute")
+        await self.backend.cancel_attribute(build["id"], attr)
+        return {"number": number, "attr": attr, "action": "cancel"}
+
+    async def api_restart_effects(
+        self, request: Request, forge: str, owner: str, name: str, number: int
+    ) -> dict:
+        """Re-run the build's effects. Authz: admins, the PR author, or
+        repo writers."""
+        build = await self._authorize(request, forge, owner, name, number)
+        await self.backend.restart_effects(build["id"])
+        return {"number": number, "action": "restart-effects"}
+
     async def api_set_enabled(
         self, request: Request, forge: str, owner: str, name: str
     ) -> dict:
@@ -325,6 +380,18 @@ def create_control_api_router(
     router.post(f"{base}/builds/{{number}}/cancel", response_model=ControlAction)(
         routes.api_cancel
     )
+    # :path — attribute names may contain slashes.
+    router.post(
+        f"{base}/builds/{{number}}/attrs/{{attr:path}}/restart",
+        response_model=AttrControlAction,
+    )(routes.api_restart_attribute)
+    router.post(
+        f"{base}/builds/{{number}}/attrs/{{attr:path}}/cancel",
+        response_model=AttrControlAction,
+    )(routes.api_cancel_attribute)
+    router.post(
+        f"{base}/builds/{{number}}/effects/restart", response_model=ControlAction
+    )(routes.api_restart_effects)
     router.post(f"{base}/enable", response_model=EnableResult)(routes.api_set_enabled)
     router.post(f"{base}/disable", response_model=EnableResult)(routes.api_set_enabled)
     return router

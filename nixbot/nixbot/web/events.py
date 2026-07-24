@@ -176,7 +176,10 @@ async def event_stream(
 def create_events_router(ctx: WebContext, broker: EventBroker) -> APIRouter:
     router = APIRouter()
 
+    # /api/events is the documented alias for API/CLI consumers; the
+    # bare /events route stays for the web UI's EventSource clients.
     @router.get("/events")
+    @router.get("/api/events")
     async def events(
         request: Request,
         build: int | None = None,
