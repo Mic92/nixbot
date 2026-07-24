@@ -372,7 +372,7 @@ def test_build_watch_reports_progress_and_failures(
     )
     assert cli.watch_build(client, REPO, 5) == 1
     out = capsys.readouterr().out
-    assert "✓ succeeded good (cached)" in out
+    assert "✓ cached good" in out
     assert "✗ failed bad" in out
     assert "build #5: 2 finished, 1 failed" in out
     assert "error: boom" in out

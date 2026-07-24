@@ -27,7 +27,15 @@ FAILED_STATUSES = {
     "cached_failure",
     "failed_eval",
 }
-STATUS_GLYPHS = {"succeeded": "✓", "failed": "✗", "building": "⏵", "pending": "·"}
+GOOD_STATUSES = {"succeeded", "skipped_local"}
+# Human wording for the raw database statuses.
+STATUS_LABELS = {
+    "succeeded": "built",
+    "skipped_local": "cached",
+    "cached_failure": "failed (cached)",
+    "dependency_failed": "dependency failed",
+    "failed_eval": "eval failed",
+}
 
 
 class UsageError(Exception):
@@ -40,13 +48,16 @@ def _color(text: str, code: str) -> str:
     return f"\x1b[{code}m{text}\x1b[0m"
 
 
-def status_str(status: str) -> str:
-    glyph = STATUS_GLYPHS.get(status, "·")
-    if status == "succeeded":
-        return _color(f"{glyph} {status}", "32")
+def status_str(status: str, *, cached: bool = False) -> str:
+    label = STATUS_LABELS.get(status, status)
+    if status == "succeeded" and cached:
+        label = "cached"
+    if status in GOOD_STATUSES:
+        return _color(f"✓ {label}", "32")
     if status in FAILED_STATUSES:
-        return _color(f"{glyph} {status}", "31")
-    return _color(f"{glyph} {status}", "33")
+        return _color(f"✗ {label}", "31")
+    glyph = "⏵" if status in ("building", "evaluating") else "·"
+    return _color(f"{glyph} {label}", "33")
 
 
 def print_table(rows: list[dict[str, Any]], columns: list[str]) -> None:
@@ -194,7 +205,9 @@ def cmd_build_view(client: NixbotClient, args: argparse.Namespace) -> int:
     counts: dict[str, int] = {}
     for a in attrs:
         counts[a["status"]] = counts.get(a["status"], 0) + 1
-    summary = " · ".join(f"{n} {s}" for s, n in sorted(counts.items()))
+    summary = " · ".join(
+        f"{n} {STATUS_LABELS.get(s, s)}" for s, n in sorted(counts.items())
+    )
     print(f"attributes: {len(attrs)}" + (f" ({summary})" if attrs else ""))
     failed = [a for a in attrs if a["status"] in FAILED_STATUSES]
     for a in failed:
@@ -225,8 +238,8 @@ def watch_build(client: NixbotClient, repo: RepoRef, number: int) -> int:
             if a["attr"] in reported or a["status"] in RUNNING_STATUSES:
                 continue
             reported.add(a["attr"])
-            cached = " (cached)" if a.get("cached") else ""
-            print(f"{status_str(a['status'])} {a['attr']}{cached}", flush=True)
+            verdict = status_str(a["status"], cached=bool(a.get("cached")))
+            print(f"{verdict} {a['attr']}", flush=True)
         if build["status"] not in RUNNING_STATUSES:
             break
         if events is None:
