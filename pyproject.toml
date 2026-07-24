@@ -1,3 +1,6 @@
+[tool.uv.workspace]
+members = ["nixbot", "nixbot_cli"]
+
 [tool.pytest.ini_options]
 pythonpath = ["nixbot"]
 testpaths = ["tests"]
