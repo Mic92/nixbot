@@ -170,7 +170,7 @@ class NixbotClient:
         drv: str | None = None,
         ansi: bool = False,
     ) -> str:
-        """Plain-text log; drv selects one derivation by store path or
+        """Plain-text log. drv selects one derivation by store path or
         name substring."""
         params = {"tail": tail, "drv": drv, "ansi": "1" if ansi else None}
         return self._request(
