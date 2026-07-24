@@ -27,6 +27,8 @@ in
       # from sqlc.yaml.
       sqlc
       devProcessCompose
+      # nbo, the CLI client
+      self.packages.${system}.nixbot-cli
       (pkgs.python3.withPackages (
         ps:
         [

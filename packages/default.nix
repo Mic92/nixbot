@@ -6,6 +6,7 @@ let
     self:
     {
       nixbot = self.callPackage ./nixbot.nix { };
+      nixbot-cli = self.callPackage ./nixbot-cli.nix { };
       docs = self.callPackage ./docs.nix { };
     }
     // lib.optionalAttrs pkgs.stdenv.isLinux {
