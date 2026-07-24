@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from fnmatch import fnmatch
 from pathlib import Path
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 
 from .proc import ProcessGroup
 from .redact import Redactor, secret_literals
@@ -51,6 +52,17 @@ DEFAULT_TIMEOUT = 60 * 60 * 3
 
 class EffectsError(Exception):
     pass
+
+
+def effect_push_url(forge: str, clone_url: str, token: str) -> str | None:
+    """Token-authenticated https URL for the effect checkout's origin.
+    None for non-http clone URLs (nothing sensible to push to)."""
+    parts = urlsplit(clone_url)
+    if parts.scheme not in ("http", "https") or parts.hostname is None:
+        return None
+    user = "oauth2" if forge == "gitlab" else "x-access-token"
+    host = parts.hostname + (f":{parts.port}" if parts.port else "")
+    return f"{parts.scheme}://{user}:{token}@{host}{parts.path}"
 
 
 def resolve_effects_secret(
@@ -105,6 +117,8 @@ class EffectsContext:
     project_id: str | None = None
     mountables_file: Path | None = None
     extra_nix_options: dict[str, str] = field(default_factory=dict)
+    # Runner-prepared pushable clone for __nixbot_effect_checkout.
+    effect_checkout: Path | None = None
 
 
 def effects_context(  # noqa: PLR0913
@@ -142,6 +156,8 @@ def _effects_args(ctx: EffectsContext, secrets_file: Path | None) -> list[str]:
     optional = []
     if ctx.default_branch is not None:
         optional += ["--default-branch", ctx.default_branch]
+    if ctx.effect_checkout is not None:
+        optional += ["--effect-checkout", str(ctx.effect_checkout)]
     if ctx.mountables_file is not None:
         optional += ["--mountables-file", str(ctx.mountables_file)]
     for key, value in ctx.extra_nix_options.items():

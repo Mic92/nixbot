@@ -14,6 +14,7 @@ import pytest
 from nixbot.effects import (
     EffectsContext,
     EffectsError,
+    effect_push_url,
     list_effects,
     resolve_effects_secret,
     run_effect,
@@ -242,3 +243,24 @@ async def test_run_effect_passes_task_flags(tmp_path: Path, fake_effects: Path) 
     # Token side files are cleaned up after the run.
     assert not list(tmp_path.glob("*git-token*"))
     assert not list(tmp_path.glob("*task-token*"))
+
+
+def test_effect_push_url() -> None:
+    assert effect_push_url("github", "https://github.com/acme/widget", "tok") == (
+        "https://x-access-token:tok@github.com/acme/widget"
+    )
+    assert effect_push_url("gitlab", "https://gitlab.example:8443/g/p.git", "tok") == (
+        "https://oauth2:tok@gitlab.example:8443/g/p.git"
+    )
+    # ssh clone URLs have no token equivalent to push over.
+    assert effect_push_url("github", "git@github.com:acme/widget.git", "tok") is None
+
+
+async def test_run_effect_passes_effect_checkout(
+    tmp_path: Path, fake_effects: Path
+) -> None:
+    ctx = make_ctx(tmp_path)
+    ctx.effect_checkout = tmp_path / "clone"
+    assert await run_effect(ctx, "deploy")
+    call = (tmp_path / "calls").read_text().splitlines()[-1]
+    assert f"--effect-checkout {tmp_path / 'clone'}" in call
