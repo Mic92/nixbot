@@ -7,10 +7,14 @@ response models in the server's OpenAPI spec and /llms.txt.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 
 class ApiError(Exception):
@@ -176,3 +180,32 @@ class NixbotClient:
         return self._request(
             "GET", f"/api/repos/{repo}/builds/{number}/logs/{attr}/text", params
         ).text
+
+    # --- streams -------------------------------------------------------
+
+    def log_stream(
+        self, repo: RepoRef, number: int, attr: str
+    ) -> Iterator[tuple[str, Any]]:
+        """SSE events of a running attribute's structured log as
+        (event, payload) pairs. The stream ends with ("done", {})."""
+        url = f"/api/repos/{repo}/builds/{number}/logs/{attr}/stream"
+        with self.http.stream("GET", url, timeout=None) as response:
+            if response.is_error:
+                response.read()
+                raise ApiError(response.status_code, response.text)
+            yield from _iter_sse(response)
+
+
+def _iter_sse(response: httpx.Response) -> Iterator[tuple[str, Any]]:
+    """Parse an SSE body into (event, decoded JSON data) pairs."""
+    event = "message"
+    data: list[str] = []
+    for line in response.iter_lines():
+        if not line:
+            if data:
+                yield event, json.loads("\n".join(data))
+            event, data = "message", []
+        elif line.startswith("event:"):
+            event = line.removeprefix("event:").strip()
+        elif line.startswith("data:"):
+            data.append(line.removeprefix("data:").strip())

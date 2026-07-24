@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import httpx
 import pytest
 import zstandard
 from nixbot_cli import main as cli
@@ -259,3 +260,46 @@ def test_settings_load(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert Settings.load() == Settings("https://ci.example.org", "bnix_abc")
     monkeypatch.setenv("NIXBOT_TOKEN", "bnix_env")
     assert Settings.load().token == "bnix_env"  # noqa: S105 (test credential)
+
+
+def test_log_follow_finished_attr_falls_back_to_stored_log(
+    api: NixbotClient, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A finished attribute has no live stream. --follow prints the log."""
+    assert run_cli(api, "log", "1", "bad1", "--follow", "-R", "acme/widget") == 1
+    out = capsys.readouterr().out
+    assert "CC main.o" in out
+    assert "error: boom" in out
+
+
+def test_log_follow_renders_live_stream(capsys: pytest.CaptureFixture[str]) -> None:
+    """The structured SSE stream (as emitted by /logs/{attr}/stream)
+    becomes derivation headers, phase separators and raw lines."""
+    body = (
+        'event: state\ndata: [{"idx":0,"drv":"/nix/store/aaa-hello-1.0.drv",'
+        '"name":"hello-1.0","status":"running","n":3}]\n\n'
+        ": keepalive\n\n"
+        'event: drv\ndata: {"t":"drv","idx":1,"drv":"/nix/store/bbb-dep.drv","name":"dep-2.0"}\n\n'
+        'event: phase\ndata: {"t":"phase","idx":0,"phase":"buildPhase","line":3}\n\n'
+        'event: line\ndata: {"t":"line","idx":0,"from":4,"text":"CC main.o"}\n\n'
+        'event: drv-done\ndata: {"t":"status","idx":0,"status":"failed"}\n\n'
+        "event: done\ndata: {}\n\n"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/logs/broken/stream")
+        return httpx.Response(
+            200, content=body, headers={"content-type": "text/event-stream"}
+        )
+
+    client = NixbotClient(
+        http=httpx.Client(
+            base_url="http://test", transport=httpx.MockTransport(handler)
+        )
+    )
+    cli.follow_attr(client, REPO, 5, "broken", tail=None)
+    out = capsys.readouterr().out
+    assert "── dep-2.0 ──" in out
+    assert "── hello-1.0: buildPhase ──" in out
+    assert "CC main.o" in out
+    assert "hello-1.0: ✗ failed" in out

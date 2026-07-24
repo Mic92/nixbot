@@ -257,6 +257,9 @@ def cmd_log(client: NixbotClient, args: argparse.Namespace) -> int:
     detail = client.build(repo, number)
     build_failed = detail["build"]["status"] in FAILED_STATUSES
 
+    if args.follow and args.attr is None:
+        msg = "--follow needs an attribute"
+        raise UsageError(msg)
     if args.attr is None:  # whole build: print the failure summary
         summary = client.failures(repo, number, tail=args.tail)
         if args.json is not None:
@@ -275,7 +278,10 @@ def cmd_log(client: NixbotClient, args: argparse.Namespace) -> int:
 
     attr = _match_attr(detail["attributes"], args.attr)
     drv = args.attr if args.attr.endswith(".drv") else None
-    if args.json is not None:
+    if args.follow:
+        follow_attr(client, repo, number, attr["attr"], tail=args.tail)
+        attr = _match_attr(client.build(repo, number)["attributes"], attr["attr"])
+    elif args.json is not None:
         toc = client.log_toc(repo, number, attr["attr"])
         print_json(toc, args.json)
     else:
@@ -284,6 +290,34 @@ def cmd_log(client: NixbotClient, args: argparse.Namespace) -> int:
         )
     failed = attr["status"] in FAILED_STATUSES
     return EXIT_BUILD_FAILED if failed else EXIT_OK
+
+
+def follow_attr(
+    client: NixbotClient, repo: RepoRef, number: int, attr: str, *, tail: int | None
+) -> None:
+    """Append-only rendering of the structured stream. A finished
+    attribute has no stream, so its stored log is printed instead."""
+    names: dict[int, str] = {}
+    streamed = False
+    for event, data in client.log_stream(repo, number, attr):
+        if event == "state":
+            names = {e["idx"]: e["name"] for e in data}
+        elif event == "drv":
+            names[data["idx"]] = data["name"]
+            print(f"── {data['name']} ──")
+            streamed = True
+        elif event == "phase":
+            print(f"── {names.get(data['idx'], attr)}: {data['phase']} ──")
+        elif event == "line":
+            print(data["text"])
+            streamed = True
+        elif event == "drv-done":
+            name = names.get(data["idx"], attr)
+            print(f"── {name}: {status_str(data['status'])} ──")
+        elif event == "done":
+            break
+    if not streamed:
+        print(client.log_text(repo, number, attr, tail=tail), end="")
 
 
 def cmd_auth_status(client: NixbotClient, args: argparse.Namespace) -> int:  # noqa: ARG001
@@ -379,6 +413,9 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     )
     _add_repo_arg(log)
     log.add_argument("--tail", type=int, metavar="N", help="last N lines")
+    log.add_argument(
+        "-f", "--follow", action="store_true", help="stream a running attribute's log"
+    )
     _add_json_arg(log)
     log.set_defaults(func=cmd_log)
 
