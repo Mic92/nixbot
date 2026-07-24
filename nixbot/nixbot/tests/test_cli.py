@@ -262,6 +262,24 @@ def test_settings_load(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert Settings.load().token == "bnix_env"  # noqa: S105 (test credential)
 
 
+def test_settings_token_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The token can come from a secret manager command (pass, rbw, ...)."""
+    monkeypatch.delenv("NIXBOT_TOKEN", raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    hosts = tmp_path / "nixbot" / "hosts.toml"
+    hosts.parent.mkdir(parents=True)
+    hosts.write_text(
+        '["https://ci.example.org"]\ntoken_command = "echo bnix_from_pass"\n'
+    )
+    assert Settings.load().token == "bnix_from_pass"  # noqa: S105 (test credential)
+
+    hosts.write_text('["https://ci.example.org"]\ntoken_command = "false"\n')
+    with pytest.raises(ValueError, match="token_command"):
+        Settings.load()
+
+
 def test_log_follow_finished_attr_falls_back_to_stored_log(
     api: NixbotClient, capsys: pytest.CaptureFixture[str]
 ) -> None:

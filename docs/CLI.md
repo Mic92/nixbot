@@ -41,6 +41,16 @@ above or export it:
 export NIXBOT_TOKEN=bnix_...
 ```
 
+Instead of storing the token in plain text you can have `nbo` fetch it from a
+password manager such as `pass` or `rbw` on every run:
+
+```toml
+# ~/.config/nixbot/hosts.toml
+["https://ci.example.org"]
+token_command = "pass show ci.example.org/nixbot"
+# or: token_command = "rbw get nixbot-ci"
+```
+
 `nbo auth status` shows which server and token are in use and whether the server
 is reachable.
 
