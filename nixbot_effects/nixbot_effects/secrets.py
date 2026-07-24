@@ -131,7 +131,11 @@ def gather_secrets(
             case SimpleSecret(name=name):
                 secret = all_secrets.get(name)
                 if secret is None:
-                    msg = f"secret {name!r} (for {dest!r}) does not exist"
+                    known = ", ".join(sorted(all_secrets)) or "none"
+                    msg = (
+                        f"secret {name!r} (for {dest!r}) is not configured on "
+                        f"this runner (available secrets: {known})"
+                    )
                     raise SecretsError(msg)
                 condition = secret.get("condition")
                 if condition is None:

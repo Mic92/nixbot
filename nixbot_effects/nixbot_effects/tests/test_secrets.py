@@ -128,7 +128,7 @@ def test_gather_secrets_denies_by_condition() -> None:
 
 
 def test_gather_secrets_missing() -> None:
-    with pytest.raises(SecretsError, match="does not exist"):
+    with pytest.raises(SecretsError, match="available secrets: none"):
         gather_secrets({"d": SimpleSecret("nope")}, {}, CTX, None)
     with pytest.raises(SecretsError, match="GitToken"):
         gather_secrets({"d": GitToken()}, {}, CTX, None)

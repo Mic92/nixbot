@@ -23,6 +23,7 @@ from . import (
     select_secrets,
 )
 from .options import EffectsOptions
+from .secrets import SecretsError
 
 
 def resolve_flake(flake_ref: str, *, debug: bool = False) -> dict[str, Any]:
@@ -376,7 +377,7 @@ def main() -> None:
     args = parse_args()
     try:
         args.func(args)
-    except NixbotEffectsError as e:
+    except (NixbotEffectsError, SecretsError) as e:
         # The underlying command already printed its own diagnostics; a
         # Python traceback on top is just noise in the run log.
         print(f"error: {e}", file=sys.stderr)
