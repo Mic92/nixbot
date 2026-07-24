@@ -126,6 +126,7 @@ class LogContainerWriter:
         return [
             {
                 "idx": i,
+                "drv": drv,
                 "name": d.name,
                 "status": d.status,
                 "ph": d.phases,
@@ -134,7 +135,7 @@ class LogContainerWriter:
                 "t1": d.t1,
                 "n": d.count,
             }
-            for i, d in enumerate(self._drvs.values())
+            for i, (drv, d) in enumerate(self._drvs.items())
         ]
 
     def finalize(self) -> bytes:
@@ -157,10 +158,11 @@ class LogContainerWriter:
             off += len(fr)
             buf, members, bufbytes = [], [], 0
 
-        for d in self._drvs.values():
+        for drv, d in self._drvs.items():
             lines = d.lines
             txt = "".join(t + "\n" for t in lines).encode()
             e = {
+                "drv": drv,
                 "name": d.name,
                 "status": d.status,
                 "off": 0,

@@ -574,7 +574,9 @@ class StructuredCapture:
         if drv_path not in self._idx:
             self._idx[drv_path] = len(self._idx)
         self._running.add(drv_path)
-        self._emit({"t": "drv", "idx": self._idx[drv_path], "name": name})
+        self._emit(
+            {"t": "drv", "idx": self._idx[drv_path], "drv": drv_path, "name": name}
+        )
 
     def _bump(self, drv: str) -> int:
         self._seen[drv] = self._seen.get(drv, 0) + 1
@@ -647,7 +649,14 @@ class StructuredCapture:
             name = _drv_display_name(drv_path)
             self._w.register(drv_path, name)
             self._idx[drv_path] = len(self._idx)
-            self._emit({"t": "drv", "idx": self._idx[drv_path], "name": name})
+            self._emit(
+                {
+                    "t": "drv",
+                    "idx": self._idx[drv_path],
+                    "drv": drv_path,
+                    "name": name,
+                }
+            )
         self._w.status(drv_path, status)
         self._running.discard(drv_path)
         self._emit({"t": "status", "idx": self._idx[drv_path], "status": status})
