@@ -676,6 +676,12 @@ the instance restricts project visibility.
 - POST /api/repos/{forge}/{owner}/{name}/builds/{number}/effects/restart
 - POST /api/repos/{forge}/{owner}/{name}/enable (admin)
 - POST /api/repos/{forge}/{owner}/{name}/disable (admin)
+
+## Command line
+
+The `nbo` CLI (package `nixbot-cli`) wraps this API: repo/build
+listing, restart/cancel, failure summaries, log tails and live
+following. See docs/CLI.md in the nixbot repository.
 """
 
 
