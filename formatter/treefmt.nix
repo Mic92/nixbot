@@ -89,6 +89,7 @@
   settings.formatter."mypy-" = lib.mkIf pkgs.stdenv.buildPlatform.isLinux {
     includes = [
       "nixbot/**/*.py"
+      "nixbot_cli/**/*.py"
       "nixbot_effects/**/*.py"
     ];
   };
