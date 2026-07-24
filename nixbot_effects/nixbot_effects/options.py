@@ -24,3 +24,6 @@ class EffectsOptions:
     extra_nix_options: list[tuple[str, str]] = field(default_factory=list)
     debug: bool = False
     extra_sandbox_paths: list[Path] = field(default_factory=list)
+    # Runner-prepared pushable clone, mounted at the effect's
+    # __nixbot_effect_checkout path.
+    effect_checkout: Path | None = None

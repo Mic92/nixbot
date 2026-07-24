@@ -68,6 +68,7 @@ def options_from_flake_ref(flake_ref: str, base: EffectsOptions) -> EffectsOptio
         extra_nix_options=base.extra_nix_options,
         debug=base.debug,
         extra_sandbox_paths=base.extra_sandbox_paths,
+        effect_checkout=base.effect_checkout,
     )
 
 
@@ -89,6 +90,7 @@ def _options_from_args(args: argparse.Namespace) -> EffectsOptions:
         extra_nix_options=args.extra_nix_option,
         debug=args.debug,
         extra_sandbox_paths=args.extra_sandbox_path,
+        effect_checkout=args.effect_checkout,
     )
 
 
@@ -293,6 +295,12 @@ def _add_common_flags(parser: argparse.ArgumentParser) -> None:
         action="append",
         default=[],
         help="Path that should be included in the sandbox from the host.",
+    )
+    parser.add_argument(
+        "--effect-checkout",
+        type=Path,
+        help="Pre-prepared repository clone to mount at the effect's"
+        " __nixbot_effect_checkout path",
     )
     parser.add_argument(
         "--secrets",

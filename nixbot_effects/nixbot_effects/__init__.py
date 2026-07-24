@@ -361,6 +361,37 @@ def select_secrets(
     return gather_secrets(secrets_map, secrets, ctx, git_token)
 
 
+# Effect derivations opt into the runner-prepared repository clone by
+# declaring the mount destination under this environment attribute.
+EFFECT_CHECKOUT_ATTR = "__nixbot_effect_checkout"
+
+
+def effect_checkout_mount(
+    drv_env: dict[str, str], effect_checkout: Path | None, etc_dir: Path | None = None
+) -> tuple[list[str], dict[str, str]]:
+    """bwrap bind arguments and environment for the pre-prepared
+    repository checkout requested via __nixbot_effect_checkout."""
+    dest = drv_env.get(EFFECT_CHECKOUT_ATTR)
+    if not dest:
+        return [], {}
+    if not dest.startswith("/"):
+        msg = f"{EFFECT_CHECKOUT_ATTR} must be an absolute path, got {dest!r}"
+        raise NixbotEffectsError(msg)
+    if effect_checkout is None:
+        msg = (
+            f"effect declares {EFFECT_CHECKOUT_ATTR} = {dest!r} but the runner"
+            " provided no --effect-checkout clone"
+        )
+        raise NixbotEffectsError(msg)
+    if etc_dir is not None:
+        # The clone is owned by the runner user while the effect runs
+        # under its own uid; without this git rejects it as "dubious
+        # ownership". etc_dir is bound at /etc, so this is the system
+        # gitconfig inside the sandbox.
+        (etc_dir / "gitconfig").write_text("[safe]\n\tdirectory = *\n")
+    return ["--bind", str(effect_checkout), dest], {"NIXBOT_EFFECT_CHECKOUT": dest}
+
+
 def sandbox_env(drv_env: dict[str, str]) -> dict[str, str]:
     """Environment matching hercules-ci-agent: every temp variable
     points at the disk-backed /build, plus its fixed env. HOME is
@@ -477,6 +508,10 @@ def run_effects(  # noqa: PLR0913
     pass_env, pass_clear = pass_as_file_env(drv_env, build_dir)
     env.update(pass_env)
     clear_env |= pass_clear
+    checkout_args, checkout_env = effect_checkout_mount(
+        drv_env, opts.effect_checkout if opts is not None else None, etc_dir
+    )
+    env.update(checkout_env)
     # Private daemon socket: each connection gets its own untrusted
     # nix-daemon, so effects cannot use trusted-user privileges.
     daemon_socket = work_dir / "daemon-socket"
@@ -536,6 +571,7 @@ def run_effects(  # noqa: PLR0913
             for dest, source, read_only in bind_mounts
             for arg in ("--ro-bind" if read_only else "--bind", source, dest)
         ],
+        *checkout_args,
         "--hostname",
         "hercules-ci",
         "--bind",
