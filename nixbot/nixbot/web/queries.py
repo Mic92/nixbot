@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING, Any
 from ..db_gen import web as gen  # noqa: TID252
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
     import asyncpg
 
 PAGE_SIZE = 50
@@ -148,6 +150,16 @@ class WebQueries:
     async def attributes(self, build_id: int) -> list[dict[str, Any]]:
         """Attributes, failed first, then by name."""
         return _dicts(await gen.web_attributes(self.pool, build_id=build_id))
+
+    async def attributes_finished_after(
+        self, build_id: int, after: datetime | None, after_id: int
+    ) -> list[dict[str, Any]]:
+        """Attributes that finished after the (after, after_id) cursor."""
+        return _dicts(
+            await gen.web_attributes_finished_after(
+                self.pool, build_id=build_id, after=after, after_id=after_id
+            )
+        )
 
     async def effects(self, build_id: int) -> list[dict[str, Any]]:
         return _dicts(await gen.web_effects(self.pool, build_id=build_id))

@@ -42,9 +42,11 @@ async def postgres_dsn(postgres_dsn: str) -> str:
         await insert_build(pool, project_id, number=2, status="building", started=True)
         await pool.execute(
             """
-            INSERT INTO build_attributes (build_id, attr, system, status, error) VALUES
-              ($1, 'good', 'x86_64-linux', 'succeeded', NULL),
-              ($1, 'bad1', 'x86_64-linux', 'failed', 'builder failed')
+            INSERT INTO build_attributes
+              (build_id, attr, system, status, error, finished_at) VALUES
+              ($1, 'good', 'x86_64-linux', 'succeeded', NULL, '2026-01-01T00:00:01Z'),
+              ($1, 'bad1', 'x86_64-linux', 'failed', 'builder failed',
+               '2026-01-01T00:00:02Z')
             """,
             failed,
         )
@@ -123,6 +125,18 @@ def test_repos_and_builds(api: NixbotClient) -> None:
     assert [f["attr"] for f in failures["failures"]] == ["bad1"]
     assert [e["build_number"] for e in api.attr_history(REPO, "bad1")] == [1]
     assert [b["number"] for b in api.queue()] == [2]
+
+
+def test_finished_attrs_cursor(api: NixbotClient) -> None:
+    delta = api.finished_attrs(REPO, 1)
+    assert delta["build"]["status"] == "failed"
+    assert [a["attr"] for a in delta["items"]] == ["good", "bad1"]
+
+    good = delta["items"][0]
+    rest = api.finished_attrs(
+        REPO, 1, finished_after=good["finished_at"], after_id=good["id"]
+    )
+    assert [a["attr"] for a in rest["items"]] == ["bad1"]
 
 
 def test_control_requires_token(harness: WebHarness, api: NixbotClient) -> None:

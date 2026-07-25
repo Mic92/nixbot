@@ -329,20 +329,35 @@ def test_build_watch_reports_progress_and_failures(
     """watch prints one verdict per finished attribute as events arrive
     and ends with the failure summary once the build is terminal."""
     build = {"id": 9, "number": 5, "status": "building"}
-    attrs = [
-        {"attr": "good", "status": "succeeded", "cached": True},
-        {"attr": "bad", "status": "building", "cached": False},
+    finished = [
+        {
+            "id": 1,
+            "attr": "good",
+            "status": "succeeded",
+            "cached": True,
+            "finished_at": "2026-01-01T00:00:01Z",
+        },
     ]
     hint = 'data: {"build_id":9,"attr":"bad","status":"failed"}\n\n'
 
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
-        if path.endswith("/builds/5"):
-            return httpx.Response(200, json={"build": build, "attributes": attrs})
+        if path.endswith("/builds/5/attrs"):
+            after = request.url.params.get("finished_after")
+            items = [a for a in finished if not after or a["finished_at"] > after]
+            return httpx.Response(200, json={"build": dict(build), "items": items})
         if path == "/api/events":
             assert request.url.params["build"] == "9"
             # After the hint the build finishes with one failed attribute.
-            attrs[1] = {"attr": "bad", "status": "failed", "cached": False}
+            finished.append(
+                {
+                    "id": 2,
+                    "attr": "bad",
+                    "status": "failed",
+                    "cached": False,
+                    "finished_at": "2026-01-01T00:00:02Z",
+                }
+            )
             build["status"] = "failed"
             return httpx.Response(
                 200, content=hint, headers={"content-type": "text/event-stream"}

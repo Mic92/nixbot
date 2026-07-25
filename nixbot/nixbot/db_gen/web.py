@@ -29,6 +29,7 @@ __all__: collections.abc.Sequence[str] = (
     "web_attribute_neighbor_numbers",
     "web_attribute_page",
     "web_attributes",
+    "web_attributes_finished_after",
     "web_build_by_number",
     "web_builds_for_repo",
     "web_effects",
@@ -281,6 +282,15 @@ ORDER BY CASE
 END, a.attr
 """
 
+WEB_ATTRIBUTES_FINISHED_AFTER: typing.Final[str] = """-- name: WebAttributesFinishedAfter :many
+SELECT a.id, a.build_id, a.attr, a.system, a.drv_path, a.outputs, a.status, a.cached, a.error, a.started_at, a.finished_at, a.log_size, a.log_truncated FROM build_attributes a
+WHERE a.build_id = $1 AND a.finished_at IS NOT NULL
+  AND ($2::timestamptz IS NULL
+       OR (a.finished_at, a.id) > ($2::timestamptz,
+                                   $3::bigint))
+ORDER BY a.finished_at, a.id
+"""
+
 WEB_BUILD_BY_NUMBER: typing.Final[str] = """-- name: WebBuildByNumber :one
 SELECT id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number FROM builds WHERE project_id = $1 AND number = $2
 """
@@ -519,6 +529,12 @@ def web_attributes(conn: ConnectionLike, *, build_id: int) -> QueryResults[model
     def _decode_hook(row: asyncpg.Record) -> models.BuildAttribute:
         return models.BuildAttribute(id=row[0], build_id=row[1], attr=row[2], system=row[3], drv_path=row[4], outputs=row[5], status=row[6], cached=row[7], error=row[8], started_at=row[9], finished_at=row[10], log_size=row[11], log_truncated=row[12])
     return QueryResults[models.BuildAttribute](conn, WEB_ATTRIBUTES, _decode_hook, build_id)
+
+
+def web_attributes_finished_after(conn: ConnectionLike, *, build_id: int, after: datetime.datetime | None, after_id: int) -> QueryResults[models.BuildAttribute]:
+    def _decode_hook(row: asyncpg.Record) -> models.BuildAttribute:
+        return models.BuildAttribute(id=row[0], build_id=row[1], attr=row[2], system=row[3], drv_path=row[4], outputs=row[5], status=row[6], cached=row[7], error=row[8], started_at=row[9], finished_at=row[10], log_size=row[11], log_truncated=row[12])
+    return QueryResults[models.BuildAttribute](conn, WEB_ATTRIBUTES_FINISHED_AFTER, _decode_hook, build_id, after, after_id)
 
 
 async def web_build_by_number(conn: ConnectionLike, *, project_id: int, number: int) -> models.Build | None:

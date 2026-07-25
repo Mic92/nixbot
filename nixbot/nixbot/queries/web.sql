@@ -106,6 +106,15 @@ ORDER BY CASE
     ELSE 4
 END, a.attr;
 
+-- name: WebAttributesFinishedAfter :many
+-- Cursor feed for build watchers: (after, after_id) is the last row already seen.
+SELECT a.* FROM build_attributes a
+WHERE a.build_id = $1 AND a.finished_at IS NOT NULL
+  AND (sqlc.narg(after)::timestamptz IS NULL
+       OR (a.finished_at, a.id) > (sqlc.narg(after)::timestamptz,
+                                   sqlc.arg(after_id)::bigint))
+ORDER BY a.finished_at, a.id;
+
 -- name: WebEffects :many
 SELECT * FROM build_effects WHERE build_id = $1 ORDER BY name;
 

@@ -131,6 +131,19 @@ class NixbotClient:
         """Build detail: {build, attributes}."""
         return self._json("GET", f"/api/repos/{repo}/builds/{number}")
 
+    def finished_attrs(
+        self,
+        repo: RepoRef,
+        number: int,
+        *,
+        finished_after: str | None = None,
+        after_id: int = 0,
+    ) -> dict:
+        """Build status plus attributes finished after the cursor:
+        {build, items} with items in cursor order."""
+        params = {"finished_after": finished_after, "after_id": after_id}
+        return self._json("GET", f"/api/repos/{repo}/builds/{number}/attrs", params)
+
     def failures(self, repo: RepoRef, number: int, *, tail: int | None = None) -> dict:
         """Why a build failed: failed attributes with log tails."""
         params = {"tail": tail}

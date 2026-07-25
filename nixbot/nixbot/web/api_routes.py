@@ -100,6 +100,13 @@ class BuildDetail(BaseModel):
     attributes: list[Attribute]
 
 
+class AttributeDelta(BaseModel):
+    """Build status plus the attributes finished after a cursor."""
+
+    build: Build
+    items: list[Attribute]
+
+
 class AttributeHistoryEntry(Attribute):
     """Attribute result plus the build it belongs to."""
 
@@ -151,6 +158,16 @@ def clean_row(row: dict[str, Any]) -> dict[str, Any]:
         else:
             out[key] = value
     return out
+
+
+async def _build_or_404(  # noqa: PLR0913
+    ctx: WebContext, request: Request, forge: str, owner: str, name: str, number: int
+) -> dict[str, Any]:
+    project = await ctx.repo_or_404(forge, owner, name, request)
+    build = await ctx.queries.build_by_number(project["id"], number)
+    if build is None:
+        raise HTTPException(status_code=404)
+    return build
 
 
 def create_api_router(ctx: WebContext) -> APIRouter:
@@ -209,14 +226,37 @@ def create_api_router(ctx: WebContext) -> APIRouter:
         request: Request, forge: str, owner: str, name: str, number: int
     ) -> dict[str, Any]:
         """Build plus all of its attributes."""
-        project = await ctx.repo_or_404(forge, owner, name, request)
-        build = await ctx.queries.build_by_number(project["id"], number)
-        if build is None:
-            raise HTTPException(status_code=404)
+        build = await _build_or_404(ctx, request, forge, owner, name, number)
         attributes = await ctx.queries.attributes(build["id"])
         return {
             "build": clean_row(build),
             "attributes": [clean_row(a) for a in attributes],
+        }
+
+    @router.get(
+        "/repos/{forge}/{owner:owner}/{name:segment}/builds/{number}/attrs",
+        response_model=AttributeDelta,
+    )
+    async def get_finished_attributes(  # noqa: PLR0913
+        request: Request,
+        forge: str,
+        owner: str,
+        name: str,
+        number: int,
+        finished_after: datetime | None = None,
+        after_id: int = 0,
+    ) -> dict[str, Any]:
+        """Attributes finished after the (finished_after, after_id) cursor.
+
+        Ordered by cursor, so the last item is the cursor for the next request.
+        """
+        build = await _build_or_404(ctx, request, forge, owner, name, number)
+        attributes = await ctx.queries.attributes_finished_after(
+            build["id"], finished_after, after_id
+        )
+        return {
+            "build": clean_row(build),
+            "items": [clean_row(a) for a in attributes],
         }
 
     @router.get(

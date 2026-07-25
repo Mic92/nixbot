@@ -228,18 +228,25 @@ def cmd_build_watch(client: NixbotClient, args: argparse.Namespace) -> int:
 
 def watch_build(client: NixbotClient, repo: RepoRef, number: int) -> int:
     """Append-only progress: one verdict line per finished attribute,
-    then the failure summary. Refetches on every /api/events hint."""
-    reported: set[str] = set()
+    then the failure summary. On every /api/events hint only the
+    attributes finished since the last cursor are fetched."""
+    cursor: tuple[str, int] | None = None
+    finished = 0
     events: Iterator[dict] | None = None
     while True:
-        detail = client.build(repo, number)
-        build = detail["build"]
-        for a in detail["attributes"]:
-            if a["attr"] in reported or a["status"] in RUNNING_STATUSES:
-                continue
-            reported.add(a["attr"])
+        delta = client.finished_attrs(
+            repo,
+            number,
+            finished_after=cursor[0] if cursor else None,
+            after_id=cursor[1] if cursor else 0,
+        )
+        build, attrs = delta["build"], delta["items"]
+        for a in attrs:
             verdict = status_str(a["status"], cached=bool(a.get("cached")))
             print(f"{verdict} {a['attr']}", flush=True)
+        if attrs:
+            cursor = (attrs[-1]["finished_at"], attrs[-1]["id"])
+            finished += len(attrs)
         if build["status"] not in RUNNING_STATUSES:
             break
         if events is None:
@@ -250,7 +257,7 @@ def watch_build(client: NixbotClient, repo: RepoRef, number: int) -> int:
             events = None
 
     summary = client.failures(repo, number, tail=20)
-    counts = f"{len(reported)} finished, {len(summary['failures'])} failed"
+    counts = f"{finished} finished, {len(summary['failures'])} failed"
     print(f"{status_str(build['status'])} build #{number}: {counts}")
     if summary.get("error"):
         print(summary["error"])
