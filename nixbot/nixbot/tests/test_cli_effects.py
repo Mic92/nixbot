@@ -1,15 +1,14 @@
-"""Tests for CLI flake ref support."""
+"""`nbo effects`: local effect commands wired into the nbo CLI."""
 
 from __future__ import annotations
 
-import argparse
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
-
+from nixbot_cli import effects
+from nixbot_cli import main as cli
 from nixbot_effects import EffectError
-from nixbot_effects.cli import _key_value, main, run_command
 
 
 async def test_flake_ref_without_fragment_errors() -> None:
@@ -27,29 +26,21 @@ async def test_flake_ref_without_fragment_errors() -> None:
     args.effect = "git+file:///some/repo"
 
     with pytest.raises(SystemExit, match="1"):
-        await run_command(args)
+        await effects.run_command(args)
 
 
-def test_main_reports_effects_error_without_traceback(
+def test_effect_error_reported_without_traceback(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # A failed effect already logged its own diagnostics; main must exit
-    # 1 with a one-line message, not dump a Python traceback into the
-    # run log.
+    # A failed effect already logged its own diagnostics. nbo must exit
+    # 1 with a one-line message, not dump a Python traceback.
     msg = "bwrap failed with exit code 1"
 
-    async def boom(_args: argparse.Namespace) -> None:
+    async def boom(_options: object, _effect: str) -> bool:
         raise EffectError(msg)
 
-    ns = argparse.Namespace(func=boom)
-    monkeypatch.setattr("nixbot_effects.cli.parse_args", lambda: ns)
+    monkeypatch.setattr(effects, "run_effect", boom)
     with pytest.raises(SystemExit) as exc:
-        main()
+        cli.main(["effects", "run", "deploy"])
     assert exc.value.code == 1
-    assert capsys.readouterr().err == "error: bwrap failed with exit code 1\n"
-
-
-def test_extra_nix_option_requires_key_value() -> None:
-    assert _key_value("max-jobs=1") == ("max-jobs", "1")
-    with pytest.raises(argparse.ArgumentTypeError):
-        _key_value("max-jobs")
+    assert capsys.readouterr().err == "nbo: bwrap failed with exit code 1\n"

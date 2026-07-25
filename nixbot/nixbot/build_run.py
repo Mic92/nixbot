@@ -21,6 +21,7 @@ from .build_scheduler import (
     AttributeStatus,
     BuildOutcome,
     JobScheduler,
+    outcome_status,
 )
 from .db import BuildStatus
 from .db_gen import builds as q
@@ -160,6 +161,20 @@ def _eval_settings(
     netrc_file = None
     if credentials is not None and (event.pr_number is None or credentials.repo_scoped):
         netrc_file = credentials.netrc_file
+    # Arguments hercules-ci-agent passes to the flake's herculesCI
+    # function; tag is unknown here (builds are branch/PR driven).
+    primary_repo = {
+        "name": event.repo.repo,
+        "owner": event.repo.owner,
+        "branch": event.branch,
+        "ref": f"refs/heads/{event.branch}",
+        "tag": None,
+        "rev": event.commit_sha,
+        "shortRev": event.commit_sha[:7],
+        "remoteHttpUrl": event.repo.clone_url,
+        "forgeType": event.repo.forge,
+    }
+    hercules_args = {"primaryRepo": primary_repo, **primary_repo}
     return EvalSettings(
         gc_roots_dir=o.gcroots_dir(build),
         timeout=o.config.eval_timeout,
@@ -170,6 +185,7 @@ def _eval_settings(
         # The worktree's .git points into the central clone. The
         # sandboxed evaluator needs to read it.
         extra_ro_paths=[o.repos.clone_path(event.repo.key)],
+        hercules_args=hercules_args,
     )
 
 
@@ -595,19 +611,15 @@ class _OrchestratorExecutor:
             mirror.cancel()
             self.o.attr_cancel_events.pop((self.build_record.id, job.attr), None)
 
-        status = {
-            BuildOutcome.success: AttributeStatus.succeeded,
-            BuildOutcome.failure: AttributeStatus.failed,
-            BuildOutcome.failure_no_cache: AttributeStatus.failed,
-            BuildOutcome.post_build_failure: AttributeStatus.failed,
-            BuildOutcome.cancelled: AttributeStatus.cancelled,
-        }[outcome]
+        status, error = outcome_status(job, outcome)
         # Failed attributes carry a log-tail excerpt so the build page
         # answers "why" without a click into the log. ANSI stays: the
         # web layer renders it, the API strips it.
-        error = None
         failure = None
-        if status == AttributeStatus.failed:
+        if error is None and status in (
+            AttributeStatus.failed,
+            AttributeStatus.ignored_failure,
+        ):
             failure = writer.capture.build_failure() if writer.capture else None
             error = (
                 (failure.as_text() if failure else "")
@@ -620,7 +632,7 @@ class _OrchestratorExecutor:
             job=job,
             error=error,
             failure=failure,
-            out_path=job.outputs.get("out"),
+            out_path=None if job.build_dependencies_only else job.outputs.get("out"),
             drv_path=job.drv_path,
             system=job.system,
         )

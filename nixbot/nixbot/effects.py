@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
 import nixbot_effects
-from nixbot_effects import EffectError, EffectsOptions
+from nixbot_effects import EffectError, EffectMeta, EffectsOptions
 
 from .redact import Redactor, secret_literals
 
@@ -155,8 +155,8 @@ async def _with_timeout[T](coro: Coroutine[None, None, T], what: str) -> T:
         raise EffectError(msg) from e
 
 
-async def list_effects(ctx: EffectsContext) -> list[str]:
-    """The effects defined by the flake."""
+async def list_effects(ctx: EffectsContext) -> dict[str, EffectMeta]:
+    """The effects defined by the flake, with their after/lock metadata."""
     return await _with_timeout(nixbot_effects.list_effects(ctx), "listing effects")
 
 

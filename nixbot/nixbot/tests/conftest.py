@@ -51,8 +51,8 @@ def _no_effects_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stub effects/schedule discovery, which would evaluate the flake
     with real nix. Tests that want effects patch these again."""
 
-    async def no_effects(_ctx: object) -> list[str]:
-        return []
+    async def no_effects(_ctx: object) -> dict:
+        return {}
 
     async def no_schedules(_ctx: object) -> dict:
         return {}

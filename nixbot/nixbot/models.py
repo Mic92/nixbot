@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
@@ -40,6 +41,30 @@ class NixEvalJobSuccess(BaseModel):
     # out path as "not statically known".
     outputs: dict[str, str | None]
     system: str
+    # hercules-ci build modifiers exported by the eval's --apply function
+    # (buildDependenciesOnly, ignoreFailure, requireFailure).
+    extra_value: dict[str, Any] | None = Field(
+        default=None, validation_alias="extraValue"
+    )
+
+    def _flag(self, name: str) -> bool:
+        return bool((self.extra_value or {}).get(name))
+
+    @property
+    def build_dependencies_only(self) -> bool:
+        """Build only the dependencies, not the derivation itself
+        (buildDependenciesOnly or a noBuildPhase shell)."""
+        return self._flag("buildDependenciesOnly")
+
+    @property
+    def ignore_failure(self) -> bool:
+        """Build, but exclude a failure from the aggregate status."""
+        return self._flag("ignoreFailure")
+
+    @property
+    def require_failure(self) -> bool:
+        """The build is expected to fail; success fails the attribute."""
+        return self._flag("requireFailure")
 
 
 NixEvalJob = NixEvalJobError | NixEvalJobSuccess

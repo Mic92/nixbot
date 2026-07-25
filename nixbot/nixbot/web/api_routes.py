@@ -85,7 +85,7 @@ class Attribute(BaseModel):
     drv_path: str | None
     outputs: dict[str, str | None] | None
     # pending | building | succeeded | failed | cancelled | skipped_local
-    # | dependency_failed | cached_failure | failed_eval
+    # | dependency_failed | cached_failure | failed_eval | ignored_failure
     status: str
     cached: bool
     error: str | None

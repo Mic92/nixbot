@@ -46,9 +46,20 @@ WHERE id = (
     WHERE w.status = 'pending'
       AND NOT EXISTS (
         SELECT 1 FROM work_queue r
-        WHERE r.dedup_key = w.dedup_key AND r.status = 'running'
+        WHERE r.dedup_key = w.dedup_key
+          AND (r.status = 'running'
+               OR (r.status = 'pending'
+                   AND (r.created_at, r.id) < (w.created_at, w.id)))
       )
-    ORDER BY w.created_at
+      AND NOT (w.kind = 'effect' AND EXISTS (
+        SELECT 1 FROM build_effects e
+        JOIN build_effects d ON d.build_id = e.build_id
+            AND d.name IN (SELECT jsonb_array_elements_text(e.deps))
+        WHERE e.build_id = (w.payload->>'build_id')::bigint
+          AND e.name = w.payload->>'name'
+          AND d.status IN ('pending', 'running')
+      ))
+    ORDER BY w.created_at, w.id
     FOR UPDATE SKIP LOCKED
     LIMIT 1
 )
@@ -63,10 +74,11 @@ WHERE finished_at IS NOT NULL
 
 ENQUEUE_EFFECT_ITEMS: typing.Final[str] = """-- name: EnqueueEffectItems :exec
 INSERT INTO work_queue (kind, dedup_key, payload)
-SELECT 'effect', $1::text,
-       jsonb_build_object('build_id', $2::bigint,
+SELECT 'effect', u.dedup_key,
+       jsonb_build_object('build_id', $1::bigint,
                           'name', u.name)
-FROM unnest($3::text[]) AS u(name)
+FROM (SELECT unnest($2::text[]) AS name,
+             unnest($3::text[]) AS dedup_key) AS u
 ON CONFLICT (kind, dedup_key, md5(payload::text))
 WHERE status = 'pending'
 DO NOTHING
@@ -118,8 +130,8 @@ async def cleanup_work_queue(conn: ConnectionLike, *, retention_days: int) -> No
     await conn.execute(CLEANUP_WORK_QUEUE, retention_days)
 
 
-async def enqueue_effect_items(conn: ConnectionLike, *, dedup_key: str, build_id: int, names: collections.abc.Sequence[str]) -> None:
-    await conn.execute(ENQUEUE_EFFECT_ITEMS, dedup_key, build_id, names)
+async def enqueue_effect_items(conn: ConnectionLike, *, build_id: int, names: collections.abc.Sequence[str], dedup_keys: collections.abc.Sequence[str]) -> None:
+    await conn.execute(ENQUEUE_EFFECT_ITEMS, build_id, names, dedup_keys)
 
 
 async def enqueue_work_item(conn: ConnectionLike, *, kind: str, dedup_key: str, payload: str) -> int | None:

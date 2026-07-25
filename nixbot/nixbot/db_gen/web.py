@@ -308,7 +308,7 @@ ORDER BY number DESC LIMIT $8 OFFSET $7
 """
 
 WEB_EFFECTS: typing.Final[str] = """-- name: WebEffects :many
-SELECT id, build_id, name, status, error, log_size, log_truncated, started_at, finished_at FROM build_effects WHERE build_id = $1 ORDER BY name
+SELECT id, build_id, name, status, error, log_size, log_truncated, started_at, finished_at, deps FROM build_effects WHERE build_id = $1 ORDER BY name
 """
 
 WEB_NEIGHBOR_NUMBERS: typing.Final[str] = """-- name: WebNeighborNumbers :one
@@ -552,7 +552,7 @@ def web_builds_for_repo(conn: ConnectionLike, *, project_id: int, status: str | 
 
 def web_effects(conn: ConnectionLike, *, build_id: int) -> QueryResults[models.BuildEffect]:
     def _decode_hook(row: asyncpg.Record) -> models.BuildEffect:
-        return models.BuildEffect(id=row[0], build_id=row[1], name=row[2], status=row[3], error=row[4], log_size=row[5], log_truncated=row[6], started_at=row[7], finished_at=row[8])
+        return models.BuildEffect(id=row[0], build_id=row[1], name=row[2], status=row[3], error=row[4], log_size=row[5], log_truncated=row[6], started_at=row[7], finished_at=row[8], deps=row[9])
     return QueryResults[models.BuildEffect](conn, WEB_EFFECTS, _decode_hook, build_id)
 
 

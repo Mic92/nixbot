@@ -11,6 +11,9 @@ import sys
 import webbrowser
 from typing import TYPE_CHECKING, Any, NoReturn
 
+from nixbot_effects import EffectError
+
+from . import effects
 from .api import ApiError, NixbotClient, RepoRef
 from .config import Settings, config_path
 from .term import (
@@ -596,6 +599,8 @@ running ones. Piped or in CI it prints one line per finished attribute.""",
     auth.add_parser("status", help="configured server and token").set_defaults(
         func=cmd_auth_status
     )
+
+    effects.register(sub)
     return parser
 
 
@@ -607,8 +612,16 @@ def make_client() -> NixbotClient:
 def main(argv: Sequence[str] | None = None) -> NoReturn:
     args = build_parser().parse_args(argv)
     try:
-        with make_client() as client:
-            code = args.func(client, args)
+        # Effects commands drive nix locally and need no API client.
+        if getattr(args, "needs_client", True):
+            with make_client() as client:
+                code = args.func(client, args)
+        else:
+            code = args.func(args)
+    except EffectError as err:
+        # The effect run already logged its own diagnostics.
+        print(f"nbo: {err}", file=sys.stderr)
+        code = EXIT_BUILD_FAILED
     except (UsageError, ValueError) as err:
         print(f"nbo: {err}", file=sys.stderr)
         code = EXIT_USAGE

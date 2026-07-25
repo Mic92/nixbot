@@ -1,6 +1,5 @@
 {
   nixbot,
-  nixbot-effects ? null,
   bubblewrap,
   coreutils,
   git,
@@ -143,9 +142,8 @@ writeShellApplication {
     nix
     coreutils
   ]
-  # The service wraps nix-eval-jobs in a bwrap sandbox on Linux.
+  # The service wraps effects in a bwrap sandbox on Linux.
   ++ lib.optionals stdenv.isLinux [
-    nixbot-effects
     bubblewrap
   ];
   runtimeEnv = {

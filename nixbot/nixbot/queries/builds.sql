@@ -185,12 +185,22 @@ ON CONFLICT (build_id, name) DO UPDATE SET
 
 -- name: StartPendingEffects :exec
 -- Batch variant for enqueueing one build's discovered effects.
-INSERT INTO build_effects (build_id, name, status)
-SELECT sqlc.arg(build_id)::bigint, u.name, 'pending'
-FROM unnest(sqlc.arg(names)::text[]) AS u(name)
+-- deps carries each effect's `after` list as a JSON array.
+INSERT INTO build_effects (build_id, name, status, deps)
+SELECT sqlc.arg(build_id)::bigint, u.name, 'pending', u.deps::jsonb
+FROM (SELECT unnest(sqlc.arg(names)::text[]) AS name,
+             unnest(sqlc.arg(deps)::text[]) AS deps) AS u
 ON CONFLICT (build_id, name) DO UPDATE SET
     status = 'pending', error = NULL, log_size = 0,
-    log_truncated = FALSE, started_at = now(), finished_at = NULL;
+    log_truncated = FALSE, started_at = now(), finished_at = NULL,
+    deps = EXCLUDED.deps;
+
+-- name: EffectDepStatuses :many
+-- Statuses of the effects this effect declared in `after`.
+SELECT d.name, d.status FROM build_effects e
+JOIN build_effects d ON d.build_id = e.build_id
+    AND d.name IN (SELECT jsonb_array_elements_text(e.deps))
+WHERE e.build_id = $1 AND e.name = $2;
 
 -- name: FinishEffect :exec
 UPDATE build_effects SET

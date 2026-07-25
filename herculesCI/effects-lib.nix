@@ -13,9 +13,22 @@
       # Pushable repository checkout at /build/checkout ($NIXBOT_EFFECT_CHECKOUT),
       # see docs/EFFECTS.md.
       checkout ? false,
+      # Scheduling metadata read via `nixbot-effects list`: attribute paths
+      # of effects that must succeed first, job name first
+      # (e.g. [ [ "default" "deploy-staging" ] ]), and a named lock
+      # serializing runs across builds.
+      after ? [ ],
+      lock ? null,
     }:
     pkgs.stdenvNoCC.mkDerivation {
-      inherit name effectScript userSetupScript;
+      inherit
+        name
+        effectScript
+        userSetupScript
+        ;
+      # Attr paths are nested lists, which cannot be coerced into
+      # derivation env vars; expose them via passthru instead.
+      passthru = { inherit after lock; };
       isEffect = true;
       __nixbot_effect_checkout = checkout;
       secretsMap = builtins.toJSON secretsMap;

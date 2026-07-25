@@ -12,6 +12,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 import pytest
+from nixbot_effects import EffectError
 
 from nixbot import build_run as build_run_mod
 from nixbot import db
@@ -24,6 +25,7 @@ from nixbot.build_scheduler import (
 from nixbot.config import Config
 from nixbot.db import BuildStatus
 from nixbot.db_gen import builds as builds_q
+from nixbot.effects import EffectMeta
 from nixbot.events import BuildResult, ChangeEvent, EvalReport, RepoInfo
 from nixbot.executor import attribute_log_path, effect_log_path
 from nixbot.gitrepo import FetchCredentials, RepoManager
@@ -32,7 +34,7 @@ from nixbot.models import CacheStatus
 from nixbot.nix_eval import EvalError, EvalResult, EvalSettings
 from nixbot.orchestrator import AttributeExecutor, EvalRunnerLike, Orchestrator
 from nixbot.recovery import fail_interrupted_effects
-from nixbot.work_queue import WorkQueue
+from nixbot.work_queue import WorkItem, WorkQueue
 
 from .support import FakeCache, attribute_statuses, git, insert_project, mk_job
 
@@ -279,7 +281,9 @@ def run_event(make_env: EnvFactory, upstream: Path) -> EventRunner:
 
 
 def patch_effects(
-    monkeypatch: pytest.MonkeyPatch, run_effect: object | None = None
+    monkeypatch: pytest.MonkeyPatch,
+    run_effect: object | None = None,
+    effects: dict[str, EffectMeta] | None = None,
 ) -> list[str]:
     """Replace effect discovery/run with a fake "deploy" effect.
 
@@ -287,8 +291,8 @@ def patch_effects(
     run_effect replaces the recording default."""
     ran: list[str] = []
 
-    async def fake_list(ctx: object) -> list[str]:
-        return ["deploy"]
+    async def fake_list(ctx: object) -> dict[str, EffectMeta]:
+        return effects or {"deploy": EffectMeta()}
 
     async def fake_run(ctx: object, name: str, log_write: object = None) -> bool:
         ran.append(name)
@@ -1357,6 +1361,222 @@ async def test_effect_crash_settles_the_row(
     assert row is not None
     assert row["status"] == "failed"
     assert row["finished_at"] is not None
+
+
+async def _effects_build(
+    make_env: EnvFactory, upstream: Path, name: str
+) -> tuple[Orchestrator, RepoInfo, BuildRecord]:
+    """One default-branch build with effects discovery already patched."""
+    add_commit(upstream, name)
+    orchestrator, _, project = await make_env(
+        FakeEvalRunner([mk_job("a")]), FakeExecutor(), name=name
+    )
+    build = await orchestrator.handle_change_event(
+        ChangeEvent(
+            repo=project,
+            branch="main",
+            commit_sha=git(upstream, "rev-parse", "HEAD"),
+        )
+    )
+    assert build is not None
+    return orchestrator, project, build
+
+
+async def test_locked_effect_gets_shared_dedup_key(
+    pool: asyncpg.Pool,
+    make_env: EnvFactory,
+    upstream: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Effects with a lock share a per-project dedup key so runs
+    serialize across builds; unlocked effects get per-effect keys and
+    can run in parallel."""
+    patch_effects(
+        monkeypatch,
+        effects={"deploy": EffectMeta(lock="hw-lab"), "notify": EffectMeta()},
+    )
+    _, _project, build = await _effects_build(make_env, upstream, "eff-lock")
+    keys = dict(
+        await pool.fetch(
+            "SELECT payload->>'name' AS name, dedup_key FROM work_queue"
+            " WHERE kind = 'effect' AND (payload->>'build_id')::bigint = $1",
+            build.id,
+        )
+    )
+    assert keys == {
+        "deploy": f"effect-lock-{build.project_id}-hw-lab",
+        "notify": f"build-{build.id}-effect-notify",
+    }
+
+
+async def test_effect_item_not_claimable_until_dep_settles(
+    pool: asyncpg.Pool,
+    make_env: EnvFactory,
+    upstream: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The claim query holds back an effect item while its dependency
+    is still pending or running, and releases it once the dependency
+    settled (here: failed, so the runner skips it)."""
+
+    async def failing_run(ctx: object, name: str, log_write: object = None) -> bool:
+        return False
+
+    patch_effects(
+        monkeypatch,
+        run_effect=failing_run,
+        effects={
+            "build-image": EffectMeta(),
+            "deploy": EffectMeta(after=("build-image",)),
+        },
+    )
+    orchestrator, project, build = await _effects_build(make_env, upstream, "eff-claim")
+    queue = WorkQueue(pool)
+
+    async def claim_effect() -> WorkItem | None:
+        # The build also queues non-effect items (e.g. reports); settle
+        # them so only effect readiness decides what is claimable.
+        while (item := await queue.claim_next()) is not None:
+            if item.kind == "effect":
+                return item
+            await queue.finish(item.id)
+        return None
+
+    first = await claim_effect()
+    assert first is not None
+    assert first.payload["name"] == "build-image"
+    # Dependency claimed but not settled: deploy stays unclaimable.
+    assert await claim_effect() is None
+    await orchestrator.run_effect_item(project, build, "build-image")
+    await queue.finish(first.id)
+    second = await claim_effect()
+    assert second is not None
+    assert second.payload["name"] == "deploy"
+    await orchestrator.run_effect_item(project, build, "deploy")
+    row = await pool.fetchrow(
+        "SELECT status FROM build_effects WHERE build_id = $1 AND name = 'deploy'",
+        build.id,
+    )
+    assert row["status"] == "skipped"
+
+
+async def test_effect_dep_failure_skips_dependent(
+    pool: asyncpg.Pool,
+    make_env: EnvFactory,
+    upstream: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An effect whose dependency failed is marked skipped and never
+    runs; skipped counts as a failure in the summary."""
+
+    async def failing_run(ctx: object, name: str, log_write: object = None) -> bool:
+        return False
+
+    patch_effects(
+        monkeypatch,
+        run_effect=failing_run,
+        effects={
+            "build-image": EffectMeta(),
+            "deploy": EffectMeta(after=("build-image",)),
+        },
+    )
+    orchestrator, project, build = await _effects_build(make_env, upstream, "eff-skip")
+    await orchestrator.run_effect_item(project, build, "build-image")
+    await orchestrator.run_effect_item(project, build, "deploy")
+    rows = {
+        r["name"]: (r["status"], r["error"])
+        for r in await pool.fetch(
+            "SELECT name, status, error FROM build_effects WHERE build_id = $1",
+            build.id,
+        )
+    }
+    assert rows["build-image"][0] == "failed"
+    assert rows["deploy"][0] == "skipped"
+    assert "build-image" in rows["deploy"][1]
+
+
+async def test_lock_serializes_builds_without_interleaving(
+    pool: asyncpg.Pool,
+    make_env: EnvFactory,
+    upstream: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Effects on one lock run in build order: a later build's locked
+    effect must not start while an earlier build still has a pending
+    effect on that lock, even if the later build's dependency settled
+    first."""
+    patch_effects(
+        monkeypatch,
+        effects={
+            "build-image": EffectMeta(),
+            "deploy": EffectMeta(after=("build-image",), lock="prod"),
+        },
+    )
+    orchestrator, project, build1 = await _effects_build(make_env, upstream, "eff-fifo")
+    add_commit(upstream, "eff-fifo-2")
+    build2 = await orchestrator.handle_change_event(
+        ChangeEvent(
+            repo=project,
+            branch="main",
+            commit_sha=git(upstream, "rev-parse", "HEAD"),
+        )
+    )
+    assert build2 is not None
+    queue = WorkQueue(pool)
+
+    async def claim_effect() -> WorkItem | None:
+        while (item := await queue.claim_next()) is not None:
+            if item.kind == "effect":
+                return item
+            await queue.finish(item.id)
+        return None
+
+    def ident(item: WorkItem) -> tuple[int, str]:
+        return (item.payload["build_id"], item.payload["name"])
+
+    images = [await claim_effect(), await claim_effect()]
+    assert {ident(i) for i in images if i is not None} == {
+        (build1.id, "build-image"),
+        (build2.id, "build-image"),
+    }
+    # Settle build 2's dependency first: its deploy is ready before
+    # build 1's, but build 1 owns the front of the 'prod' lock queue.
+    b1_image, b2_image = sorted(
+        (i for i in images if i is not None), key=lambda i: i.payload["build_id"]
+    )
+    await orchestrator.run_effect_item(project, build2, "build-image")
+    await queue.finish(b2_image.id)
+    assert await claim_effect() is None
+    await orchestrator.run_effect_item(project, build1, "build-image")
+    await queue.finish(b1_image.id)
+    first_deploy = await claim_effect()
+    assert first_deploy is not None
+    assert ident(first_deploy) == (build1.id, "deploy")
+
+
+async def test_effect_dep_cycle_fails_discovery(
+    pool: asyncpg.Pool,
+    make_env: EnvFactory,
+    upstream: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A dependency cycle is a repo mistake: discovery fails, no effect
+    rows are created, and the (already reported) build stays green."""
+
+    async def cyclic_list(ctx: object) -> dict[str, EffectMeta]:
+        msg = "dependency cycle between effects"
+        raise EffectError(msg)
+
+    patch_effects(monkeypatch)
+    monkeypatch.setattr(effects_run_mod, "list_effects", cyclic_list)
+    _, _, build = await _effects_build(make_env, upstream, "eff-cycle")
+    assert await build_status(pool, build.id) == BuildStatus.SUCCEEDED
+    assert (
+        await pool.fetchval(
+            "SELECT count(*) FROM build_effects WHERE build_id = $1", build.id
+        )
+        == 0
+    )
 
 
 async def test_failed_effect_reports_failure_status(

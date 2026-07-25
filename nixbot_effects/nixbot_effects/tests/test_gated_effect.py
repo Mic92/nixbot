@@ -40,6 +40,8 @@ FLAKE_NIX = """\
             dependencies = drv "dependencies";
             prebuilt = drv "prebuilt";
           };
+          # nested effect, addressed by attribute path
+          env.staging = drv "staging";
         };
       };
     };
@@ -55,7 +57,7 @@ async def _instantiate(effect: str, repo: Path, tmp_path: Path) -> tuple[str, bo
 async def test_gated_effect_selects_dependencies_and_skips_run(tmp_path: Path) -> None:
     repo, _rev = init_repo(tmp_path, {"flake.nix": FLAKE_NIX})
 
-    drv_path, should_run = await _instantiate("gated", repo, tmp_path)
+    drv_path, should_run = await _instantiate("default.gated", repo, tmp_path)
     assert drv_path.endswith("-dependencies.drv")
     assert should_run is False
 
@@ -63,7 +65,11 @@ async def test_gated_effect_selects_dependencies_and_skips_run(tmp_path: Path) -
 async def test_runnable_and_bare_effects_run(tmp_path: Path) -> None:
     repo, _rev = init_repo(tmp_path, {"flake.nix": FLAKE_NIX})
 
-    for effect in ("runnable", "bare"):
+    for effect, drv_name in (
+        ("default.runnable", "runnable"),
+        ("default.bare", "bare"),
+        ("default.env.staging", "staging"),
+    ):
         drv_path, should_run = await _instantiate(effect, repo, tmp_path)
-        assert drv_path.endswith(f"-{effect}.drv")
+        assert drv_path.endswith(f"-{drv_name}.drv")
         assert should_run is True

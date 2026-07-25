@@ -81,6 +81,7 @@ ATTR_GROUPS: dict[str, tuple[str, ...]] = {
     "cancelled": ("cancelled",),
     "succeeded": ("succeeded",),
     "skipped": ("skipped_local",),
+    "ignored": ("ignored_failure",),
 }
 INLINE_GROUPS = ("failed", "building")
 

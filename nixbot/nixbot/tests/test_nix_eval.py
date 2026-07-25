@@ -46,7 +46,14 @@ def test_eval_command(tmp_path: Path) -> None:
     assert "--workers" in cmd
     assert cmd[cmd.index("--workers") + 1] == "4"
     assert cmd[cmd.index("--max-memory-size") + 1] == "1024"
-    assert cmd[cmd.index("--flake") + 1] == ".#checks"
+    assert cmd[cmd.index("--flake") + 1] == "."
+    # The --select expression maps the flake's herculesCI onPush jobs (or
+    # the configured attribute as job "default") to the attrs to build.
+    select = cmd[cmd.index("--select") + 1]
+    assert json.dumps(json.dumps(["checks"])) in select
+    assert "herculesCI" in select
+    # Build modifiers (buildDependenciesOnly, ...) are exported per drv.
+    assert "requireFailure" in cmd[cmd.index("--apply") + 1]
     # Flakes and nix-command must be opted-in for hosts where the
     # system nix.conf hasn't enabled them yet.
     assert "nix-command flakes" in cmd
@@ -59,8 +66,13 @@ def test_eval_command(tmp_path: Path) -> None:
         settings,
     )
     assert "--show-trace" in cmd
-    assert cmd[cmd.index("--flake") + 1] == "sub#hydraJobs"
+    assert cmd[cmd.index("--flake") + 1] == "sub"
+    assert json.dumps(json.dumps(["hydraJobs"])) in cmd[cmd.index("--select") + 1]
     assert cmd[cmd.index("--reference-lock-file") + 1] == "alt.lock"
+
+    # A dotted attribute selects the nested path, like `--flake .#a.b` did.
+    cmd = build_eval_command(BranchConfig(attribute="hydraJobs.ci"), settings)
+    assert json.dumps(json.dumps(["hydraJobs", "ci"])) in cmd[cmd.index("--select") + 1]
 
 
 def test_sandbox_command_mounts(tmp_path: Path) -> None:
@@ -172,6 +184,12 @@ async def test_eval_runner_integration(tmp_path: Path) -> None:
                 args = [ "-c" "echo ok > $out" ];
               }
             );
+            hydraJobs.ci.x86_64-linux.nested = derivation {
+              name = "nested";
+              system = "x86_64-linux";
+              builder = "/bin/sh";
+              args = [ "-c" "echo nested > $out" ];
+            };
           };
         }
         """
@@ -191,8 +209,82 @@ async def test_eval_runner_integration(tmp_path: Path) -> None:
     )
     assert len(result.jobs) == 1
     job = result.jobs[0]
-    assert job.attr == "x86_64-linux.ok"  # type: ignore[union-attr]
+    assert job.attr == "default.checks.x86_64-linux.ok"  # type: ignore[union-attr]
     assert any("eval warning here" in line for line in seen)
+
+    # Dotted attribute config selects the nested path.
+    result = await EvalRunner().run(
+        flake, BranchConfig(attribute="hydraJobs.ci"), settings
+    )
+    assert [j.attr for j in result.jobs] == ["default.hydraJobs.ci.x86_64-linux.nested"]
+
+
+@pytest.mark.skipif(
+    shutil.which("nix-eval-jobs") is None or shutil.which("nix") is None,
+    reason="nix-eval-jobs not available",
+)
+async def test_eval_runner_hercules_ci_jobs(tmp_path: Path) -> None:
+    """Every onPush job is built under its job prefix in addition to the
+    checks fallback; effects and opted-out attrsets are excluded and
+    per-system attrsets are filtered by ciSystems."""
+    flake = tmp_path / "repo"
+    flake.mkdir()
+    (flake / "flake.nix").write_text(
+        """
+        {
+          outputs = { self }: {
+            checks.x86_64-linux.extra = derivation {
+              name = "extra";
+              system = "x86_64-linux";
+              builder = "/bin/sh";
+              args = [ "-c" "echo extra > $out" ];
+            };
+            herculesCI = { primaryRepo, ... }: {
+              ciSystems = [ "x86_64-linux" ];
+              onPush.default.outputs = {
+                checks.x86_64-linux.ok = derivation {
+                  name = "ok-" + primaryRepo.shortRev;
+                  system = "x86_64-linux";
+                  builder = "/bin/sh";
+                  args = [ "-c" "echo ok > $out" ];
+                };
+                checks.aarch64-linux.skipped-system = derivation {
+                  name = "skipped";
+                  system = "aarch64-linux";
+                  builder = "/bin/sh";
+                  args = [ "-c" "echo no > $out" ];
+                };
+                effects.deploy = { isEffect = true; };
+                ignored = { recurseForDerivations = false; hidden = self; };
+              };
+              onPush.docs.outputs.site = derivation {
+                name = "site";
+                system = "x86_64-linux";
+                builder = "/bin/sh";
+                args = [ "-c" "echo site > $out" ];
+              };
+            };
+          };
+        }
+        """
+    )
+    settings = EvalSettings(
+        gc_roots_dir=tmp_path / "gcroots",
+        sandbox=False,
+        systemd_scope=False,
+        hercules_args={
+            "primaryRepo": {"rev": "abcdef1234567", "shortRev": "abcdef1"},
+            "rev": "abcdef1234567",
+            "shortRev": "abcdef1",
+        },
+    )
+    result = await EvalRunner().run(flake, BranchConfig(), settings)
+    attrs = {job.attr: job.name for job in result.jobs}  # type: ignore[union-attr]
+    assert attrs == {
+        "default.checks.x86_64-linux.extra": "extra",
+        "default.checks.x86_64-linux.ok": "ok-abcdef1",
+        "docs.site": "site",
+    }
 
 
 async def test_stderr_noise_filtered_and_warnings_reach_callback(

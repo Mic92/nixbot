@@ -48,7 +48,7 @@ FAILED_ATTRIBUTE_STATUSES = frozenset(
     {"failed", "failed_eval", "dependency_failed", "cached_failure"}
 )
 TERMINAL_ATTRIBUTE_STATUSES = FAILED_ATTRIBUTE_STATUSES | frozenset(
-    {"succeeded", "cancelled", "skipped_local"}
+    {"succeeded", "cancelled", "skipped_local", "ignored_failure"}
 )
 
 

@@ -9,7 +9,6 @@ let
   # (postgres + nixbot).
   devProcessCompose = pkgs.python3.pkgs.callPackage ../packages/process-compose.nix {
     nixbot = self.packages.${system}.nixbot;
-    nixbot-effects = self.packages.${system}.nixbot-effects or null;
   };
   # sqlc wrapped with the nix-pinned codegen plugin (same version as
   # the sqlc-generated flake check); works offline.
