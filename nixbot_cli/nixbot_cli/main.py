@@ -221,6 +221,35 @@ def cmd_build_view(client: NixbotClient, args: argparse.Namespace) -> int:
 RUNNING_STATUSES = {"pending", "evaluating", "building"}
 
 
+def log_url(
+    client: NixbotClient, repo: RepoRef, number: int, attr: str, *, raw: bool = False
+) -> str:
+    base = str(client.http.base_url).rstrip("/")
+    logs = f"{base}/repos/{repo}/builds/{number}/logs"
+    return f"{logs}/raw/{attr}" if raw else f"{logs}/{attr}"
+
+
+def print_failures(  # noqa: PLR0913
+    client: NixbotClient, repo: RepoRef, number: int, status: str, finished: int
+) -> None:
+    """Result line plus a failure block with a clickable log URL per
+    failed attribute."""
+    summary = client.failures(repo, number, tail=20)
+    counts = f"{finished} finished, {len(summary['failures'])} failed"
+    print(f"{status_str(status)} build #{number}: {counts}")
+    if summary.get("error"):
+        print(summary["error"])
+    for failure in summary["failures"]:
+        print(f"\n── {failure['attr']} ── {status_str(failure['status'])}")
+        url = log_url(
+            client, repo, number, failure["attr"], raw=not sys.stdout.isatty()
+        )
+        print(f"log: {url}")
+        if failure.get("error"):
+            print(failure["error"])
+        if failure.get("log_tail"):
+            print(failure["log_tail"])
+
 def cmd_build_watch(client: NixbotClient, args: argparse.Namespace) -> int:
     repo = resolve_repo(client, args.repo)
     number = resolve_build(client, repo, args.number)
@@ -257,17 +286,7 @@ def watch_build(client: NixbotClient, repo: RepoRef, number: int) -> int:
         if next(events, None) is None:
             events = None
 
-    summary = client.failures(repo, number, tail=20)
-    counts = f"{finished} finished, {len(summary['failures'])} failed"
-    print(f"{status_str(build['status'])} build #{number}: {counts}")
-    if summary.get("error"):
-        print(summary["error"])
-    for failure in summary["failures"]:
-        print(f"\n── {failure['attr']} ── {status_str(failure['status'])}")
-        if failure.get("error"):
-            print(failure["error"])
-        if failure.get("log_tail"):
-            print(failure["log_tail"])
+    print_failures(client, repo, number, build["status"], finished)
     return EXIT_BUILD_FAILED if build["status"] in FAILED_STATUSES else EXIT_OK
 
 
