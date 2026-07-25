@@ -79,6 +79,7 @@
         pkgs.python3.pkgs.zstandard
         pkgs.python3.pkgs.python-multipart
         pkgs.python3.pkgs.playwright
+        pkgs.python3.pkgs.pyte
       ];
     };
   };

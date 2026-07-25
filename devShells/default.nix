@@ -38,6 +38,7 @@ in
           ps.pytest-xdist
           ps.pytest-benchmark
           ps.playwright
+          ps.pyte
         ]
         ++ self.packages.${system}.nixbot.dependencies
       ))

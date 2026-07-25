@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, NoReturn
 
 from .api import ApiError, NixbotClient, RepoRef
 from .config import Settings, config_path
+from .watch_tty import TtyWatch
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
@@ -250,9 +251,15 @@ def print_failures(  # noqa: PLR0913
         if failure.get("log_tail"):
             print(failure["log_tail"])
 
+
 def cmd_build_watch(client: NixbotClient, args: argparse.Namespace) -> int:
     repo = resolve_repo(client, args.repo)
     number = resolve_build(client, repo, args.number)
+    if sys.stdout.isatty():
+        watcher = TtyWatch(client, repo, number, sys.stdout)
+        status = watcher.run()
+        print_failures(client, repo, number, status, watcher.finished)
+        return EXIT_BUILD_FAILED if status in FAILED_STATUSES else EXIT_OK
     return watch_build(client, repo, number)
 
 
