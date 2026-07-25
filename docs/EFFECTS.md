@@ -90,7 +90,7 @@ nixbot for a ready-made working copy instead of cloning inside the sandbox:
 
 ```nix
 effects.flake-update = mkEffect {
-  __nixbot_effect_checkout = true;
+  checkout = true;
   effectScript = ''
     nix flake update
     git commit -am "flake.lock: update"
@@ -105,8 +105,10 @@ working directory (and exported as `NIXBOT_EFFECT_CHECKOUT`). The clone's
 `origin` uses the forge token, so `git push` works without extra secrets. The
 clone is removed after the effect finishes.
 
-Effects without `__nixbot_effect_checkout` get no checkout. If the repository
-has no forge token to push with, the effect fails with an error.
+The `checkout` argument of `mkEffect` sets the `__nixbot_effect_checkout`
+derivation attribute; effects built without `mkEffect` can set the attribute
+directly. Effects that do not set it get no checkout. If the repository has no
+forge token to push with, the effect fails with an error.
 
 ## Buildbot secrets configuration
 
