@@ -260,7 +260,7 @@ def test_settings_load(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     hosts.write_text('["https://ci.example.org"]\ntoken = "bnix_abc"\n')
     assert Settings.load() == Settings("https://ci.example.org", "bnix_abc")
     monkeypatch.setenv("NIXBOT_TOKEN", "bnix_env")
-    assert Settings.load().token == "bnix_env"  # noqa: S105 (test credential)
+    assert Settings.load().token == "bnix_env"
 
 
 def test_settings_token_command(
@@ -274,7 +274,7 @@ def test_settings_token_command(
     hosts.write_text(
         '["https://ci.example.org"]\ntoken_command = "echo bnix_from_pass"\n'
     )
-    assert Settings.load().token == "bnix_from_pass"  # noqa: S105 (test credential)
+    assert Settings.load().token == "bnix_from_pass"
 
     hosts.write_text('["https://ci.example.org"]\ntoken_command = "false"\n')
     with pytest.raises(ValueError, match="token_command"):

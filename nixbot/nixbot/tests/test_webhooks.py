@@ -40,7 +40,7 @@ from .support import git, init_upstream
 if TYPE_CHECKING:
     from pathlib import Path
 
-SECRET = "hook-secret"  # noqa: S105
+SECRET = "hook-secret"
 
 
 def sign_github(body: bytes) -> str:

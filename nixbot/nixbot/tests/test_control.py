@@ -235,7 +235,7 @@ def test_repo_writer_can_control_without_admin_or_authorship(
             harness.post(
                 "/repos/github/acme/widget/builds/1/restart",
                 frank,
-                token="tok-frank",  # noqa: S106 (test forge token)
+                token="tok-frank",
             ).status_code
             == 303
         )
@@ -721,7 +721,7 @@ def test_webhook_secret_regeneration(harness: WebHarness) -> None:
         )
 
     new_secret = harness.run(stored())
-    assert new_secret != "s3cret"  # noqa: S105 (seeded test value)
+    assert new_secret != "s3cret"
     assert new_secret in rotated.text  # shown exactly here, once
 
 
