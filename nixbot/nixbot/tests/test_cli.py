@@ -405,3 +405,71 @@ def test_sanitize_line_defuses_terminal_control_output() -> None:
 
     progress = "downloading   0%\rdownloading 100%"
     assert sanitize_line(progress) == "downloading 100%"
+
+
+def test_build_watch_attr_waits_for_selected_attributes(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """--attr waits only for the given attributes and mirrors their result
+    in the exit code, with a log tail and URL for the failed one."""
+    build = {"id": 9, "number": 5, "status": "building"}
+    attrs = [
+        {
+            "id": 1,
+            "attr": "quick",
+            "status": "succeeded",
+            "cached": True,
+            "finished_at": "2026-01-01T00:00:01Z",
+        },
+        {
+            "id": 2,
+            "attr": "slow",
+            "status": "building",
+            "cached": False,
+            "finished_at": None,
+        },
+        {
+            "id": 3,
+            "attr": "other",
+            "status": "building",
+            "cached": False,
+            "finished_at": None,
+        },
+    ]
+    hint = 'data: {"build_id":9,"attr":"slow","status":"failed"}\n\n'
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/builds/5"):
+            return httpx.Response(200, json={"build": build, "attributes": attrs})
+        if path == "/api/events":
+            attrs[1] = {
+                "id": 2,
+                "attr": "slow",
+                "status": "failed",
+                "cached": False,
+                "error": "builder failed",
+                "finished_at": "2026-01-01T00:00:02Z",
+            }
+            return httpx.Response(
+                200, content=hint, headers={"content-type": "text/event-stream"}
+            )
+        if path.endswith("/builds/5/attrs"):
+            done = [a for a in attrs if a["finished_at"]]
+            return httpx.Response(200, json={"build": build, "items": done})
+        if path.endswith("/logs/slow/text"):
+            return httpx.Response(200, text="error: boom\n")
+        raise AssertionError(path)
+
+    client = NixbotClient(
+        http=httpx.Client(
+            base_url="http://test", transport=httpx.MockTransport(handler)
+        )
+    )
+    assert cli.watch_attrs(client, REPO, 5, ["quick", "slow"]) == 1
+    out = capsys.readouterr().out
+    assert "✓ cached quick" in out
+    assert "✗ failed slow" in out
+    assert "logs/raw/slow" in out
+    assert "error: boom" in out
+    assert "other" not in out

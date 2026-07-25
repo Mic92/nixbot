@@ -66,7 +66,8 @@ nbo repo enable github/acme/widget      # admin token required
 nbo build list --branch main
 nbo build view 412                      # status, attribute summary, failed attributes
 nbo build watch 412                     # follow until it finishes, exit 1 on failure
-nbo build restart 412 --attr checks.x86_64-linux.treefmt
+nbo build watch 412 --attr treefmt --attr nixos-eve   # wait only for these attributes
+nbo build restart 412 --attr x86_64-linux.treefmt     # a substring like "treefmt" works too
 nbo build restart 412 --effects
 nbo build cancel 412
 ```

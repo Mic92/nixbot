@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import subprocess
@@ -215,6 +216,8 @@ def print_failures(  # noqa: PLR0913
 def cmd_build_watch(client: NixbotClient, args: argparse.Namespace) -> int:
     repo = resolve_repo(client, args.repo)
     number = resolve_build(client, repo, args.number)
+    if args.attr:
+        return watch_attrs(client, repo, number, args.attr)
     if sys.stdout.isatty():
         watcher = TtyWatch(client, repo, number, sys.stdout)
         status = watcher.run()
@@ -257,6 +260,65 @@ def watch_build(client: NixbotClient, repo: RepoRef, number: int) -> int:
     return EXIT_BUILD_FAILED if build["status"] in FAILED_STATUSES else EXIT_OK
 
 
+def watch_attrs(
+    client: NixbotClient, repo: RepoRef, number: int, selectors: list[str]
+) -> int:
+    """Wait for the given attributes to finish. Prints one verdict per
+    attribute, and on failure its log tail plus a log URL. Exit 1 when
+    any of them failed."""
+    detail = client.build(repo, number)
+    watched = {
+        a["attr"]: a for s in selectors for a in [_match_attr(detail["attributes"], s)]
+    }
+    failed = False
+
+    def report(attr: dict) -> None:
+        nonlocal failed
+        verdict = status_str(attr["status"], cached=bool(attr.get("cached")))
+        print(f"{verdict} {attr['attr']}", flush=True)
+        if attr["status"] not in FAILED_STATUSES:
+            return
+        failed = True
+        if attr.get("error"):
+            print(attr["error"])
+        print(f"log: {client.log_url(repo, number, attr['attr'], raw=True)}")
+        with contextlib.suppress(ApiError):
+            print(sanitize_block(client.log_text(repo, number, attr["attr"], tail=20)))
+
+    pending = {}
+    for name, attr in watched.items():
+        if attr["status"] in RUNNING_STATUSES:
+            pending[name] = attr
+        else:
+            report(attr)
+    events: Iterator[dict] | None = None
+    while pending:
+        if events is None:
+            events = client.events(build=detail["build"]["id"])
+        if next(events, None) is None:
+            events = None
+        delta = client.finished_attrs(repo, number)
+        for a in delta["items"]:
+            if a["attr"] in pending:
+                del pending[a["attr"]]
+                report(a)
+        if pending and delta["build"]["status"] not in RUNNING_STATUSES:
+            # The build ended without them finishing (e.g. eval failure).
+            final = client.build(repo, number)["attributes"]
+            for name in list(pending):
+                report(_match_attr(final, name))
+            break
+
+    return EXIT_BUILD_FAILED if failed else EXIT_OK
+
+
+def resolve_attr(
+    client: NixbotClient, repo: RepoRef, number: int, selector: str
+) -> str:
+    """Full attribute name for a selector (exact, substring or drv path)."""
+    return _match_attr(client.build(repo, number)["attributes"], selector)["attr"]
+
+
 def cmd_build_restart(client: NixbotClient, args: argparse.Namespace) -> int:
     repo = resolve_repo(client, args.repo)
     number = resolve_build(client, repo, args.number)
@@ -264,8 +326,9 @@ def cmd_build_restart(client: NixbotClient, args: argparse.Namespace) -> int:
         client.restart_effects(repo, number)
         print(f"restarting effects of build #{number}")
     elif args.attr:
-        client.restart_attr(repo, number, args.attr)
-        print(f"restarting {args.attr} of build #{number}")
+        attr = resolve_attr(client, repo, number, args.attr)
+        client.restart_attr(repo, number, attr)
+        print(f"restarting {attr} of build #{number}")
     else:
         client.restart_build(repo, number)
         print(f"restarting build #{number}")
@@ -276,8 +339,9 @@ def cmd_build_cancel(client: NixbotClient, args: argparse.Namespace) -> int:
     repo = resolve_repo(client, args.repo)
     number = resolve_build(client, repo, args.number)
     if args.attr:
-        client.cancel_attr(repo, number, args.attr)
-        print(f"cancelling {args.attr} of build #{number}")
+        attr = resolve_attr(client, repo, number, args.attr)
+        client.cancel_attr(repo, number, attr)
+        print(f"cancelling {attr} of build #{number}")
     else:
         client.cancel_build(repo, number)
         print(f"cancelling build #{number}")
@@ -449,11 +513,18 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
   nbo build watch                   the current commit's build, exit 1 on failure
   nbo build watch 412               build #412 of the repo in the CWD
   nbo build watch 412 -R github/Mic92/dotfiles   without a local checkout
+  nbo build watch 412 --attr treefmt --attr nixos-eve   wait only for these, exit 1 if any fails
 
 On a terminal this shows finished attributes above a live view of the
 running ones. Piped or in CI it prints one line per finished attribute.""",
     )
     b_watch.add_argument("number", type=int, nargs="?")
+    b_watch.add_argument(
+        "--attr",
+        action="append",
+        metavar="ATTR|DRV-PATH",
+        help="wait only for this attribute (repeatable)",
+    )
     _add_repo_arg(b_watch)
     b_watch.set_defaults(func=cmd_build_watch)
 
@@ -464,7 +535,7 @@ running ones. Piped or in CI it prints one line per finished attribute.""",
         epilog="""examples:
   nbo build restart                 rebuild the current commit's build
   nbo build restart 412             rebuild everything of build #412
-  nbo build restart 412 --attr x86_64-linux.nixos-eve   one attribute only
+  nbo build restart 412 --attr nixos-eve   one attribute only (substring is enough)
   nbo build restart 412 --effects   re-run the effects""",
     )
     b_restart.add_argument("number", type=int, nargs="?")
