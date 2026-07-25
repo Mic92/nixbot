@@ -441,13 +441,31 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     b_view.add_argument("--web", action="store_true", help="open in the browser")
     b_view.set_defaults(func=cmd_build_view)
 
-    b_watch = build.add_parser("watch", help="follow a build until it finishes")
+    b_watch = build.add_parser(
+        "watch",
+        help="follow a build until it finishes",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""examples:
+  nbo build watch                   the current commit's build, exit 1 on failure
+  nbo build watch 412               build #412 of the repo in the CWD
+  nbo build watch 412 -R github/Mic92/dotfiles   without a local checkout
+
+On a terminal this shows finished attributes above a live view of the
+running ones. Piped or in CI it prints one line per finished attribute.""",
+    )
     b_watch.add_argument("number", type=int, nargs="?")
     _add_repo_arg(b_watch)
     b_watch.set_defaults(func=cmd_build_watch)
 
     b_restart = build.add_parser(
-        "restart", help="restart a build, attribute or effects"
+        "restart",
+        help="restart a build, attribute or effects",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""examples:
+  nbo build restart                 rebuild the current commit's build
+  nbo build restart 412             rebuild everything of build #412
+  nbo build restart 412 --attr x86_64-linux.nixos-eve   one attribute only
+  nbo build restart 412 --effects   re-run the effects""",
     )
     b_restart.add_argument("number", type=int, nargs="?")
     _add_repo_arg(b_restart)
@@ -461,7 +479,19 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     b_cancel.add_argument("--attr", help="cancel only this attribute")
     b_cancel.set_defaults(func=cmd_build_cancel)
 
-    log = sub.add_parser("log", help="failure summary or an attribute's log")
+    log = sub.add_parser(
+        "log",
+        help="failure summary or an attribute's log",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""examples:
+  nbo log                           why the current commit's build failed
+  nbo log 412                       failure summary of build #412
+  nbo log 412 nixos-eve             log of the attribute matching "nixos-eve"
+  nbo log 412 nixos-eve --tail 100  only the last 100 lines
+  nbo log 412 nixos-eve --follow    stream while it is still building
+  nbo log 412 /nix/store/…-foo.drv  log of one derivation by store path
+  nbo log 412 -R github/Mic92/dotfiles   without a local checkout""",
+    )
     log.add_argument("number", type=int, nargs="?")
     log.add_argument(
         "attr",
