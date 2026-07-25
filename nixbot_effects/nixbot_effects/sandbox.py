@@ -106,7 +106,7 @@ def effect_checkout_mount(
         "--bind",
         str(effect_checkout),
         EFFECT_CHECKOUT_PATH,
-        # Overrides the default /build working directory (last --chdir wins).
+        # Replaces the default /build working directory.
         "--chdir",
         EFFECT_CHECKOUT_PATH,
     ], {"NIXBOT_EFFECT_CHECKOUT": EFFECT_CHECKOUT_PATH}
