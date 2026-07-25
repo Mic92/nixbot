@@ -76,25 +76,24 @@ def select_secrets(
 
 
 # Effect derivations opt into the runner-prepared repository clone by
-# declaring the mount destination under this environment attribute.
+# setting this environment attribute to true.
 EFFECT_CHECKOUT_ATTR = "__nixbot_effect_checkout"
+# Where the clone is mounted inside the sandbox.
+EFFECT_CHECKOUT_PATH = "/build/checkout"
 
 
 def effect_checkout_mount(
     drv_env: dict[str, str], effect_checkout: Path | None, etc_dir: Path | None = None
 ) -> tuple[list[str], dict[str, str]]:
-    """bwrap bind arguments and environment for the pre-prepared
-    repository checkout requested via __nixbot_effect_checkout."""
-    dest = drv_env.get(EFFECT_CHECKOUT_ATTR)
-    if not dest:
+    """bwrap arguments and environment for the pre-prepared repository
+    checkout requested via __nixbot_effect_checkout. The checkout is
+    mounted at EFFECT_CHECKOUT_PATH and becomes the working directory."""
+    if not drv_env.get(EFFECT_CHECKOUT_ATTR):
         return [], {}
-    if not dest.startswith("/"):
-        msg = f"{EFFECT_CHECKOUT_ATTR} must be an absolute path, got {dest!r}"
-        raise EffectError(msg)
     if effect_checkout is None:
         msg = (
-            f"effect declares {EFFECT_CHECKOUT_ATTR} = {dest!r} but the runner"
-            " provided no --effect-checkout clone"
+            f"effect declares {EFFECT_CHECKOUT_ATTR} but the runner"
+            " provided no checkout clone"
         )
         raise EffectError(msg)
     if etc_dir is not None:
@@ -103,7 +102,14 @@ def effect_checkout_mount(
         # ownership". etc_dir is bound at /etc, so this is the system
         # gitconfig inside the sandbox.
         (etc_dir / "gitconfig").write_text("[safe]\n\tdirectory = *\n")
-    return ["--bind", str(effect_checkout), dest], {"NIXBOT_EFFECT_CHECKOUT": dest}
+    return [
+        "--bind",
+        str(effect_checkout),
+        EFFECT_CHECKOUT_PATH,
+        # Overrides the default /build working directory (last --chdir wins).
+        "--chdir",
+        EFFECT_CHECKOUT_PATH,
+    ], {"NIXBOT_EFFECT_CHECKOUT": EFFECT_CHECKOUT_PATH}
 
 
 def sandbox_env(drv_env: dict[str, str]) -> dict[str, str]:

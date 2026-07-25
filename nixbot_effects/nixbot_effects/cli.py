@@ -197,8 +197,8 @@ def _add_common_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--effect-checkout",
         type=Path,
-        help="Pre-prepared repository clone to mount at the effect's"
-        " __nixbot_effect_checkout path",
+        help="Pre-prepared repository clone mounted for effects that"
+        " declare __nixbot_effect_checkout",
     )
     parser.add_argument(
         "--secrets",
