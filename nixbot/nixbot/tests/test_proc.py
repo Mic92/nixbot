@@ -13,8 +13,7 @@ import time
 from typing import TYPE_CHECKING
 
 import pytest
-
-from nixbot.proc import ProcessGroup
+from nixbot_effects.proc import ProcessGroup
 
 if TYPE_CHECKING:
     from pathlib import Path

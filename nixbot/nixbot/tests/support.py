@@ -240,7 +240,16 @@ def ephemeral_postgres(
     )
     try:
         deadline = time.monotonic() + 30
-        while not (sockdir / ".s.PGSQL.5432").exists():
+        while (
+            subprocess.run(  # noqa: S603
+                ["pg_isready", "-h", str(sockdir), "-U", "test"],
+                check=False,
+                capture_output=True,
+            ).returncode
+            != 0
+        ):
+            # The socket appears before recovery finishes; createdb would
+            # fail with "the database system is starting up".
             if time.monotonic() > deadline:
                 msg = "postgres did not start"
                 raise RuntimeError(msg)

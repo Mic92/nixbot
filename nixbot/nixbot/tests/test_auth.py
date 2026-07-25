@@ -548,7 +548,7 @@ def test_github_oauth_scope_and_enterprise_urls() -> None:
 
     ghe = github_oauth("cid", "cs", "https://ghe.corp.example/api/v3")
     assert ghe.authorize_url == "https://ghe.corp.example/login/oauth/authorize"
-    assert ghe.token_url == "https://ghe.corp.example/login/oauth/access_token"  # noqa: S105
+    assert ghe.token_url == "https://ghe.corp.example/login/oauth/access_token"
     assert ghe.userinfo_url == "https://ghe.corp.example/api/v3/user"
 
 
@@ -609,10 +609,10 @@ async def test_oidc_exchange_uses_basic_auth() -> None:
     provider = OAuthProvider(
         name="oidc",
         authorize_url="https://id.example.com/auth",
-        token_url="https://id.example.com/token",  # noqa: S106
+        token_url="https://id.example.com/token",
         userinfo_url="https://id.example.com/userinfo",
         client_id="cid",
-        client_secret="cs",  # noqa: S106
+        client_secret="cs",
         scope="openid",
         username_field="preferred_username",
         provider_id="oidc:id.example.com",
@@ -711,10 +711,10 @@ async def test_oauth_callback_filters_session_groups() -> None:
     provider = OAuthProvider(
         name="oidc",
         authorize_url="https://id.test/auth",
-        token_url="https://id.test/token",  # noqa: S106
+        token_url="https://id.test/token",
         userinfo_url="https://id.test/userinfo",
         client_id="cid",
-        client_secret="cs",  # noqa: S106
+        client_secret="cs",
         scope="openid groups",
         username_field="preferred_username",
         provider_id="oidc:id.test",

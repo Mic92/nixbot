@@ -9,7 +9,10 @@ keeps the module dependency graph acyclic.
 from __future__ import annotations
 
 import logging
+from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
+
+from nixbot_effects import EffectError
 
 from .db_gen import builds as builds_q
 from .db_gen import maintenance as q
@@ -17,7 +20,7 @@ from .db_gen import web as web_q
 from .db_gen import work_queue as wq
 from .effects import (
     EffectsContext,
-    EffectsError,
+    effect_push_url,
     effects_context,
     list_effects,
     run_effect,
@@ -28,11 +31,12 @@ from .executor import failure_excerpt
 from .repo_config import CONFIG_FILENAMES, BranchConfig
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
     from pathlib import Path
 
     from .db import BuildRecord
     from .events import ChangeEvent, RepoInfo
-    from .gitrepo import FetchCredentials
+    from .gitrepo import FetchCredentials, RepoManager
     from .orchestrator import Orchestrator
 
 logger = logging.getLogger(__name__)
@@ -96,9 +100,9 @@ async def maybe_run_effects(
     )
     try:
         names = await list_effects(ctx)
-    except (EffectsError, OSError):
-        # OSError: nixbot-effects not installed. Effects are
-        # best-effort and must not fail the (already reported) build.
+    except (EffectError, OSError):
+        # OSError: nix/git missing from PATH. Effects are best-effort
+        # and must not fail the (already reported) build.
         logger.exception("effects discovery failed", extra={"build_id": build.id})
         return
     finally:
@@ -129,6 +133,33 @@ async def _enqueue_effects(
     )
 
 
+@asynccontextmanager
+async def effect_checkout(
+    repos: RepoManager,
+    info: RepoInfo,
+    worktree_path: Path,
+    commit: str,
+    credentials: FetchCredentials | None,
+) -> AsyncIterator[Path | None]:
+    """Pushable clone for effects declaring __nixbot_effect_checkout,
+    prepared next to the build worktree. None without a forge token
+    (nothing the effect could push with)."""
+    push_url = (
+        effect_push_url(info.forge, info.clone_url, credentials.token)
+        if credentials is not None and credentials.token is not None
+        else None
+    )
+    if push_url is None:
+        yield None
+        return
+    dest = worktree_path.with_name(f"{worktree_path.name}-checkout")
+    await repos.clone_for_effect(info.key, dest, commit=commit, push_url=push_url)
+    try:
+        yield dest
+    finally:
+        repos.remove_effect_clone(dest)
+
+
 async def run_effect_item(
     o: Orchestrator,
     info: RepoInfo,
@@ -151,16 +182,20 @@ async def run_effect_item(
         event = effects_event_for_build(worktree_event.repo, build)
         task_token = o.task_tokens.issue(build.project_id)
         try:
-            ctx = effects_context(
-                o.config,
-                info,
-                worktree_path=worktree_path,
-                rev=event.commit_sha,
-                branch=event.branch,
-                git_token=credentials.token if credentials is not None else None,
-                task_token=task_token,
-            )
-            await _run_one_effect(o, event, ctx, build, name)
+            async with effect_checkout(
+                o.repos, info, worktree_path, event.commit_sha, credentials
+            ) as checkout:
+                ctx = effects_context(
+                    o.config,
+                    info,
+                    worktree_path=worktree_path,
+                    rev=event.commit_sha,
+                    branch=event.branch,
+                    git_token=credentials.token if credentials is not None else None,
+                    task_token=task_token,
+                )
+                ctx.effect_checkout = checkout
+                await _run_one_effect(o, event, ctx, build, name)
             await post_effects_summary(o, event, build)
         finally:
             o.task_tokens.revoke(task_token)

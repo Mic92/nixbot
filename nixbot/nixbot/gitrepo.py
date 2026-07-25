@@ -28,6 +28,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
+from urllib.parse import urlsplit
 
 from .environ import passthrough_env
 
@@ -164,6 +165,20 @@ async def run_git(
     finally:
         if home is not None:
             shutil.rmtree(home, ignore_errors=True)
+
+
+def _push_url_rewrites(push_url: str) -> list[tuple[str, str]]:
+    """(config key, prefix) insteadOf entries rewriting the forge's
+    plain https and ssh remotes to the token URL, so submodule
+    fetches/pushes against the same host also authenticate."""
+    parts = urlsplit(push_url)
+    if parts.hostname is None:
+        return []
+    key = f"url.{parts.scheme}://{parts.netloc}/.insteadOf"
+    return [
+        (key, prefix)
+        for prefix in (f"https://{parts.hostname}/", f"git@{parts.hostname}:")
+    ]
 
 
 def _worktree_paths(porcelain_output: str) -> set[Path]:
@@ -455,15 +470,10 @@ class RepoManager:
         try:
             if head_commit is not None and head_commit != base_commit:
                 await worktree.merge(head_commit, credentials)
-            if (worktree.path / ".gitmodules").exists():
-                # .gitmodules is PR-controlled: with the primary repo's
-                # credentials a malicious PR could exfiltrate any other
-                # private repo on the same forge via build outputs.
-                await run_git(
-                    ["submodule", "update", "--init", "--recursive"],
-                    cwd=worktree.path,
-                    credentials=submodule_credentials,
-                )
+            # .gitmodules is PR-controlled: with the primary repo's
+            # credentials a malicious PR could exfiltrate any other
+            # private repo on the same forge via build outputs.
+            await self._init_submodules(worktree.path, submodule_credentials)
         except BaseException:
             # Callers only remove worktrees they received. A failed
             # merge or submodule checkout (or cancellation) must not
@@ -471,3 +481,57 @@ class RepoManager:
             await self.remove_worktree(worktree)
             raise
         return worktree
+
+    @staticmethod
+    async def _init_submodules(
+        path: Path, credentials: FetchCredentials | None
+    ) -> None:
+        """Recursive submodule checkout, shared by the build worktree
+        and the effect clone so both follow the same credential policy."""
+        if (path / ".gitmodules").exists():
+            await run_git(
+                ["submodule", "update", "--init", "--recursive"],
+                cwd=path,
+                credentials=credentials,
+            )
+
+    async def clone_for_effect(
+        self,
+        project_key: str,
+        dest: Path,
+        *,
+        commit: str,
+        push_url: str | None = None,
+        submodule_credentials: FetchCredentials | None = None,
+    ) -> Path:
+        """Standalone, pushable clone for one effect run, cloned locally
+        from the bare mirror (the build worktree already materialized
+        the commit's blobs there). `origin` becomes `push_url` (token
+        https URL) plus insteadOf rewrites for the forge's plain
+        https/ssh remotes. The token never touches the shared mirror or
+        worktree. Removed by the caller via `remove_effect_clone`."""
+        clone = self.clone_path(project_key)
+        # A leftover from a crashed run must not survive into git clone.
+        shutil.rmtree(dest, ignore_errors=True)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            await run_git(["clone", "--no-checkout", str(clone), str(dest)])
+            if push_url is not None:
+                # Before checkout: any lazy blob fetch (blobless mirror)
+                # then goes to the forge with the token.
+                await run_git(["remote", "set-url", "origin", push_url], cwd=dest)
+                for key, prefix in _push_url_rewrites(push_url):
+                    await run_git(["config", "--add", key, prefix], cwd=dest)
+            await run_git(["checkout", "--detach", commit], cwd=dest)
+            await self._init_submodules(dest, submodule_credentials)
+        except BaseException:
+            shutil.rmtree(dest, ignore_errors=True)
+            raise
+        # Track like a worktree so the periodic orphan sweep does not
+        # delete the directory of a running effect.
+        self._active_worktrees.add(await asyncio.to_thread(dest.resolve))
+        return dest
+
+    def remove_effect_clone(self, dest: Path) -> None:
+        self._active_worktrees.discard(dest.resolve())
+        shutil.rmtree(dest, ignore_errors=True)

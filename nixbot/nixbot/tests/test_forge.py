@@ -288,7 +288,7 @@ async def test_github_credentials_before_discovery(
 
     provider = GitHubFetchCredentialsProvider(github_client)
     creds = await provider.get("https://github.com/acme/repo22.git")
-    assert creds.token == "ghs_token_22"  # noqa: S105
+    assert creds.token == "ghs_token_22"
     # Cached: later lookups must not re-query the API.
     assert github_client.repo_installations["acme/repo22"] == 22
     # Unknown repo (404) degrades to no credentials.
@@ -968,7 +968,7 @@ async def test_gitlab_discovery() -> None:
     client = gitlab_client(
         handler,
         base_url="https://gitlab.example.com/",
-        token="glpat-x",  # noqa: S106 (test credential)
+        token="glpat-x",
     )
     nested, public = await client.discover_repos()
     assert nested == DiscoveredRepo(

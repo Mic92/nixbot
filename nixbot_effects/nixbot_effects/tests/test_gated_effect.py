@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from nixbot_effects import instantiate_effects
+from nixbot_effects.eval import instantiate_effects
 from nixbot_effects.options import EffectsOptions
 from nixbot_effects.tests.support import init_repo
 
@@ -47,23 +47,23 @@ FLAKE_NIX = """\
 """
 
 
-def _instantiate(effect: str, repo: Path, tmp_path: Path) -> tuple[str, bool]:
+async def _instantiate(effect: str, repo: Path, tmp_path: Path) -> tuple[str, bool]:
     opts = EffectsOptions(path=repo)
-    return instantiate_effects(effect, opts, tmp_path / f"result-{effect}")
+    return await instantiate_effects(effect, opts, tmp_path / f"result-{effect}")
 
 
-def test_gated_effect_selects_dependencies_and_skips_run(tmp_path: Path) -> None:
+async def test_gated_effect_selects_dependencies_and_skips_run(tmp_path: Path) -> None:
     repo, _rev = init_repo(tmp_path, {"flake.nix": FLAKE_NIX})
 
-    drv_path, should_run = _instantiate("gated", repo, tmp_path)
+    drv_path, should_run = await _instantiate("gated", repo, tmp_path)
     assert drv_path.endswith("-dependencies.drv")
     assert should_run is False
 
 
-def test_runnable_and_bare_effects_run(tmp_path: Path) -> None:
+async def test_runnable_and_bare_effects_run(tmp_path: Path) -> None:
     repo, _rev = init_repo(tmp_path, {"flake.nix": FLAKE_NIX})
 
     for effect in ("runnable", "bare"):
-        drv_path, should_run = _instantiate(effect, repo, tmp_path)
+        drv_path, should_run = await _instantiate(effect, repo, tmp_path)
         assert drv_path.endswith(f"-{effect}.drv")
         assert should_run is True

@@ -958,7 +958,7 @@ async def test_gitlab_discovery_and_hook_registration(
                 "visibility": "public",
             }
         ],
-        token="glpat-x",  # noqa: S106 (test credential)
+        token="glpat-x",
     )
 
     token = tmp_path / "gitlab-token"

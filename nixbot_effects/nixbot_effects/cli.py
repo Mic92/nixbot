@@ -1,129 +1,65 @@
+"""Standalone CLI wrapper around the async nixbot_effects library."""
+
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
-import shlex
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
-from typing import Any
 
 from . import (
-    NixbotEffectsError,
-    build_derivation,
-    instantiate_effects,
-    instantiate_scheduled_effect,
+    EffectError,
+    EffectsOptions,
     list_effects,
     list_scheduled_effects,
-    nix_command,
-    parse_derivation,
-    run_effects,
-    select_mounts,
-    select_secrets,
+    run_effect,
+    run_scheduled_effect,
 )
-from .options import EffectsOptions
+from .eval import options_from_flake_ref
 
 
-def resolve_flake(flake_ref: str, *, debug: bool = False) -> dict[str, Any]:
-    """Run `nix flake metadata --json` and return the parsed JSON."""
-    cmd = nix_command("flake", "metadata", "--json", flake_ref)
-    if debug:
-        print("$", shlex.join(cmd), file=sys.stderr)
-    try:
-        proc = subprocess.run(cmd, check=True, text=True, capture_output=True)
-    except subprocess.CalledProcessError as e:
-        msg = f"Failed to resolve flake reference '{flake_ref}'\n"
-        msg += f"Command: {shlex.join(cmd)}\n"
-        msg += f"Exit code: {e.returncode}\n"
-        msg += f"Output: {e.stderr}\n"
-        raise RuntimeError(msg) from e
-    return json.loads(proc.stdout)
-
-
-def options_from_flake_ref(flake_ref: str, base: EffectsOptions) -> EffectsOptions:
-    """Resolve a flake reference to EffectsOptions via nix flake metadata."""
-    meta = resolve_flake(flake_ref, debug=base.debug)
-    locked = meta.get("locked", {})
-    # lockedUrl can be null in JSON (None in Python), fall back to url
-    locked_url = meta.get("lockedUrl") or meta.get("url", "")
-    rev = locked.get("rev") or locked.get("dirtyRev")
-    return EffectsOptions(
-        secrets=base.secrets,
-        path=Path(meta.get("path", "")),
-        repo=base.repo,
-        rev=rev,
-        branch=locked.get("ref") or base.branch,
-        tag=base.tag,
-        url=meta.get("resolvedUrl", meta.get("url", "")),
-        locked_url=locked_url,
-        default_branch=base.default_branch,
-        git_token_file=base.git_token_file,
-        mountables_file=base.mountables_file,
-        api_base_url=base.api_base_url,
-        task_token_file=base.task_token_file,
-        project_id=base.project_id,
-        project_path=base.project_path,
-        extra_nix_options=base.extra_nix_options,
-        debug=base.debug,
-        extra_sandbox_paths=base.extra_sandbox_paths,
-    )
+async def _log_stderr(data: bytes) -> None:
+    sys.stderr.buffer.write(data)
+    sys.stderr.buffer.flush()
 
 
 def _options_from_args(args: argparse.Namespace) -> EffectsOptions:
     return EffectsOptions(
-        secrets=args.secrets,
+        secrets=json.loads(args.secrets.read_text()) if args.secrets else None,
         branch=args.branch,
         rev=args.rev,
         repo=args.repo or "",
         tag=args.tag,
         path=args.path.resolve(),
         default_branch=args.default_branch,
-        git_token_file=args.git_token_file,
+        git_token=(
+            args.git_token_file.read_text().strip() if args.git_token_file else None
+        ),
+        task_token=(
+            args.task_token_file.read_text().strip() if args.task_token_file else None
+        ),
         mountables_file=args.mountables_file,
         api_base_url=args.api_base_url,
-        task_token_file=args.task_token_file,
         project_id=args.project_id,
         project_path=args.project_path,
         extra_nix_options=args.extra_nix_option,
         debug=args.debug,
         extra_sandbox_paths=args.extra_sandbox_path,
+        effect_checkout=args.effect_checkout,
+        # Keep stdout for JSON output. All child output goes to stderr.
+        log=_log_stderr,
     )
 
 
-def list_command(args: argparse.Namespace) -> None:
-    options = _options_from_args(args)
-    if args.flake_ref:
-        options = options_from_flake_ref(args.flake_ref, options)
-    json.dump(list_effects(options), fp=sys.stdout, indent=2)
-
-
-def _run_effect_derivation(drv_path: str, options: EffectsOptions) -> None:
-    drvs = parse_derivation(drv_path, debug=options.debug)
-    if "derivations" in drvs:
-        drvs = drvs["derivations"]
-    drv = next(iter(drvs.values()))
-
-    secrets = json.loads(options.secrets.read_text()) if options.secrets else {}
-    run_effects(
-        drv_path,
-        drv,
-        secrets=select_secrets(drv, secrets, options),
-        bind_mounts=select_mounts(drv, options),
-        opts=options,
-        debug=options.debug,
-        extra_sandbox_paths=options.extra_sandbox_paths,
-    )
-
-
-def _split_flake_ref(
+async def _split_flake_ref(
     name: str, options: EffectsOptions, usage: str
 ) -> tuple[str, EffectsOptions]:
     """Split flakeref#name syntax (e.g. github:org/repo/branch#my-effect);
     reject a bare flake ref, which would otherwise be treated as a name."""
     if "#" in name:
         flake_ref, _, name = name.partition("#")
-        return name, options_from_flake_ref(flake_ref, options)
+        return name, await options_from_flake_ref(flake_ref, options)
     if ":" in name or name.startswith("/"):
         print(
             f"error: '{name}' looks like a flake reference but is missing the"
@@ -134,71 +70,36 @@ def _split_flake_ref(
     return name, options
 
 
-def run_command(args: argparse.Namespace) -> None:
-    options = _options_from_args(args)
-    effect, options = _split_flake_ref(
-        args.effect, options, f"nixbot-effects run {args.effect}#<effect-name>"
-    )
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        gcroot = Path(tmpdir) / "result"
-        drv_path, should_run = instantiate_effects(effect, options, gcroot)
-        if drv_path == "":
-            print(
-                f"Effect {effect} not found or not runnable for {options}",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        if not should_run:
-            print(
-                f"Effect {effect} is gated off for {options}; building"
-                " dependencies only",
-                file=sys.stderr,
-            )
-            build_derivation(drv_path, options)
-            return
-        _run_effect_derivation(drv_path, options)
-
-
-def list_schedules_command(args: argparse.Namespace) -> None:
-    """List all scheduled effects defined in the flake."""
+async def list_command(args: argparse.Namespace) -> None:
     options = _options_from_args(args)
     if args.flake_ref:
-        options = options_from_flake_ref(args.flake_ref, options)
-    json.dump(list_scheduled_effects(options), fp=sys.stdout, indent=2)
+        options = await options_from_flake_ref(args.flake_ref, options)
+    json.dump(await list_effects(options), fp=sys.stdout, indent=2)
 
 
-def run_scheduled_command(args: argparse.Namespace) -> None:
-    """Run a specific effect from a schedule."""
+async def list_schedules_command(args: argparse.Namespace) -> None:
     options = _options_from_args(args)
-    effect = args.effect
-    schedule_name, options = _split_flake_ref(
+    if args.flake_ref:
+        options = await options_from_flake_ref(args.flake_ref, options)
+    json.dump(await list_scheduled_effects(options), fp=sys.stdout, indent=2)
+
+
+async def run_command(args: argparse.Namespace) -> None:
+    options = _options_from_args(args)
+    effect, options = await _split_flake_ref(
+        args.effect, options, f"nixbot-effects run {args.effect}#<effect-name>"
+    )
+    await run_effect(options, effect)
+
+
+async def run_scheduled_command(args: argparse.Namespace) -> None:
+    options = _options_from_args(args)
+    schedule_name, options = await _split_flake_ref(
         args.schedule_name,
         options,
         f"nixbot-effects run-scheduled {args.schedule_name}#<schedule-name> <effect>",
     )
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        gcroot = Path(tmpdir) / "result"
-        drv_path, should_run = instantiate_scheduled_effect(
-            schedule_name, effect, options, gcroot
-        )
-        if drv_path == "":
-            print(
-                f"Scheduled effect {schedule_name}/{effect} not found or not runnable"
-                f" for {options}",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        if not should_run:
-            print(
-                f"Scheduled effect {schedule_name}/{effect} is gated off for"
-                f" {options}; building dependencies only",
-                file=sys.stderr,
-            )
-            build_derivation(drv_path, options)
-            return
-        _run_effect_derivation(drv_path, options)
+    await run_scheduled_effect(options, schedule_name, args.effect)
 
 
 def _key_value(option: str) -> tuple[str, str]:
@@ -294,6 +195,12 @@ def _add_common_flags(parser: argparse.ArgumentParser) -> None:
         help="Path that should be included in the sandbox from the host.",
     )
     parser.add_argument(
+        "--effect-checkout",
+        type=Path,
+        help="Pre-prepared repository clone mounted for effects that"
+        " declare __nixbot_effect_checkout",
+    )
+    parser.add_argument(
         "--secrets",
         type=Path,
         help="Path to a json file with secrets",
@@ -375,10 +282,10 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     try:
-        args.func(args)
-    except NixbotEffectsError as e:
-        # The underlying command already printed its own diagnostics; a
-        # Python traceback on top is just noise in the run log.
+        asyncio.run(args.func(args))
+    except EffectError as e:
+        # The underlying command already logged its own diagnostics.
+        # A Python traceback on top is just noise in the run log.
         print(f"error: {e}", file=sys.stderr)
         sys.exit(1)
 

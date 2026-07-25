@@ -1,16 +1,15 @@
-"""Hercules-style effects execution (reusing the nixbot_effects CLI).
+"""Hercules-style effects execution, driving the nixbot_effects library.
 
-Ported from nixbot_effects.py + the effects parts of nix_eval.py:
+Policy lives here, mechanics in nixbot_effects:
 
 - effects run per the DEFAULT BRANCH's repo config: default branch
   always; PRs when `effects_on_pull_requests`. Branches matching
   `effects_branches` globs,
-- effects are listed via `nixbot-effects list` and each effect run
-  via `nixbot-effects run <name>`,
 - per-repo secret resolution supports exact `forge:owner/repo` and org
-  wildcard `forge:owner/*` entries. The secret JSON is written next to
-  the checkout as ../secrets.json for the duration of the run,
-- `effects.extraSandboxPaths` are forwarded.
+  wildcard `forge:owner/*` entries,
+- deploy secrets and tokens are redacted from everything the effect
+  writes to its log,
+- every run is capped by a timeout and killed as a whole process group.
 
 The orchestrator sets the build's effects started-flag
 before invoking run_effect and never auto-re-runs effects on crash
@@ -23,16 +22,19 @@ import asyncio
 import json
 import logging
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from fnmatch import fnmatch
 from pathlib import Path
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 
-from .proc import ProcessGroup
+import nixbot_effects
+from nixbot_effects import EffectError, EffectsOptions
+
 from .redact import Redactor, secret_literals
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Coroutine
 
     from .config import Config
     from .events import RepoInfo
@@ -42,15 +44,19 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Deploy tooling emits arbitrarily long lines. Asyncio's 64 KiB
-# StreamReader default would abort the read loop on them.
-STREAM_LIMIT = 16 * 1024 * 1024
 # Deploys can hang on the network. Same cap as attribute builds.
 DEFAULT_TIMEOUT = 60 * 60 * 3
 
 
-class EffectsError(Exception):
-    pass
+def effect_push_url(forge: str, clone_url: str, token: str) -> str | None:
+    """Token-authenticated https URL for the effect checkout's origin.
+    None for non-http clone URLs (nothing sensible to push to)."""
+    parts = urlsplit(clone_url)
+    if parts.scheme not in ("http", "https") or parts.hostname is None:
+        return None
+    user = "oauth2" if forge == "gitlab" else "x-access-token"
+    host = parts.hostname + (f":{parts.port}" if parts.port else "")
+    return f"{parts.scheme}://{user}:{token}@{host}{parts.path}"
 
 
 def resolve_effects_secret(
@@ -88,23 +94,13 @@ def should_run_effects(
 
 
 @dataclass
-class EffectsContext:
-    worktree_path: Path
-    rev: str
-    branch: str
-    repo: str
+class EffectsContext(EffectsOptions):
+    """The library options plus the daemon-side secret reference."""
+
+    # systemd credential holding this repo's deploy secrets JSON. Read
+    # per run, so a misconfigured credential fails that effect's log
+    # instead of effects discovery.
     secret_name: str | None = None
-    extra_sandbox_paths: list[Path] = field(default_factory=list)
-    timeout: float = DEFAULT_TIMEOUT
-    default_branch: str | None = None
-    # Forge token resolving hercules GitToken secret references.
-    git_token: str | None = None
-    # Hercules state API (served by the service) + project metadata.
-    api_base_url: str | None = None
-    task_token: str | None = None
-    project_id: str | None = None
-    mountables_file: Path | None = None
-    extra_nix_options: dict[str, str] = field(default_factory=dict)
 
 
 def effects_context(  # noqa: PLR0913
@@ -120,47 +116,23 @@ def effects_context(  # noqa: PLR0913
     """Context with the service-level configuration filled in. Shared
     by push and scheduled effect runs."""
     return EffectsContext(
-        worktree_path=worktree_path,
+        path=worktree_path,
         rev=rev,
         branch=branch,
         repo=info.name,
+        project_path=info.name,
         secret_name=resolve_effects_secret(
             config.effects_per_repo_secrets, info.forge, info.owner, info.repo
         ),
         extra_sandbox_paths=config.effects_extra_sandbox_paths,
         default_branch=info.default_branch,
         git_token=git_token,
+        task_token=task_token,
         api_base_url=config.url,
         project_id=str(info.id),
         mountables_file=config.effects_mountables_file,
-        extra_nix_options=config.effects_extra_nix_options,
-        task_token=task_token,
+        extra_nix_options=list(config.effects_extra_nix_options.items()),
     )
-
-
-def _effects_args(ctx: EffectsContext, secrets_file: Path | None) -> list[str]:
-    optional = []
-    if ctx.default_branch is not None:
-        optional += ["--default-branch", ctx.default_branch]
-    if ctx.mountables_file is not None:
-        optional += ["--mountables-file", str(ctx.mountables_file)]
-    for key, value in ctx.extra_nix_options.items():
-        optional += ["--extra-nix-option", f"{key}={value}"]
-    return [
-        "--rev",
-        ctx.rev,
-        "--branch",
-        ctx.branch,
-        "--repo",
-        ctx.repo,
-        *optional,
-        *[
-            arg
-            for path in ctx.extra_sandbox_paths
-            for arg in ("--extra-sandbox-path", str(path))
-        ],
-        *(["--secrets", str(secrets_file)] if secrets_file is not None else []),
-    ]
 
 
 def _read_secret_file(secret_name: str) -> str:
@@ -170,120 +142,38 @@ def _read_secret_file(secret_name: str) -> str:
             f"effects secret {secret_name!r} requested but "
             "$CREDENTIALS_DIRECTORY is not set"
         )
-        raise EffectsError(msg)
+        raise EffectError(msg)
     return (Path(directory) / secret_name).read_text()
 
 
-async def _pump(
-    stream: asyncio.StreamReader, chunks: list[bytes], log_write: LogWrite | None
-) -> None:
-    async for line in stream:
-        chunks.append(line)
-        if log_write is not None:
-            await log_write(line)
-
-
-async def _run(
-    cmd: list[str],
-    cwd: Path,
-    log_write: LogWrite | None = None,
-    time_limit: float = DEFAULT_TIMEOUT,
-) -> tuple[int, str, str]:
-    """Run nixbot-effects, returning (returncode, stdout, stderr).
-
-    stderr is kept separate so nix logging cannot corrupt the JSON on
-    stdout. The service environment is inherited (remote builders need
-    $HOME for ~/.ssh). On timeout or read errors the process group is
-    killed so no effect keeps running detached.
-    """
-    group = await ProcessGroup.start(
-        cmd,
-        cwd=cwd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        limit=STREAM_LIMIT,
-    )
-    proc = group.proc
-    assert proc.stdout is not None  # noqa: S101
-    assert proc.stderr is not None  # noqa: S101
-    stdout_chunks: list[bytes] = []
-    stderr_chunks: list[bytes] = []
+async def _with_timeout[T](coro: Coroutine[None, None, T], what: str) -> T:
     try:
-        async with asyncio.timeout(time_limit):
-            await asyncio.gather(
-                _pump(proc.stdout, stdout_chunks, log_write),
-                _pump(proc.stderr, stderr_chunks, log_write),
-                proc.wait(),
-            )
-    except BaseException as e:
-        await group.reap()
-        if isinstance(e, TimeoutError):
-            msg = f"{cmd[0]} {cmd[1]} timed out after {time_limit}s"
-            raise EffectsError(msg) from e
-        raise
-    return (
-        proc.returncode or 0,
-        b"".join(stdout_chunks).decode(errors="replace"),
-        b"".join(stderr_chunks).decode(errors="replace"),
-    )
+        async with asyncio.timeout(DEFAULT_TIMEOUT):
+            return await coro
+    except TimeoutError as e:
+        msg = f"{what} timed out after {DEFAULT_TIMEOUT}s"
+        raise EffectError(msg) from e
 
 
 async def list_effects(ctx: EffectsContext) -> list[str]:
-    """`nixbot-effects list`: the effects defined by the flake."""
-    returncode, output, errors = await _run(
-        ["nixbot-effects", "list", *_effects_args(ctx, None)],
-        ctx.worktree_path,
-        time_limit=ctx.timeout,
+    """The effects defined by the flake."""
+    return await _with_timeout(nixbot_effects.list_effects(ctx), "listing effects")
+
+
+async def list_scheduled_effects(ctx: EffectsContext) -> dict:
+    """The onSchedule definitions on the default branch."""
+    return await _with_timeout(
+        nixbot_effects.list_scheduled_effects(ctx), "listing scheduled effects"
     )
-    if returncode != 0:
-        msg = f"nixbot-effects list failed ({returncode}): {errors[-2000:]}"
-        raise EffectsError(msg)
-    if not output.strip():
-        return []
-    try:
-        effects = json.loads(output)
-    except json.JSONDecodeError as e:
-        msg = f"failed to parse nixbot-effects list output: {e}"
-        raise EffectsError(msg) from e
-    return list(effects)
 
 
-async def run_effect(
-    ctx: EffectsContext,
-    effect: str,
-    log_write: LogWrite | None = None,
-) -> bool:
-    return await run_effect_command(ctx, ["run"], [effect], log_write)
-
-
-async def run_effect_command(
-    ctx: EffectsContext,
-    subcommand: list[str],
-    targets: list[str],
-    log_write: LogWrite | None = None,
-) -> bool:
-    """Run one (push or scheduled) effect. Returns success. The secrets
-    file is written outside the checkout (parent directory, like the
-    buildbot setup) and removed afterwards."""
-    side_files: list[Path] = []
-
-    def _side_file(suffix: str, content: str) -> Path:
-        # Deploy credentials: 0600 only. touch() applies the mode just
-        # on creation, so drop any leftover file first.
-        path = ctx.worktree_path.parent / f"{ctx.worktree_path.name}-{suffix}"
-        path.unlink(missing_ok=True)
-        path.touch(mode=0o600)
-        path.write_text(content)
-        side_files.append(path)
-        return path
-
-    secrets_file: Path | None = None
+def _prepare_run(ctx: EffectsContext, log_write: LogWrite | None) -> None:
+    """Load the deploy secrets and wrap the log sink with redaction of
+    the secrets and the git and task tokens."""
     secret_content: str | None = None
     if ctx.secret_name is not None:
         secret_content = _read_secret_file(ctx.secret_name)
-        secrets_file = _side_file("secrets.json", secret_content)
-    # Redact the deploy secrets and the git and task tokens from
-    # anything the effect prints.
+        ctx.secrets = json.loads(secret_content)
     sink = log_write
     literals = secret_literals(secret_content, ctx.git_token, ctx.task_token)
     if literals and sink is not None:
@@ -293,30 +183,44 @@ async def run_effect_command(
         async def sink(data: bytes) -> None:
             await raw_sink(redactor(data))
 
-    extra: list[str] = []
-    if ctx.git_token is not None:
-        extra += ["--git-token-file", str(_side_file("git-token", ctx.git_token))]
-    if ctx.task_token is not None:
-        extra += ["--task-token-file", str(_side_file("task-token", ctx.task_token))]
-    if ctx.api_base_url is not None:
-        extra += ["--api-base-url", ctx.api_base_url]
-    if ctx.project_id is not None:
-        extra += ["--project-id", ctx.project_id]
-    extra += ["--project-path", ctx.repo]
+    ctx.log = sink
+
+
+async def _run_wrapped(
+    ctx: EffectsContext,
+    log_write: LogWrite | None,
+    run: Callable[[], Coroutine[None, None, None]],
+) -> bool:
+    """Run one (push or scheduled) effect with redaction and timeout.
+    Returns success. Failures are written to the log."""
+    _prepare_run(ctx, log_write)
     try:
-        returncode, _, _ = await _run(
-            [
-                "nixbot-effects",
-                *subcommand,
-                *_effects_args(ctx, secrets_file),
-                *extra,
-                *targets,
-            ],
-            ctx.worktree_path,
-            sink,
-            time_limit=ctx.timeout,
-        )
-        return returncode == 0
-    finally:
-        for path in side_files:
-            path.unlink(missing_ok=True)
+        await _with_timeout(run(), "effect")
+    except EffectError as e:
+        if ctx.log is not None:
+            await ctx.log(f"error: {e}\n".encode())
+        return False
+    return True
+
+
+async def run_effect(
+    ctx: EffectsContext,
+    effect: str,
+    log_write: LogWrite | None = None,
+) -> bool:
+    return await _run_wrapped(
+        ctx, log_write, lambda: nixbot_effects.run_effect(ctx, effect)
+    )
+
+
+async def run_scheduled_effect(
+    ctx: EffectsContext,
+    schedule_name: str,
+    effect: str,
+    log_write: LogWrite | None = None,
+) -> bool:
+    return await _run_wrapped(
+        ctx,
+        log_write,
+        lambda: nixbot_effects.run_scheduled_effect(ctx, schedule_name, effect),
+    )

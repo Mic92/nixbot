@@ -35,12 +35,12 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
 import zstandard
+from nixbot_effects.proc import ProcessGroup
 
 from .ansi import ANSI_TOKEN_RE, strip_ansi
 from .build_scheduler import BuildFailure, BuildOutcome, DrvFailure
 from .gcroots import safe_attr_filename
 from .logstore import LogContainerWriter
-from .proc import ProcessGroup
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable

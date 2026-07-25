@@ -1,0 +1,277 @@
+"""Evaluation: turning EffectsOptions into herculesCI flake arguments,
+listing effects/schedules and instantiating one effect derivation."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+from dataclasses import replace
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+from .errors import EffectError
+from .proc import stream_command
+
+if TYPE_CHECKING:
+    from .options import EffectsOptions
+    from .proc import LogWrite
+
+
+def nix_command(*args: str) -> list[str]:
+    return ["nix", "--extra-experimental-features", "nix-command flakes", *args]
+
+
+async def git_command(args: list[str], path: Path) -> str:
+    out = await stream_command(["git", "-C", str(path), *args], capture_stdout=True)
+    return out.strip()
+
+
+async def get_git_remote_url(path: Path) -> str | None:
+    try:
+        return await git_command(["remote", "get-url", "origin"], path)
+    except EffectError:
+        return None
+
+
+async def git_get_tag(path: Path, rev: str) -> str | None:
+    tags = await git_command(["tag", "--points-at", rev], path)
+    if tags:
+        return tags.splitlines()[0]
+    return None
+
+
+async def _is_git_repo(path: Path) -> bool:
+    try:
+        await git_command(["rev-parse", "--git-dir"], path)
+    except EffectError:
+        return False
+    return True
+
+
+async def effects_args(opts: EffectsOptions) -> dict[str, Any]:
+    """The argument set herculesCI/effects flake outputs are called with."""
+    has_git = await _is_git_repo(opts.path)
+    if opts.rev:
+        rev = opts.rev
+    elif opts.branch and has_git:
+        rev = await git_command(["rev-parse", "--verify", opts.branch], opts.path)
+    elif has_git:
+        rev = await git_command(["rev-parse", "--verify", "HEAD"], opts.path)
+    else:
+        msg = "No --rev specified and path is not a git repository"
+        raise EffectError(msg)
+    branch = opts.branch
+    if branch is None and has_git:
+        branch = await git_command(["rev-parse", "--abbrev-ref", "HEAD"], opts.path)
+    repo = opts.repo or opts.path.name
+    tag = opts.tag or (await git_get_tag(opts.path, rev) if has_git else None)
+    # secret_context needs the tag (isTag conditions), also when resolved from git
+    opts.tag = tag
+    url = opts.url or (await get_git_remote_url(opts.path) if has_git else None)
+    primary_repo = {
+        "name": repo,
+        "branch": branch,
+        # TODO: support ref
+        "ref": None,
+        "tag": tag,
+        "rev": rev,
+        "shortRev": rev[:7],
+        "remoteHttpUrl": url,
+    }
+    return {
+        "primaryRepo": primary_repo,
+        **primary_repo,
+    }
+
+
+def _flake_url(opts: EffectsOptions, rev: str) -> str:
+    """The flake URL for builtins.getFlake: the locked URL of a resolved
+    remote flake ref, otherwise a git+file:// URL of the local path."""
+    if opts.locked_url:
+        return opts.locked_url
+    return f"git+file://{opts.path}?rev={rev}#"
+
+
+async def _effects_expr(opts: EffectsOptions, accessor: str) -> str:
+    """Nix expression selecting `accessor` from the herculesCI/effects output."""
+    args = await effects_args(opts)
+    rev = args["rev"]
+    escaped_args = json.dumps(json.dumps(args))
+    url = json.dumps(_flake_url(opts, rev))
+    return f"""
+      let
+        flake = builtins.getFlake {url};
+        outputName = if flake.outputs ? herculesCI then
+          "herculesCI"
+        else if flake.outputs ? effects then
+          "effects"
+        else
+          null;
+      in
+        if outputName == null then
+          {{}}
+        else
+          (flake.outputs.${{outputName}}
+            (builtins.fromJSON {escaped_args})).{accessor} or {{}}
+    """
+
+
+async def effect_function(opts: EffectsOptions) -> str:
+    return await _effects_expr(opts, "onPush.default.outputs.effects")
+
+
+async def scheduled_effect_function(opts: EffectsOptions) -> str:
+    return await _effects_expr(opts, "onSchedule")
+
+
+async def _nix_eval_json(expr: str, opts: EffectsOptions) -> Any:  # noqa: ANN401
+    out = await stream_command(
+        nix_command("eval", "--json", "--expr", expr),
+        capture_stdout=True,
+        log=opts.log,
+        debug=opts.debug,
+    )
+    return json.loads(out)
+
+
+async def list_effects(opts: EffectsOptions) -> list[str]:
+    """The effect names defined by the flake's onPush.default output."""
+    return list(
+        await _nix_eval_json(
+            f"builtins.attrNames ({await effect_function(opts)})", opts
+        )
+    )
+
+
+async def list_scheduled_effects(opts: EffectsOptions) -> dict[str, Any]:
+    """All onSchedule definitions: schedule name -> {when, effects}."""
+    expr = f"""
+        let
+          schedules = {await scheduled_effect_function(opts)};
+        in
+          builtins.mapAttrs (name: schedule: {{
+            when = schedule.when or {{}};
+            effects = builtins.attrNames (schedule.outputs.effects or {{}});
+          }}) schedules
+        """
+    return dict(await _nix_eval_json(expr, opts))
+
+
+async def _instantiate(expr: str, opts: EffectsOptions, gcroot: Path) -> str:
+    cmd = [
+        "nix-instantiate",
+        # the expression uses builtins.getFlake
+        "--extra-experimental-features",
+        "flakes",
+        "--add-root",
+        str(gcroot),
+        "--expr",
+        expr,
+    ]
+    out = await stream_command(cmd, capture_stdout=True, log=opts.log, debug=opts.debug)
+    paths = out.split()
+    if not paths:
+        return ""
+    # nix-instantiate prints one --add-root symlink per derivation.
+    # An effect must be a single one, else `derivation show` gets a bad path.
+    if len(paths) != 1:
+        msg = f"expected effect to be a single derivation, got {len(paths)}: {out!r}"
+        raise EffectError(msg)
+    resolved = await asyncio.to_thread(Path(paths[0]).resolve)
+    return str(resolved)
+
+
+async def _select_effect(
+    binding: str, opts: EffectsOptions, gcroot: Path
+) -> tuple[str, bool]:
+    """Instantiate an effect bound to `e` by `binding`.
+
+    hercules-ci's `runIf false` replaces the effect with a wrapper set
+    `{ dependencies; prebuilt; }` (recurseForDerivations) so nix-instantiate
+    would emit a root per derivation. Select a single derivation: the
+    runnable effect (`e.run`, or a bare effect derivation), otherwise the
+    dependency-only build. Only run in the former case; the latter mirrors
+    the agent, which just builds inputs when the effect is gated off.
+    See https://github.com/Mic92/nixbot/issues/56.
+    """
+    drv_path = await _instantiate(
+        f"{binding} e.run or e.dependencies or e", opts, gcroot
+    )
+    if drv_path == "":
+        return "", False
+    should_run = bool(
+        await _nix_eval_json(f"{binding} e ? run || !(e ? dependencies)", opts)
+    )
+    return drv_path, should_run
+
+
+async def instantiate_effects(
+    effect: str, opts: EffectsOptions, gcroot: Path
+) -> tuple[str, bool]:
+    return await _select_effect(
+        f"let e = ({await effect_function(opts)}).{effect}; in", opts, gcroot
+    )
+
+
+async def instantiate_scheduled_effect(
+    schedule_name: str, effect: str, opts: EffectsOptions, gcroot: Path
+) -> tuple[str, bool]:
+    return await _select_effect(
+        f"let e = ({await scheduled_effect_function(opts)})"
+        f".{schedule_name}.outputs.effects.{effect}; in",
+        opts,
+        gcroot,
+    )
+
+
+async def build_derivation(drv_path: str, opts: EffectsOptions) -> None:
+    """Realise a derivation without running it (gated-off effects only build
+    their dependencies, matching hercules-ci-agent)."""
+    await stream_command(
+        nix_command("build", "--no-link", f"{drv_path}^*"),
+        log=opts.log,
+        debug=opts.debug,
+    )
+
+
+async def parse_derivation(
+    path: str, *, log: LogWrite | None = None, debug: bool = False
+) -> dict[str, Any]:
+    out = await stream_command(
+        nix_command("derivation", "show", f"{path}^*"),
+        capture_stdout=True,
+        log=log,
+        debug=debug,
+    )
+    return json.loads(out)
+
+
+async def resolve_flake(
+    flake_ref: str, *, log: LogWrite | None = None, debug: bool = False
+) -> dict[str, Any]:
+    """`nix flake metadata --json` for a flake reference."""
+    out = await stream_command(
+        nix_command("flake", "metadata", "--json", flake_ref),
+        capture_stdout=True,
+        log=log,
+        debug=debug,
+    )
+    return json.loads(out)
+
+
+async def options_from_flake_ref(
+    flake_ref: str, base: EffectsOptions
+) -> EffectsOptions:
+    """Resolve a flake reference into a copy of `base` pointing at the
+    fetched source (its store path has no .git)."""
+    meta = await resolve_flake(flake_ref, log=base.log, debug=base.debug)
+    locked = meta.get("locked", {})
+    return replace(
+        base,
+        path=Path(meta.get("path", "")),
+        rev=locked.get("rev") or locked.get("dirtyRev"),
+        branch=locked.get("ref") or base.branch,
+        url=meta.get("resolvedUrl", meta.get("url", "")),
+        # lockedUrl can be null in JSON (None in Python), fall back to url
+        locked_url=meta.get("lockedUrl") or meta.get("url", ""),
+    )

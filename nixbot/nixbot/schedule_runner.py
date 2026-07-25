@@ -11,14 +11,14 @@ import re
 import time
 from typing import TYPE_CHECKING
 
-from .effects import EffectsContext, effects_context
+from .effects import EffectsContext, effects_context, run_scheduled_effect
+from .effects_run import effect_checkout
 from .executor import LogWriter
 from .repos import repo_info
 from .schedules import (
     DueEffect,
     ScheduledEffectsStore,
     discover_schedules,
-    run_scheduled_effect,
 )
 
 if TYPE_CHECKING:
@@ -87,7 +87,7 @@ async def refresh_schedules(s: CIService, project_id: int, rev: str) -> None:
     )
     try:
         ctx = EffectsContext(
-            worktree_path=worktree.path,
+            path=worktree.path,
             rev=rev,
             branch=info.default_branch,
             repo=info.name,
@@ -147,16 +147,23 @@ async def _run_scheduled_inner(
     # Shared registry so the web SSE route can stream this run live.
     s.orchestrator.log_registry.register_scheduled(run_id, log)
     try:
-        ctx = effects_context(
-            s.config,
-            info,
-            worktree_path=worktree.path,
-            rev=await worktree.rev_parse("HEAD"),
-            branch=info.default_branch,
-            git_token=credentials.token if credentials is not None else None,
-            task_token=task_token,
-        )
-        return await run_scheduled_effect(ctx, due.schedule_name, due.effect, log.write)
+        rev = await worktree.rev_parse("HEAD")
+        async with effect_checkout(
+            s.orchestrator.repos, info, worktree.path, rev, credentials
+        ) as checkout:
+            ctx = effects_context(
+                s.config,
+                info,
+                worktree_path=worktree.path,
+                rev=rev,
+                branch=info.default_branch,
+                git_token=credentials.token if credentials is not None else None,
+                task_token=task_token,
+            )
+            ctx.effect_checkout = checkout
+            return await run_scheduled_effect(
+                ctx, due.schedule_name, due.effect, log.write
+            )
     finally:
         s.orchestrator.task_tokens.revoke(task_token)
         await log.close()

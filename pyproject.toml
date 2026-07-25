@@ -1,16 +1,16 @@
 [tool.uv.workspace]
-members = ["nixbot", "nixbot_cli"]
+members = ["nixbot", "nixbot_cli", "nixbot_effects"]
 
 [tool.pytest.ini_options]
-pythonpath = ["nixbot"]
+pythonpath = ["nixbot", "nixbot_cli", "nixbot_effects"]
 testpaths = ["tests"]
 addopts = ["-n", "auto"]
 timeout = 60
 asyncio_mode = "auto"
 
 [tool.mypy]
-# so the server tests importing the CLI package resolve
-mypy_path = "nixbot_cli"
+# so the server tests importing the CLI and effects packages resolve
+mypy_path = "nixbot_cli:nixbot_effects"
 
 # asyncpg ships no type stubs and no py.typed marker.
 [[tool.mypy.overrides]]

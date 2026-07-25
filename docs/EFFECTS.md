@@ -83,6 +83,31 @@ Inside the effect, secrets are available at `/run/secrets.json` (via
 `HERCULES_CI_SECRETS_JSON`). This follows the
 [hercules-ci secrets format](https://docs.hercules-ci.com/hercules-ci/effects/declaration/#secrets).
 
+## Pushable repository checkout
+
+Effects that modify the repository (auto-updates, formatting bots) can ask
+nixbot for a ready-made working copy instead of cloning inside the sandbox:
+
+```nix
+effects.flake-update = mkEffect {
+  __nixbot_effect_checkout = true;
+  effectScript = ''
+    nix flake update
+    git commit -am "flake.lock: update"
+    git push origin HEAD:update-flake-lock
+  '';
+};
+```
+
+nixbot clones the repository from its local mirror at the commit the effect runs
+for and mounts it writable at `/build/checkout`, which is also the effect's
+working directory (and exported as `NIXBOT_EFFECT_CHECKOUT`). The clone's
+`origin` uses the forge token, so `git push` works without extra secrets. The
+clone is removed after the effect finishes.
+
+Effects without `__nixbot_effect_checkout` get no checkout. If the repository
+has no forge token to push with, the effect fails with an error.
+
 ## Buildbot secrets configuration
 
 When running effects through nixbot (not locally), secrets are configured at

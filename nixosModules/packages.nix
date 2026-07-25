@@ -22,12 +22,5 @@ in
       defaultText = lib.literalExpression "python.pkgs.callPackage ../packages/nixbot.nix { }";
       description = "The nixbot package to use.";
     };
-
-    nixbot-effects = lib.mkOption {
-      type = lib.types.package;
-      default = cfg.python.pkgs.callPackage ../packages/nixbot-effects.nix { };
-      defaultText = lib.literalExpression "python.pkgs.callPackage ../packages/nixbot-effects.nix { }";
-      description = "The nixbot-effects package to use.";
-    };
   };
 }

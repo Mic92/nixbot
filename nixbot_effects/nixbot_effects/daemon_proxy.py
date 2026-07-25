@@ -12,12 +12,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import subprocess
-import threading
-from contextlib import contextmanager
+from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import AsyncIterator
     from pathlib import Path
 
 
@@ -52,7 +51,7 @@ async def _handle(
         )
     except OSError:
         # A hanging connection would stall the nix client in the
-        # effect; a closed one fails it loudly.
+        # effect. A closed one fails it loudly.
         writer.close()
         raise
     assert proc.stdin is not None  # noqa: S101
@@ -65,36 +64,27 @@ async def _handle(
         await proc.wait()
 
 
-@contextmanager
-def nix_daemon_proxy(
+@asynccontextmanager
+async def nix_daemon_proxy(
     socket_path: Path, extra_options: list[tuple[str, str]]
-) -> Iterator[None]:
-    """Serve a unix socket while the effect runs; stops on exit."""
-    loop = asyncio.new_event_loop()
+) -> AsyncIterator[None]:
+    """Serve a unix socket while the effect runs. Stops serving on exit."""
+    # Handlers are tracked so exit can cancel them. Closing the server
+    # only stops accepting new connections, while in-flight handlers
+    # (and their nix-daemon children) would keep running.
+    handlers: set[asyncio.Task[None]] = set()
 
-    def runner() -> None:
-        asyncio.set_event_loop(loop)
-        try:
-            loop.run_forever()
-        finally:
-            # Drain cancelled handlers so their daemon subprocesses
-            # are killed and awaited.
-            tasks = asyncio.all_tasks(loop)
-            for task in tasks:
-                task.cancel()
-            loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
-            loop.close()
+    def accept(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        task = asyncio.create_task(_handle(reader, writer, extra_options))
+        handlers.add(task)
+        task.add_done_callback(handlers.discard)
 
-    async def start() -> asyncio.Server:
-        return await asyncio.start_unix_server(
-            lambda r, w: _handle(r, w, extra_options), path=str(socket_path)
-        )
-
-    thread = threading.Thread(target=runner)
-    thread.start()
+    server = await asyncio.start_unix_server(accept, path=str(socket_path))
     try:
-        asyncio.run_coroutine_threadsafe(start(), loop).result(timeout=10)
         yield
     finally:
-        loop.call_soon_threadsafe(loop.stop)
-        thread.join(timeout=10)
+        server.close()
+        await server.wait_closed()
+        for task in handlers:
+            task.cancel()
+        await asyncio.gather(*handlers, return_exceptions=True)

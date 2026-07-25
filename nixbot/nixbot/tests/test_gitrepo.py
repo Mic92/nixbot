@@ -462,3 +462,33 @@ async def test_run_git_passes_proxy_env_through(
     monkeypatch.setenv("SSL_CERT_FILE", "/etc/ssl/ca.pem")
     out = await run_git(["version"])
     assert out.strip() == "proxy=http://proxy:3128 ca=/etc/ssl/ca.pem"
+
+
+@pytest.mark.usefixtures("submodule")
+async def test_clone_for_effect(
+    manager: RepoManager, upstream: Path, tmp_path: Path
+) -> None:
+    await fetch(manager, upstream)
+    sha = git(upstream, "rev-parse", "HEAD")
+    # Production ordering: the build worktree runs first and materializes
+    # the blobs of this commit in the blobless mirror.
+    await manager.checkout_for_build(KEY, "eval", base_commit=sha)
+    dest = tmp_path / "effect-checkout"
+
+    await manager.clone_for_effect(
+        KEY,
+        dest,
+        commit=sha,
+        push_url="https://x-access-token:tok123@github.com/acme/widget",
+    )
+    # Standalone: own object store, no alternates into the shared clone.
+    assert git(dest, "rev-parse", "--git-common-dir") == ".git"
+    assert not (dest / ".git" / "objects" / "info" / "alternates").exists()
+    assert git(dest, "rev-parse", "HEAD") == sha
+    assert (dest / "vendored" / "inner.txt").read_text() == "inner\n"
+    # Pushable origin plus ssh/https rewrites, in the clone's config only.
+    assert git(dest, "remote", "get-url", "origin") == (
+        "https://x-access-token:tok123@github.com/acme/widget"
+    )
+    assert "git@github.com:" in (dest / ".git" / "config").read_text()
+    assert "tok123" not in (manager.clone_path(KEY) / "config").read_text()
