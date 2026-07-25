@@ -1,4 +1,4 @@
-"""End-to-end test: nixbot-effects list on a git+file:// flake reference.
+"""End-to-end test: `nbo effects list` on a git+file:// flake reference.
 
 Verifies that the CLI can resolve a flake ref, fetch metadata, and
 evaluate effects without a local checkout — the store path has no .git.
@@ -7,6 +7,7 @@ evaluate effects without a local checkout — the store path has no .git.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -64,20 +65,29 @@ def flake_repo(tmp_path: Path) -> Path:
 
 
 def _cli(*args: str) -> subprocess.CompletedProcess[str]:
+    # nixbot_cli and nixbot_effects are importable from the source tree,
+    # not necessarily from the pytest invocation directory.
+    root = Path(__file__).parents[3]
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join(
+        [
+            str(root / "nixbot_cli"),
+            str(root / "nixbot_effects"),
+            *env.get("PYTHONPATH", "").split(os.pathsep),
+        ]
+    )
     return subprocess.run(
         [
             sys.executable,
             "-c",
-            "import sys; sys.argv = ['nixbot-effects'] + sys.argv[1:]; "
-            "from nixbot_effects.cli import main; main()",
+            "import sys; sys.argv = ['nbo', 'effects'] + sys.argv[1:]; "
+            "from nixbot_cli.main import main; main()",
             *args,
         ],
         check=True,
         text=True,
         capture_output=True,
-        # The package is importable from the source tree, not the
-        # pytest invocation directory.
-        cwd=Path(__file__).parents[2],
+        env=env,
     )
 
 

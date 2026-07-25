@@ -1,4 +1,8 @@
-"""Standalone CLI wrapper around the async nixbot_effects library."""
+"""`nbo effects`: run and inspect hercules-ci style effects locally.
+
+Thin argparse layer over the nixbot_effects library. Unlike the rest of
+nbo it talks to nix on this machine, not to the nixbot API.
+"""
 
 from __future__ import annotations
 
@@ -9,16 +13,15 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 
-from . import (
-    EffectError,
+from nixbot_effects import (
     EffectsOptions,
     list_effects,
     list_scheduled_effects,
     run_effect,
     run_scheduled_effect,
 )
-from .eval import options_from_flake_ref
-from .graph import render_tree
+from nixbot_effects.eval import options_from_flake_ref
+from nixbot_effects.graph import render_tree
 
 
 async def _log_stderr(data: bytes) -> None:
@@ -58,8 +61,8 @@ def _options_from_args(args: argparse.Namespace) -> EffectsOptions:
 async def _split_flake_ref(
     name: str, options: EffectsOptions, usage: str
 ) -> tuple[str, EffectsOptions]:
-    """Split flakeref#name syntax (e.g. github:org/repo/branch#my-effect);
-    reject a bare flake ref, which would otherwise be treated as a name."""
+    """Split flakeref#name syntax (e.g. github:org/repo/branch#my-effect).
+    A bare flake ref is rejected, it would otherwise be treated as a name."""
     if "#" in name:
         flake_ref, _, name = name.partition("#")
         return name, await options_from_flake_ref(flake_ref, options)
@@ -104,7 +107,7 @@ async def list_schedules_command(args: argparse.Namespace) -> None:
 async def run_command(args: argparse.Namespace) -> None:
     options = _options_from_args(args)
     effect, options = await _split_flake_ref(
-        args.effect, options, f"nixbot-effects run {args.effect}#<effect-name>"
+        args.effect, options, f"nbo effects run {args.effect}#<effect-name>"
     )
     await run_effect(options, effect)
 
@@ -114,9 +117,14 @@ async def run_scheduled_command(args: argparse.Namespace) -> None:
     schedule_name, options = await _split_flake_ref(
         args.schedule_name,
         options,
-        f"nixbot-effects run-scheduled {args.schedule_name}#<schedule-name> <effect>",
+        f"nbo effects run-scheduled {args.schedule_name}#<schedule-name> <effect>",
     )
     await run_scheduled_effect(options, schedule_name, args.effect)
+
+
+def cmd_effects(args: argparse.Namespace) -> int:
+    asyncio.run(args.effects_func(args))
+    return 0
 
 
 def _key_value(option: str) -> tuple[str, str]:
@@ -128,7 +136,7 @@ def _key_value(option: str) -> tuple[str, str]:
 
 
 def _add_common_flags(parser: argparse.ArgumentParser) -> None:
-    """Add flags shared by all subcommands."""
+    """Add flags shared by all effects subcommands."""
     parser.add_argument(
         "--rev",
         type=str,
@@ -230,78 +238,74 @@ def _add_common_flags(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Run effects from a hercules-ci flake",
-        epilog=(
-            "Flake reference syntax:\n"
-            "  Commands accept flake references to operate on remote repositories\n"
-            "  without requiring a local checkout:\n\n"
-            "  nixbot-effects run github:org/repo/branch#my-effect\n"
-            "  nixbot-effects list github:org/repo/branch\n"
-            "  nixbot-effects run-scheduled github:org/repo#schedule effect\n"
-        ),
+def register(sub: argparse._SubParsersAction) -> None:
+    effects = sub.add_parser(
+        "effects",
+        help="run and inspect a flake's effects locally",
         formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""examples:
+  nbo effects list                  effects of the flake in the CWD, with after/lock
+  nbo effects graph                 the dependency DAG as an ASCII tree
+  nbo effects run default.deploy    run one effect in the local sandbox
+  nbo effects run github:org/repo/branch#default.deploy   without a checkout
+  nbo effects run-scheduled github:org/repo#nightly flake-update""",
     )
-    subparser = parser.add_subparsers(
-        dest="command",
-        required=True,
-        help="Command to run",
-    )
+    effects.set_defaults(func=cmd_effects, needs_client=False)
+    esub = effects.add_subparsers(dest="effects_command", required=True)
 
-    list_parser = subparser.add_parser(
+    list_parser = esub.add_parser(
         "list",
         help="List available effects (optionally from a flake reference)",
     )
     _add_common_flags(list_parser)
-    list_parser.set_defaults(func=list_command)
+    list_parser.set_defaults(effects_func=list_command)
     list_parser.add_argument(
         "flake_ref",
         nargs="?",
         help="Flake reference (e.g. github:org/repo/branch)",
     )
 
-    graph_parser = subparser.add_parser(
+    graph_parser = esub.add_parser(
         "graph",
         help="Show the effect dependency graph as an ASCII tree",
     )
     _add_common_flags(graph_parser)
-    graph_parser.set_defaults(func=graph_command)
+    graph_parser.set_defaults(effects_func=graph_command)
     graph_parser.add_argument(
         "flake_ref",
         nargs="?",
         help="Flake reference (e.g. github:org/repo/branch)",
     )
 
-    run_parser = subparser.add_parser(
+    run_parser = esub.add_parser(
         "run",
         help="Run an effect (supports flakeref#effect syntax)",
     )
     _add_common_flags(run_parser)
-    run_parser.set_defaults(func=run_command)
+    run_parser.set_defaults(effects_func=run_command)
     run_parser.add_argument(
         "effect",
         help="Effect to run, or flakeref#effect (e.g. github:org/repo/branch#default.deploy)",
     )
 
-    list_schedules_parser = subparser.add_parser(
+    list_schedules_parser = esub.add_parser(
         "list-schedules",
         help="List all scheduled effects (optionally from a flake reference)",
     )
     _add_common_flags(list_schedules_parser)
-    list_schedules_parser.set_defaults(func=list_schedules_command)
+    list_schedules_parser.set_defaults(effects_func=list_schedules_command)
     list_schedules_parser.add_argument(
         "flake_ref",
         nargs="?",
         help="Flake reference (e.g. github:org/repo/branch)",
     )
 
-    run_scheduled_parser = subparser.add_parser(
+    run_scheduled_parser = esub.add_parser(
         "run-scheduled",
         help="Run a specific effect from a schedule",
     )
     _add_common_flags(run_scheduled_parser)
-    run_scheduled_parser.set_defaults(func=run_scheduled_command)
+    run_scheduled_parser.set_defaults(effects_func=run_scheduled_command)
     run_scheduled_parser.add_argument(
         "schedule_name",
         help="Schedule name, or flakeref#schedule (e.g. github:org/repo#my-schedule)",
@@ -310,20 +314,3 @@ def parse_args() -> argparse.Namespace:
         "effect",
         help="Effect to run within the schedule",
     )
-
-    return parser.parse_args()
-
-
-def main() -> None:
-    args = parse_args()
-    try:
-        asyncio.run(args.func(args))
-    except EffectError as e:
-        # The underlying command already logged its own diagnostics.
-        # A Python traceback on top is just noise in the run log.
-        print(f"error: {e}", file=sys.stderr)
-        sys.exit(1)
-
-
-if __name__ == "__main__":
-    main()

@@ -89,11 +89,11 @@ in `after` fail effect discovery.
 
 nixbot evaluates every `onPush.<job>` of the `herculesCI` output. Outside the
 flake, effects are addressed by their dotted attribute path prefixed with the
-job name: `nixbot-effects run default.deploy-staging`, log names, and the
-`after` entries in `nixbot-effects list` output. Inspect the DAG locally:
+job name: `nbo effects run default.deploy-staging`, log names, and the `after`
+entries in `nbo effects list` output. Inspect the DAG locally:
 
 ```console
-$ nixbot-effects graph
+$ nbo effects graph
 default.notify
 default.push-image
 └── default.deploy-staging [lock: staging]
@@ -102,22 +102,22 @@ default.push-image
 
 ## CLI usage
 
-The `nixbot-effects` CLI can list and run effects locally, or against remote
-repositories using
+The `nbo effects` commands (part of the [nbo CLI](CLI.md)) can list and run
+effects locally, or against remote repositories using
 [Nix flake references](https://nix.dev/manual/nix/latest/command-ref/new-cli/nix3-flake#flake-references).
 
 ### Local repository
 
 ```console
 $ cd my-repo
-$ nixbot-effects list
+$ nbo effects list
 {"default.deploy": {"after": ["default.notify"], "lock": "hw-lab"}, "default.notify": {"after": [], "lock": null}}
 
-$ nixbot-effects graph
+$ nbo effects graph
 default.notify
 └── default.deploy [lock: hw-lab]
 
-$ nixbot-effects run default.deploy
+$ nbo effects run default.deploy
 ```
 
 ### Remote repository (flake reference)
@@ -125,10 +125,10 @@ $ nixbot-effects run default.deploy
 No local checkout needed:
 
 ```console
-$ nixbot-effects run github:org/repo/branch#default.deploy
-$ nixbot-effects list github:org/repo/branch
-$ nixbot-effects list-schedules github:org/repo/branch
-$ nixbot-effects run-scheduled github:org/repo#flake-update update
+$ nbo effects run github:org/repo/branch#default.deploy
+$ nbo effects list github:org/repo/branch
+$ nbo effects list-schedules github:org/repo/branch
+$ nbo effects run-scheduled github:org/repo#flake-update update
 ```
 
 ### Subcommands
@@ -178,7 +178,7 @@ containing key-value pairs:
 ```
 
 ```console
-$ nixbot-effects run --secrets secrets.json default.deploy
+$ nbo effects run --secrets secrets.json default.deploy
 ```
 
 Inside the effect, secrets are available at `/run/secrets.json` (via

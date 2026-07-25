@@ -86,6 +86,19 @@ nbo log 412 checks.x86_64-linux.nixos-test --follow # stream while it runs
 
 Attribute arguments accept unambiguous substrings.
 
+## Effects
+
+`nbo effects` runs and inspects a flake's [effects](EFFECTS.md) locally with nix
+(no API token needed):
+
+```console
+nbo effects list                        # effects with their after/lock metadata
+nbo effects graph                       # dependency DAG as an ASCII tree
+nbo effects run default.deploy          # run one effect in the local sandbox
+nbo effects run github:org/repo/branch#default.deploy
+nbo effects run-scheduled github:org/repo#nightly flake-update
+```
+
 ## Exit codes
 
 | code | meaning                              |
