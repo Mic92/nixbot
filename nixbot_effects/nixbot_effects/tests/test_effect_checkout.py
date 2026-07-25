@@ -6,7 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from nixbot_effects import NixbotEffectsError, effect_checkout_mount
+from nixbot_effects import EffectError
+from nixbot_effects.sandbox import effect_checkout_mount
 
 
 def test_undeclared_checkout_is_ignored() -> None:
@@ -23,7 +24,7 @@ def test_declared_checkout_mounts_and_exports_path() -> None:
 
 
 def test_declared_checkout_without_clone_or_bad_path_errors() -> None:
-    with pytest.raises(NixbotEffectsError, match="--effect-checkout"):
+    with pytest.raises(EffectError, match="--effect-checkout"):
         effect_checkout_mount({"__nixbot_effect_checkout": "/build/repo"}, None)
-    with pytest.raises(NixbotEffectsError, match="absolute"):
+    with pytest.raises(EffectError, match="absolute"):
         effect_checkout_mount({"__nixbot_effect_checkout": "repo"}, Path("/clone"))

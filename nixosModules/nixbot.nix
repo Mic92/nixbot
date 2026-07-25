@@ -903,8 +903,6 @@ in
         pkgs.bubblewrap
         pkgs.nix-eval-jobs
         config.nix.package
-        # Effects run via the nixbot-effects CLI.
-        packages.nixbot-effects
       ];
 
       environment = {

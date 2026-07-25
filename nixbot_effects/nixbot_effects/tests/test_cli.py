@@ -8,15 +8,17 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from nixbot_effects import NixbotEffectsError
+from nixbot_effects import EffectError
 from nixbot_effects.cli import _key_value, main, run_command
 
 
-def test_flake_ref_without_fragment_errors() -> None:
+async def test_flake_ref_without_fragment_errors() -> None:
     # A flake ref without "#<effect>" must exit non-zero so CI callers
     # see the failure instead of a silent no-op.
     args = MagicMock()
-    args.secrets = Path("/tmp/secrets.json")  # noqa: S108
+    args.secrets = None
+    args.git_token_file = None
+    args.task_token_file = None
     args.debug = True
     args.rev = None
     args.branch = None
@@ -25,7 +27,7 @@ def test_flake_ref_without_fragment_errors() -> None:
     args.effect = "git+file:///some/repo"
 
     with pytest.raises(SystemExit, match="1"):
-        run_command(args)
+        await run_command(args)
 
 
 def test_main_reports_effects_error_without_traceback(
@@ -34,17 +36,17 @@ def test_main_reports_effects_error_without_traceback(
     # A failed effect already logged its own diagnostics; main must exit
     # 1 with a one-line message, not dump a Python traceback into the
     # run log.
-    msg = "command failed with exit code 1"
+    msg = "bwrap failed with exit code 1"
 
-    def boom(_args: argparse.Namespace) -> None:
-        raise NixbotEffectsError(msg)
+    async def boom(_args: argparse.Namespace) -> None:
+        raise EffectError(msg)
 
     ns = argparse.Namespace(func=boom)
     monkeypatch.setattr("nixbot_effects.cli.parse_args", lambda: ns)
     with pytest.raises(SystemExit) as exc:
         main()
     assert exc.value.code == 1
-    assert capsys.readouterr().err == "error: command failed with exit code 1\n"
+    assert capsys.readouterr().err == "error: bwrap failed with exit code 1\n"
 
 
 def test_extra_nix_option_requires_key_value() -> None:

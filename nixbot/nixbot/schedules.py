@@ -1,9 +1,7 @@
 """Scheduled Hercules effects (`onSchedule`), tasks 3.3.
 
-Ported from nix_eval.py:ScheduledEffectsEvaluateCommand:
-on each successful default-branch build the orchestrator discovers
-schedules via `nixbot-effects list-schedules` and persists them. A
-periodic loop runs due effects via `nixbot-effects run-scheduled`.
+On each successful default-branch build the orchestrator discovers
+schedules and persists them. A periodic loop runs due effects.
 
 Cron-like `when` specs. Defaults resolve in
 config.ScheduleWhen.resolved. All times are UTC.
@@ -20,13 +18,13 @@ from typing import TYPE_CHECKING, Any, cast
 
 from .config import ScheduledEffectConfig, ScheduleWhen
 from .db_gen import scheduled as q
-from .effects import EffectsError, _effects_args, _run, run_effect_command
+from .effects import list_scheduled_effects
 from .sql_util import expect
 
 if TYPE_CHECKING:
     import asyncpg
 
-    from .effects import EffectsContext, LogWrite
+    from .effects import EffectsContext
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +32,7 @@ logger = logging.getLogger(__name__)
 def parse_schedules_from_json(
     schedules_json: dict[str, Any],
 ) -> dict[str, ScheduledEffectConfig]:
-    """Parse `nixbot-effects list-schedules` output."""
+    """Parse the onSchedule definitions listed by nixbot_effects."""
     result: dict[str, ScheduledEffectConfig] = {}
     for schedule_name, schedule_data in schedules_json.items():
         when_data = schedule_data.get("when", {})
@@ -54,22 +52,8 @@ def parse_schedules_from_json(
 async def discover_schedules(
     ctx: EffectsContext,
 ) -> dict[str, ScheduledEffectConfig]:
-    """`nixbot-effects list-schedules` on a default-branch checkout."""
-    returncode, output, errors = await _run(
-        ["nixbot-effects", "list-schedules", *_effects_args(ctx, None)],
-        ctx.worktree_path,
-        time_limit=ctx.timeout,
-    )
-    if returncode != 0:
-        msg = f"nixbot-effects list-schedules failed ({returncode}): {errors[-2000:]}"
-        raise EffectsError(msg)
-    if not output.strip():
-        return {}
-    try:
-        return parse_schedules_from_json(json.loads(output))
-    except json.JSONDecodeError as e:
-        msg = f"failed to parse list-schedules output: {e}"
-        raise EffectsError(msg) from e
+    """The onSchedule definitions on a default-branch checkout."""
+    return parse_schedules_from_json(await list_scheduled_effects(ctx))
 
 
 def is_due(when: ScheduleWhen, schedule_name: str, now: datetime) -> bool:
@@ -102,17 +86,6 @@ def due_occurrence(
         if is_due(when, schedule_name, candidate):
             return candidate
     return None
-
-
-async def run_scheduled_effect(
-    ctx: EffectsContext,
-    schedule_name: str,
-    effect: str,
-    log_write: LogWrite | None = None,
-) -> bool:
-    return await run_effect_command(
-        ctx, ["run-scheduled"], [schedule_name, effect], log_write
-    )
 
 
 HOURS_PER_DAY = 24

@@ -8,15 +8,15 @@ import pytest
 if TYPE_CHECKING:
     from pathlib import Path
 
-from nixbot_effects import (
-    NixbotEffectsError,
+from nixbot_effects import EffectError
+from nixbot_effects.options import EffectsOptions
+from nixbot_effects.sandbox import (
     pass_as_file_env,
     sandbox_env,
     select_mounts,
     select_secrets,
     virtual_ids,
 )
-from nixbot_effects.options import EffectsOptions
 from nixbot_effects.secrets import (
     GitToken,
     SecretContext,
@@ -234,9 +234,9 @@ def test_select_mounts_non_string_value(tmp_path: Path) -> None:
 
 
 def test_virtual_ids_malformed() -> None:
-    with pytest.raises(NixbotEffectsError, match="__hci_effect_virtual_uid"):
+    with pytest.raises(EffectError, match="__hci_effect_virtual_uid"):
         virtual_ids({"__hci_effect_virtual_uid": "not-a-number"})
-    with pytest.raises(NixbotEffectsError, match="__hci_effect_virtual_gid"):
+    with pytest.raises(EffectError, match="__hci_effect_virtual_gid"):
         virtual_ids({"__hci_effect_virtual_gid": "1.5"})
 
 

@@ -11,7 +11,7 @@ import re
 import time
 from typing import TYPE_CHECKING
 
-from .effects import EffectsContext, effects_context
+from .effects import EffectsContext, effects_context, run_scheduled_effect
 from .effects_run import effect_checkout
 from .executor import LogWriter
 from .repos import repo_info
@@ -19,7 +19,6 @@ from .schedules import (
     DueEffect,
     ScheduledEffectsStore,
     discover_schedules,
-    run_scheduled_effect,
 )
 
 if TYPE_CHECKING:
@@ -88,7 +87,7 @@ async def refresh_schedules(s: CIService, project_id: int, rev: str) -> None:
     )
     try:
         ctx = EffectsContext(
-            worktree_path=worktree.path,
+            path=worktree.path,
             rev=rev,
             branch=info.default_branch,
             repo=info.name,

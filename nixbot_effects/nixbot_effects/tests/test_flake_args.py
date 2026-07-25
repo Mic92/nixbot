@@ -9,13 +9,14 @@ from pathlib import Path
 
 import pytest
 
-from nixbot_effects import _flake_url, effects_args, git_get_tag, secret_context
+from nixbot_effects.eval import _flake_url, effects_args, git_get_tag
 from nixbot_effects.options import EffectsOptions
+from nixbot_effects.sandbox import secret_context
 from nixbot_effects.secrets import SimpleSecret, gather_secrets
 from nixbot_effects.tests.support import git, init_repo
 
 
-def test_branch_resolves_to_branch_tip(tmp_path: Path) -> None:
+async def test_branch_resolves_to_branch_tip(tmp_path: Path) -> None:
     """--branch should resolve rev to the tip of that branch, not HEAD."""
     repo, main_rev = init_repo(tmp_path, {"file.txt": "main"})
 
@@ -32,7 +33,7 @@ def test_branch_resolves_to_branch_tip(tmp_path: Path) -> None:
 
     # Ask for --branch=feature without --rev: should get feature_rev, not main_rev
     opts = EffectsOptions(path=repo, branch="feature")
-    result = effects_args(opts)
+    result = await effects_args(opts)
 
     assert result["rev"] == feature_rev, (
         f"Expected rev from 'feature' branch ({feature_rev[:7]}), "
@@ -41,14 +42,14 @@ def test_branch_resolves_to_branch_tip(tmp_path: Path) -> None:
     assert result["branch"] == "feature"
 
 
-def test_git_tag_propagates_to_secret_context(tmp_path: Path) -> None:
+async def test_git_tag_propagates_to_secret_context(tmp_path: Path) -> None:
     """A tag resolved from git must end up in opts.tag so that
     isTag-conditioned secrets can be granted."""
     repo, _rev = init_repo(tmp_path, {"file.txt": "v1"})
     git(repo, "tag", "v1.0")
 
     opts = EffectsOptions(path=repo, repo="acme/widget")
-    result = effects_args(opts)
+    result = await effects_args(opts)
     assert result["tag"] == "v1.0"
     assert opts.tag == "v1.0"
 
@@ -79,7 +80,7 @@ class TestFlakeUrl:
         assert _flake_url(opts, "abc1234") == "github:org/repo/abc1234def5678"
 
 
-def test_git_get_tag_no_tag(tmp_path: Path) -> None:
+async def test_git_get_tag_no_tag(tmp_path: Path) -> None:
     repo, rev = init_repo(tmp_path)
 
-    assert git_get_tag(repo, rev) is None
+    assert await git_get_tag(repo, rev) is None

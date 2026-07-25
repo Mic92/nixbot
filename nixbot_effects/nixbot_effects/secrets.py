@@ -21,8 +21,10 @@ import sys
 from dataclasses import dataclass
 from typing import Any
 
+from .errors import EffectError
 
-class SecretsError(Exception):
+
+class SecretsError(EffectError):
     pass
 
 

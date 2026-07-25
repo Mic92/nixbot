@@ -44,3 +44,18 @@ def upstream(tmp_path: Path) -> Path:
 def fresh_work_queue(postgres_dsn: str) -> None:
     """Per-test isolation for modules sharing one database."""
     truncate_work_queue(postgres_dsn)
+
+
+@pytest.fixture(autouse=True)
+def _no_effects_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub effects/schedule discovery, which would evaluate the flake
+    with real nix. Tests that want effects patch these again."""
+
+    async def no_effects(_ctx: object) -> list[str]:
+        return []
+
+    async def no_schedules(_ctx: object) -> dict:
+        return {}
+
+    monkeypatch.setattr("nixbot.effects_run.list_effects", no_effects)
+    monkeypatch.setattr("nixbot.schedule_runner.discover_schedules", no_schedules)

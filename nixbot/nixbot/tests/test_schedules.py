@@ -1,16 +1,16 @@
 """Tests for scheduled effects: parsing, cron matching, persistence."""
 
-# ruff: noqa: PLR2004, S106 (test literals, secret_name is a credential id)
+# ruff: noqa: PLR2004 (test literals, secret_name is a credential id)
 from __future__ import annotations
 
-import os
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import pytest
+from nixbot_effects import EffectError
 
 from nixbot.config import ScheduleWhen
-from nixbot.effects import EffectsContext, EffectsError
+from nixbot.effects import EffectsContext, run_scheduled_effect
 from nixbot.schedules import (
     DueEffect,
     ScheduledEffectsStore,
@@ -18,7 +18,6 @@ from nixbot.schedules import (
     is_due,
     next_occurrence,
     parse_schedules_from_json,
-    run_scheduled_effect,
     schedule_overview,
 )
 
@@ -196,47 +195,6 @@ def test_due_occurrence_window() -> None:
     assert due_occurrence(when, "s", datetime(2026, 6, 5, 2, 29, tzinfo=UTC)) is None
 
 
-async def test_run_scheduled_effect_passes_secrets(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    creds = tmp_path / "creds"
-    creds.mkdir()
-    (creds / "effects-secret").write_text('{"token": "s3"}')
-    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(creds))
-
-    bindir = tmp_path / "bin"
-    bindir.mkdir()
-    record = tmp_path / "record"
-    script = bindir / "nixbot-effects"
-    script.write_text(
-        "#!/bin/sh\n"
-        f'out="{record}"\n'
-        'echo "$@" > "$out"\n'
-        "while [ $# -gt 0 ]; do\n"
-        '  if [ "$1" = --secrets ]; then cat "$2" >> "$out"; fi\n'
-        "  shift\n"
-        "done\n"
-    )
-    script.chmod(0o755)
-    monkeypatch.setenv("PATH", f"{bindir}:{os.environ['PATH']}")
-
-    worktree = tmp_path / "checkout"
-    worktree.mkdir()
-    ctx = EffectsContext(
-        worktree_path=worktree,
-        rev="deadbeef",
-        branch="main",
-        repo="acme/widget",
-        secret_name="effects-secret",
-    )
-    assert await run_scheduled_effect(ctx, "nightly", "deploy")
-    recorded = record.read_text()
-    assert "--secrets" in recorded
-    assert '{"token": "s3"}' in recorded
-    # The secrets file is removed after the run.
-    assert not list(tmp_path.glob("checkout-secrets.json"))
-
-
 async def test_due_effects_window_and_bad_spec(pool: asyncpg.Pool) -> None:
     project_id = await insert_project(pool, "gadget", forge_repo_id="sched-2")
     store = ScheduledEffectsStore(pool)
@@ -271,13 +229,13 @@ async def test_run_scheduled_effect_secret_read_failure_raises(
     # error as a failed run.
     monkeypatch.delenv("CREDENTIALS_DIRECTORY", raising=False)
     ctx = EffectsContext(
-        worktree_path=tmp_path,
+        path=tmp_path,
         rev="deadbeef",
         branch="main",
         repo="acme/widget",
         secret_name="effects-secret",
     )
-    with pytest.raises(EffectsError, match="CREDENTIALS_DIRECTORY"):
+    with pytest.raises(EffectError, match="CREDENTIALS_DIRECTORY"):
         await run_scheduled_effect(ctx, "nightly", "deploy")
 
 

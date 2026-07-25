@@ -25,8 +25,12 @@
   # Optional: the NixOS module calls this file with python.pkgs.callPackage,
   # which cannot supply it. Only the pytest passthru check needs the CLI.
   nixbot-cli ? null,
+  callPackage,
   lib,
 }:
+let
+  nixbot-effects = callPackage ./nixbot-effects.nix { };
+in
 buildPythonPackage (finalAttrs: {
   name = "nixbot";
   pyproject = true;
@@ -41,6 +45,7 @@ buildPythonPackage (finalAttrs: {
     httpx
     zstandard
     python-multipart
+    nixbot-effects
   ];
 
   buildInputs = [ nix ];

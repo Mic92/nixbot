@@ -19,8 +19,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from nixbot_effects.proc import ProcessGroup
+
 from .gcroots import safe_attr_filename
-from .proc import ProcessGroup
 
 if TYPE_CHECKING:
     from collections.abc import Mapping

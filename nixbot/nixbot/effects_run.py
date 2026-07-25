@@ -12,13 +12,14 @@ import logging
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
+from nixbot_effects import EffectError
+
 from .db_gen import builds as builds_q
 from .db_gen import maintenance as q
 from .db_gen import web as web_q
 from .db_gen import work_queue as wq
 from .effects import (
     EffectsContext,
-    EffectsError,
     effect_push_url,
     effects_context,
     list_effects,
@@ -99,9 +100,9 @@ async def maybe_run_effects(
     )
     try:
         names = await list_effects(ctx)
-    except (EffectsError, OSError):
-        # OSError: nixbot-effects not installed. Effects are
-        # best-effort and must not fail the (already reported) build.
+    except (EffectError, OSError):
+        # OSError: nix/git missing from PATH. Effects are best-effort
+        # and must not fail the (already reported) build.
         logger.exception("effects discovery failed", extra={"build_id": build.id})
         return
     finally:
