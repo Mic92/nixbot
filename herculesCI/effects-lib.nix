@@ -10,10 +10,14 @@
       name ? "effect",
       inputs ? [ ],
       secretsMap ? { },
+      # Pushable repository checkout at /build/checkout ($NIXBOT_EFFECT_CHECKOUT),
+      # see docs/EFFECTS.md.
+      checkout ? false,
     }:
     pkgs.stdenvNoCC.mkDerivation {
       inherit name effectScript userSetupScript;
       isEffect = true;
+      __nixbot_effect_checkout = checkout;
       secretsMap = builtins.toJSON secretsMap;
       nativeBuildInputs = [
         pkgs.cacert
