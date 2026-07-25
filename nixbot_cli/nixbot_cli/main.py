@@ -96,7 +96,8 @@ def resolve_repo(client: NixbotClient, spec: str | None) -> RepoRef:
 
 
 def resolve_build(client: NixbotClient, repo: RepoRef, number: int | None) -> int:
-    """Explicit build number, or the latest build of the CWD's HEAD commit."""
+    """Explicit build number, the latest build of the CWD's HEAD commit,
+    or of its branch when that commit was never built."""
     if number is not None:
         return number
     commit = _git("rev-parse", "HEAD")
@@ -104,10 +105,21 @@ def resolve_build(client: NixbotClient, repo: RepoRef, number: int | None) -> in
         msg = "not in a git repository: pass a build number"
         raise UsageError(msg)
     builds = client.builds(repo, commit=commit)["items"]
+    if builds:
+        return int(builds[0]["number"])
+    branch = _git("rev-parse", "--abbrev-ref", "HEAD")
+    on_branch = branch and branch != "HEAD"
+    builds = client.builds(repo, branch=branch)["items"] if on_branch else []
     if not builds:
-        msg = f"no build for commit {commit[:12]} in {repo}"
+        msg = f"no build for commit {commit[:12]} or branch {branch!r} in {repo}"
         raise UsageError(msg)
-    return int(builds[0]["number"])
+    build = builds[0]
+    print(
+        f"nbo: no build for commit {commit[:12]}, using build "
+        f"#{build['number']} ({build['commit_sha'][:12]} on {branch})",
+        file=sys.stderr,
+    )
+    return int(build["number"])
 
 
 # --- commands ----------------------------------------------------------

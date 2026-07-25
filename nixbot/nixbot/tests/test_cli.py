@@ -225,8 +225,12 @@ def test_repo_and_build_inference(
     monkeypatch.chdir(checkout)
 
     assert cli.resolve_repo(api, None) == REPO
+    # HEAD was never built: fall back to the newest build of the branch.
+    assert cli.resolve_build(api, REPO, None) == 1
+    git(checkout, "checkout", "-q", "-b", "unbuilt-branch")
     with pytest.raises(cli.UsageError, match="no build for commit"):
         cli.resolve_build(api, REPO, None)
+    git(checkout, "checkout", "-q", "main")
     harness.run(
         harness.ctx.pool.execute(
             "UPDATE builds SET commit_sha = $1 WHERE number = 2", head
