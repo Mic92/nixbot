@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import webbrowser
@@ -515,6 +516,13 @@ def main(argv: Sequence[str] | None = None) -> NoReturn:
     except ApiError as err:
         print(f"nbo: {err}", file=sys.stderr)
         code = EXIT_AUTH if err.status in (401, 403) else EXIT_USAGE
+    except KeyboardInterrupt:
+        code = 130
+    except BrokenPipeError:
+        # Downstream pager/head closed the pipe. Point stdout at devnull
+        # so the interpreter's final flush stays quiet too.
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        code = EXIT_OK
     sys.exit(code)
 
 
