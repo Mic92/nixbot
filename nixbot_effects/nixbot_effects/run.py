@@ -66,8 +66,9 @@ def _bubblewrap_command(  # noqa: PLR0913
         "--die-with-parent",
         "--dir",
         "/build",
-        "--chdir",
-        "/build",
+        # bwrap warns about repeated --chdir, so the default working
+        # directory only applies when the checkout does not set one.
+        *([] if "--chdir" in checkout_args else ["--chdir", "/build"]),
         # Disk-backed like hercules-ci-agent's work dirs: deploys
         # unpack closures that don't fit a tmpfs.
         "--bind",
