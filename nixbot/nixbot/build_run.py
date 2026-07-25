@@ -219,6 +219,38 @@ async def _settle_aborted(
     )
 
 
+async def _record_eval_success(
+    o: Orchestrator,
+    event: ChangeEvent,
+    build: BuildRecord,
+    jobs: Sequence[NixEvalJob],
+    live_warnings: LiveWarningAggregator,
+) -> None:
+    """Persist a completed evaluation and report it to the forge."""
+    # Idempotent backstop for the streaming inserts during eval;
+    # pending rows are what crash recovery resumes from. The
+    # scheduler drops unsupported systems. Their pending rows
+    # would never turn terminal, so don't record them.
+    buildable = [
+        job
+        for job in jobs
+        if isinstance(job, NixEvalJobSuccess) and job.system in o.config.build_systems
+    ]
+    await record_attributes(o.pool, build.id, buildable)
+    # The full eval result is recorded in build_attributes. A later
+    # build of the same tree may reuse it instead of re-evaluating.
+    await q.mark_eval_completed(o.pool, id_=build.id)
+    await o.reporter.eval_finished(
+        event,
+        build,
+        EvalReport(
+            success=True,
+            warnings=[str(g["message"]) for g in live_warnings.snapshot()],
+            jobs=buildable,
+        ),
+    )
+
+
 async def _reap(*tasks: asyncio.Future[Any]) -> None:
     """Cancel and await tasks, swallowing their errors."""
     for task in tasks:
@@ -316,29 +348,7 @@ async def _run_build_inner(
                     o.pool, id_=build.id, warnings=json.dumps(live_warnings.snapshot())
                 )
         await db.set_build_status(o.pool, build.id, BuildStatus.BUILDING)
-        # Idempotent backstop for the streaming inserts above;
-        # pending rows are what crash recovery resumes from. The
-        # scheduler drops unsupported systems. Their pending rows
-        # would never turn terminal, so don't record them.
-        buildable = [
-            job
-            for job in eval_result.jobs
-            if isinstance(job, NixEvalJobSuccess)
-            and job.system in o.config.build_systems
-        ]
-        await record_attributes(o.pool, build.id, buildable)
-        # The full eval result is recorded in build_attributes. A later
-        # build of the same tree may reuse it instead of re-evaluating.
-        await q.mark_eval_completed(o.pool, id_=build.id)
-        await o.reporter.eval_finished(
-            event,
-            build,
-            EvalReport(
-                success=True,
-                warnings=[str(g["message"]) for g in live_warnings.snapshot()],
-                jobs=buildable,
-            ),
-        )
+        await _record_eval_success(o, event, build, eval_result.jobs, live_warnings)
 
         # Re-send the complete eval result: the scheduler dedupes
         # by attr, so this only schedules jobs a streamed batch
