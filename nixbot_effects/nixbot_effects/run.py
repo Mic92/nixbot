@@ -113,16 +113,15 @@ def _bubblewrap_command(  # noqa: PLR0913
     ]
 
 
-async def run_effects(
-    drv_path: str,
-    drv: dict[str, Any],
-    opts: EffectsOptions,
-    *,
-    bind_mounts: list[tuple[str, str, bool]] | None = None,
-    secrets: dict[str, Any] | None = None,
+async def _run_in_sandbox(
+    drv_path: str, drv: dict[str, Any], opts: EffectsOptions
 ) -> None:
     """Execute one already-instantiated effect derivation in the sandbox."""
     drv_env = drv.get("env", {})
+    # Copy: the hercules-ci task token is added below and must not
+    # leak into opts.secrets.
+    secrets = dict(select_secrets(drv, opts.secrets or {}, opts))
+    bind_mounts = select_mounts(drv, opts)
     env, task_token = task_env(drv_env, opts)
     uid, gid = virtual_ids(drv_env)
     bwrap = shutil.which("bwrap")
@@ -147,7 +146,6 @@ async def run_effects(
                 )
             else:
                 daemon_socket = Path("/nix/var/nix/daemon-socket/socket")
-            secrets = dict(secrets or {})
             secrets["hercules-ci"] = {"data": {"token": task_token}}
             secrets_file = work_dir / "secrets.json"
             secrets_file.touch(mode=0o600)
@@ -162,7 +160,7 @@ async def run_effects(
                     uid=uid,
                     gid=gid,
                     extra_sandbox_paths=opts.extra_sandbox_paths,
-                    bind_mounts=bind_mounts or [],
+                    bind_mounts=bind_mounts,
                     checkout_args=checkout_args,
                 ),
                 "--ro-bind",
@@ -183,13 +181,7 @@ async def _run_derivation(drv_path: str, opts: EffectsOptions) -> None:
     if "derivations" in drvs:
         drvs = drvs["derivations"]
     drv = next(iter(drvs.values()))
-    await run_effects(
-        drv_path,
-        drv,
-        opts,
-        secrets=select_secrets(drv, opts.secrets or {}, opts),
-        bind_mounts=select_mounts(drv, opts),
-    )
+    await _run_in_sandbox(drv_path, drv, opts)
 
 
 async def _run_selected(
