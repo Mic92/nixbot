@@ -21,7 +21,13 @@ from collections import deque
 from datetime import UTC, datetime
 from typing import IO, TYPE_CHECKING
 
-from .term import sanitize_line
+from .term import (
+    FAILED_STATUSES,
+    RUNNING_STATUSES,
+    fmt_duration,
+    sanitize_line,
+    status_str,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -37,16 +43,7 @@ BOLD = f"{CSI}1m"
 RESET = f"{CSI}0m"
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
-RUNNING_STATUSES = {"pending", "evaluating", "building"}
 LIVE_LOGS = 5  # log streams followed for the longest-running attributes
-
-
-def fmt_duration(seconds: float) -> str:
-    if seconds < 60:  # noqa: PLR2004
-        return f"{seconds:.0f}s"
-    if seconds < 3600:  # noqa: PLR2004
-        return f"{seconds / 60:.0f}m{seconds % 60:.0f}s"
-    return f"{seconds / 3600:.0f}h{seconds % 3600 / 60:.0f}m"
 
 
 class Display:
@@ -96,10 +93,9 @@ class Display:
             # region until the next frame sees a stable size.
             buf += f"{CSI}r"
             self.margin = 0
-            first_size = self.rows == 0
+            self.resizing = self.rows != 0
             self.cols, self.rows = cols, rows
             self.row = min(self.row, rows)
-            self.resizing = not first_size
         elif self.resizing:
             # The size settled: rebuild the visible screen from the model.
             # The cleared rows are repainted from history, older lines are
@@ -153,7 +149,7 @@ def _clip(line: str, width: int) -> str:
     i = 0
     while i < len(line):
         ch = line[i]
-        if ch == "\x1b":  # skip a CSI sequence
+        if ch == "\x1b":  # copy an escape sequence, it occupies no cells
             j = i + 2
             while j < len(line) and not ("@" <= line[j] <= "~"):
                 j += 1
@@ -235,9 +231,6 @@ class TtyWatch:
                     self.running[a["attr"]] = _epoch(a.get("started_at"))
 
     def _record_finished(self, attrs: list[dict]) -> None:
-        # Imported here: main imports this module for cmd_build_watch.
-        from .main import FAILED_STATUSES, log_url, status_str  # noqa: PLC0415
-
         for a in attrs:
             verdict = status_str(a["status"], cached=bool(a.get("cached")))
             duration = ""
@@ -246,7 +239,7 @@ class TtyWatch:
                 duration = f"  {DIM}{fmt_duration(took)}{RESET}"
             lines = [f"{verdict} {a['attr']}{duration}"]
             if a["status"] in FAILED_STATUSES:
-                url = log_url(self.client, self.repo, self.number, a["attr"])
+                url = self.client.log_url(self.repo, self.number, a["attr"])
                 lines.append(f"  {DIM}log: {url}{RESET}")
             with self.lock:
                 self.running.pop(a["attr"], None)
@@ -349,8 +342,7 @@ class TtyWatch:
             while True:
                 alive = worker.is_alive()
                 self._spawn_followers()
-                # Single writer: one frame per tick appends the queued
-                # verdicts and redraws the live region.
+                # Only this loop writes to the terminal.
                 with self.lock:
                     verdicts, self.pending = self.pending, []
                 self.display.frame(verdicts, self._rows())

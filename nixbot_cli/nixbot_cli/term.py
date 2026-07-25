@@ -1,4 +1,5 @@
-"""Sanitizing of build log output before it is re-emitted to a terminal.
+"""Terminal presentation helpers: status wording and colors, durations,
+and sanitizing of build log output before it is re-emitted.
 
 The escape-sequence grammar mirrors nixbot.ansi (the server keeps the
 colored original, the CLI is standalone and cannot import it).
@@ -7,6 +8,55 @@ colored original, the CLI is standalone and cannot import it).
 from __future__ import annotations
 
 import re
+import sys
+
+RUNNING_STATUSES = {"pending", "evaluating", "building"}
+GOOD_STATUSES = {"succeeded", "skipped_local"}
+FAILED_STATUSES = {
+    "failed",
+    "cancelled",
+    "dependency_failed",
+    "cached_failure",
+    "failed_eval",
+}
+# Human wording for the raw database statuses.
+STATUS_LABELS = {
+    "succeeded": "built",
+    "skipped_local": "cached",
+    "cached_failure": "failed (cached)",
+    "dependency_failed": "dependency failed",
+    "failed_eval": "eval failed",
+}
+
+MINUTE = 60
+HOUR = 3600
+
+
+def _color(text: str, code: str) -> str:
+    if not sys.stdout.isatty():
+        return text
+    return f"\x1b[{code}m{text}\x1b[0m"
+
+
+def status_str(status: str, *, cached: bool = False) -> str:
+    label = STATUS_LABELS.get(status, status)
+    if status == "succeeded" and cached:
+        label = "cached"
+    if status in GOOD_STATUSES:
+        return _color(f"✓ {label}", "32")
+    if status in FAILED_STATUSES:
+        return _color(f"✗ {label}", "31")
+    glyph = "⏵" if status in ("building", "evaluating") else "·"
+    return _color(f"{glyph} {label}", "33")
+
+
+def fmt_duration(seconds: float) -> str:
+    if seconds < MINUTE:
+        return f"{seconds:.0f}s"
+    if seconds < HOUR:
+        return f"{seconds / MINUTE:.0f}m{seconds % MINUTE:.0f}s"
+    return f"{seconds / HOUR:.0f}h{seconds % HOUR / MINUTE:.0f}m"
+
 
 # One token per escape sequence. Only the named SGR group is allowed
 # through; every other form (cursor moves, clear-screen, OSC titles,

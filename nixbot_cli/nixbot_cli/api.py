@@ -131,6 +131,14 @@ class NixbotClient:
         """Build detail: {build, attributes}."""
         return self._json("GET", f"/api/repos/{repo}/builds/{number}")
 
+    def log_url(
+        self, repo: RepoRef, number: int, attr: str, *, raw: bool = False
+    ) -> str:
+        """Web viewer (or raw text) URL of one attribute's log."""
+        base = str(self.http.base_url).rstrip("/")
+        logs = f"{base}/repos/{repo}/builds/{number}/logs"
+        return f"{logs}/raw/{attr}" if raw else f"{logs}/{attr}"
+
     def finished_attrs(
         self,
         repo: RepoRef,

@@ -12,7 +12,14 @@ from typing import TYPE_CHECKING, Any, NoReturn
 
 from .api import ApiError, NixbotClient, RepoRef
 from .config import Settings, config_path
-from .term import sanitize_block, sanitize_line
+from .term import (
+    FAILED_STATUSES,
+    RUNNING_STATUSES,
+    STATUS_LABELS,
+    sanitize_block,
+    sanitize_line,
+    status_str,
+)
 from .watch_tty import TtyWatch
 
 if TYPE_CHECKING:
@@ -23,44 +30,9 @@ EXIT_BUILD_FAILED = 1
 EXIT_USAGE = 2
 EXIT_AUTH = 4
 
-FAILED_STATUSES = {
-    "failed",
-    "cancelled",
-    "dependency_failed",
-    "cached_failure",
-    "failed_eval",
-}
-GOOD_STATUSES = {"succeeded", "skipped_local"}
-# Human wording for the raw database statuses.
-STATUS_LABELS = {
-    "succeeded": "built",
-    "skipped_local": "cached",
-    "cached_failure": "failed (cached)",
-    "dependency_failed": "dependency failed",
-    "failed_eval": "eval failed",
-}
-
 
 class UsageError(Exception):
     """Bad invocation: reported on stderr, exit 2."""
-
-
-def _color(text: str, code: str) -> str:
-    if not sys.stdout.isatty():
-        return text
-    return f"\x1b[{code}m{text}\x1b[0m"
-
-
-def status_str(status: str, *, cached: bool = False) -> str:
-    label = STATUS_LABELS.get(status, status)
-    if status == "succeeded" and cached:
-        label = "cached"
-    if status in GOOD_STATUSES:
-        return _color(f"✓ {label}", "32")
-    if status in FAILED_STATUSES:
-        return _color(f"✗ {label}", "31")
-    glyph = "⏵" if status in ("building", "evaluating") else "·"
-    return _color(f"{glyph} {label}", "33")
 
 
 def print_table(rows: list[dict[str, Any]], columns: list[str]) -> None:
@@ -220,17 +192,6 @@ def cmd_build_view(client: NixbotClient, args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-RUNNING_STATUSES = {"pending", "evaluating", "building"}
-
-
-def log_url(
-    client: NixbotClient, repo: RepoRef, number: int, attr: str, *, raw: bool = False
-) -> str:
-    base = str(client.http.base_url).rstrip("/")
-    logs = f"{base}/repos/{repo}/builds/{number}/logs"
-    return f"{logs}/raw/{attr}" if raw else f"{logs}/{attr}"
-
-
 def print_failures(  # noqa: PLR0913
     client: NixbotClient, repo: RepoRef, number: int, status: str, finished: int
 ) -> None:
@@ -243,9 +204,7 @@ def print_failures(  # noqa: PLR0913
         print(summary["error"])
     for failure in summary["failures"]:
         print(f"\n── {failure['attr']} ── {status_str(failure['status'])}")
-        url = log_url(
-            client, repo, number, failure["attr"], raw=not sys.stdout.isatty()
-        )
+        url = client.log_url(repo, number, failure["attr"], raw=not sys.stdout.isatty())
         print(f"log: {url}")
         if failure.get("error"):
             print(failure["error"])
