@@ -17,6 +17,7 @@ import termios
 import threading
 import time
 import tty
+from collections import deque
 from datetime import UTC, datetime
 from typing import IO, TYPE_CHECKING
 
@@ -71,6 +72,10 @@ class Display:
         self.margin = 0  # bottom row of the DECSTBM margin, 0 = none
         self.cols = 0
         self.rows = 0
+        self.resizing = False  # size changed within the last frame
+        # Recent verdicts, enough to rebuild the visible screen after a
+        # resize rewrapped the old rows underneath us.
+        self.history: deque[str] = deque(maxlen=1000)
 
     def _emit(self, buf: str) -> None:
         # DEC 2026 synchronized output: capable terminals paint atomically.
@@ -83,12 +88,31 @@ class Display:
         region = region[: max(rows - 2, 1)]
         limit = rows - len(region)  # last row verdicts may occupy
         buf = f"{CSI}?25l"
+        self.history.extend(permanent)
         if (cols, rows) != (self.cols, self.rows):
+            # A resize rewraps the scrollback under us, so absolute rows
+            # are unreliable until the size settles. Never erase anything:
+            # release the margin, keep appending verdicts and skip the
+            # region until the next frame sees a stable size.
             buf += f"{CSI}r"
             self.margin = 0
+            first_size = self.rows == 0
             self.cols, self.rows = cols, rows
             self.row = min(self.row, rows)
-        if self.row > limit + 1:
+            self.resizing = not first_size
+        elif self.resizing:
+            # The size settled: rebuild the visible screen from the model.
+            # The cleared rows are repainted from history, older lines are
+            # ordinary scrollback and rewrap on their own.
+            self.resizing = False
+            buf += f"{CSI}2J{CSI}1;1H"
+            tail = list(self.history)[-(limit - 1) :] if limit > 1 else []
+            buf += "".join(
+                f"{CSI}{i + 1};1H{line}{CSI}K" for i, line in enumerate(tail)
+            )
+            self.row = len(tail) + 1
+            permanent = []
+        if not self.resizing and self.row > limit + 1:
             # The region grew past the space left below the output:
             # scroll the flow area up to make room.
             buf += self._set_margin(limit)
@@ -102,10 +126,12 @@ class Display:
                 buf += self._set_margin(limit)
                 buf += f"{CSI}{limit};1H\n\r{line}{CSI}K"
         self.top = min(self.row, limit + 1)
-        for i, line in enumerate(region):
-            buf += f"{CSI}{self.top + i};1H{_clip(line, cols)}{RESET}{CSI}K"
-        # Clear stale rows under the region (it may have moved or shrunk).
-        buf += f"{CSI}J{CSI}{self.top};1H"
+        if not self.resizing:
+            for i, line in enumerate(region):
+                buf += f"{CSI}{self.top + i};1H{_clip(line, cols)}{RESET}{CSI}K"
+            # Clear stale rows under the region (it may have moved or shrunk).
+            buf += f"{CSI}J"
+        buf += f"{CSI}{self.top};1H"
         self._emit(buf)
 
     def _set_margin(self, limit: int) -> str:

@@ -222,6 +222,43 @@ def test_tty_watch_shows_finished_and_running_attrs() -> None:
     assert not any("build #5" in line for line in lines)
 
 
+def test_resize_burst_never_erases_verdicts() -> None:
+    """While the terminal is being resized (a burst of size changes, one
+    per frame) nothing may be erased and the region stays hidden until
+    the size settles again."""
+    size = {"cols": WIDTH, "rows": HEIGHT}
+    out = io.StringIO()
+    display = Display(out, size=lambda: (size["cols"], size["rows"]), origin=1)
+    screen = pyte.HistoryScreen(WIDTH, HEIGHT, history=1000)
+    stream = pyte.Stream(screen)
+
+    def frame(batch: list[str], region: list[str]) -> None:
+        mark = out.tell()
+        display.frame(batch, region)
+        stream.feed(out.getvalue()[mark:])
+
+    frame(["verdict-0", "verdict-1"], ["HEADER", "running"])
+    resize_output_start = out.tell()
+    for i, rows in enumerate((11, 10, 9)):  # drag in progress
+        size.update(rows=rows)
+        screen.resize(rows, WIDTH)
+        frame([f"verdict-{2 + i}"], ["HEADER", "running"])
+    burst = out.getvalue()[resize_output_start:]
+    assert "HEADER" not in burst  # region not redrawn mid-resize
+    assert "\x1b[J" not in burst  # nothing erased
+    assert "\x1b[2J" not in burst
+
+    # Once the size settles the visible screen is rebuilt from the model:
+    # most recent verdicts on top, region below, no stale copies.
+    frame(["verdict-5"], ["HEADER", "running"])
+    frame(["verdict-6"], ["HEADER", "running"])
+    visible = [row.rstrip() for row in screen.display]
+    shown = [line for line in visible if line.startswith("verdict-")]
+    assert shown == [f"verdict-{i}" for i in range(7)]
+    assert visible.index("HEADER") == len(shown)
+    assert sum("HEADER" in line for line in visible) == 1
+
+
 def test_long_verdicts_wrap_without_corrupting_region() -> None:
     out = io.StringIO()
     display = make_display(out)
