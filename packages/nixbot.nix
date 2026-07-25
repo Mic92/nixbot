@@ -3,6 +3,7 @@
   git,
   hatchling,
   nix,
+  nix-eval-jobs,
   pydantic,
   pytestCheckHook,
   pytest-asyncio,
@@ -61,6 +62,10 @@ buildPythonPackage (finalAttrs: {
 
   nativeCheckInputs = [
     git
+    # For the eval/prefetch integration tests: nix works daemon-less
+    # against a scratch store set up in preCheck.
+    nix
+    nix-eval-jobs
     pytestCheckHook
     pytest-asyncio
     pytest-timeout
@@ -78,6 +83,11 @@ buildPythonPackage (finalAttrs: {
   # Chromium refuses to start with the unwritable default HOME.
   preCheck = ''
     export HOME=$(mktemp -d)
+    # Daemon-less scratch nix store for the eval/prefetch integration
+    # tests; the real /nix/store is read-only inside the build sandbox.
+    export NIX_STORE_DIR=$TMPDIR/nix/store
+    export NIX_STATE_DIR=$TMPDIR/nix/var
+    export NIX_CONF_DIR=$TMPDIR/nix/etc
     # On huge builders more workers only add scheduling overhead and postgres connection pressure.
     export PYTEST_XDIST_AUTO_NUM_WORKERS=$(( NIX_BUILD_CORES > 64 ? 64 : NIX_BUILD_CORES ))
   '';
