@@ -55,7 +55,12 @@ services.nixbot = {
     oauthId = "<oauth-client-id>";
     oauthSecretFile = "/path/to/oauth-secret";
 
-    # Optional: SSH authentication for private repositories
+    # Optional: SSH authentication for private repositories and
+    # private ssh:// flake inputs. Anyone who can open a pull request
+    # against a built repository can add any repo this key can read as
+    # a flake input and thus read its contents. Use a deploy key or
+    # machine user scoped to the repositories you intend to expose,
+    # not a forge-wide/admin key.
     sshPrivateKeyFile = "/path/to/ssh-key";
     sshKnownHostsFile = "/path/to/known-hosts";
 
