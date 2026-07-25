@@ -27,6 +27,7 @@ from .db import BuildStatus
 from .db_gen import builds as q
 from .events import BuildResult, EvalReport
 from .executor import failure_excerpt
+from .flake_prefetch import PrefetchError, prefetch_flake_inputs
 from .live_warnings import LiveWarningAggregator
 from .memory import calculate_eval_workers
 from .models import CacheStatus, NixEvalJobSuccess
@@ -251,6 +252,32 @@ async def _record_eval_success(
     )
 
 
+async def _prefetch_inputs(
+    o: Orchestrator,
+    build: BuildRecord,
+    worktree_path: Path,
+    branch_config: BranchConfig,
+    credentials: FetchCredentials | None,
+) -> None:
+    """Fetch flake inputs into the store outside the eval sandbox, with
+    the same credentials as the git fetch, so private ssh:// inputs
+    work even though the sandboxed evaluator has no SSH key (#86)."""
+    try:
+        async with asyncio.timeout(o.config.eval_timeout):
+            await prefetch_flake_inputs(
+                worktree_path,
+                branch_config,
+                o.gcroots_dir(build),
+                credentials=credentials,
+            )
+    except TimeoutError:
+        msg = (
+            "prefetching flake inputs timed out after "
+            f"{o.config.eval_timeout:.0f} seconds"
+        )
+        raise PrefetchError(msg) from None
+
+
 async def _reap(*tasks: asyncio.Future[Any]) -> None:
     """Cancel and await tasks, swallowing their errors."""
     for task in tasks:
@@ -274,6 +301,7 @@ async def _run_build_inner(
         return
 
     branch_config = BranchConfig.load(worktree_path)
+    await _prefetch_inputs(o, build, worktree_path, branch_config, credentials)
     eval_settings = _eval_settings(o, event, build, credentials)
     # Race the evaluation against the cancel event: a superseded
     # build must not hold the eval slot to completion.

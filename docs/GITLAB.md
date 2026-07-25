@@ -31,7 +31,11 @@ services.nixbot = {
     userAllowlist = [ "mygroup" ];
     # repoAllowlist = [ "mygroup/myrepo" ];
 
-    # Optional: SSH authentication for fetching
+    # Optional: SSH authentication for fetching and for private ssh://
+    # flake inputs. Anyone who can open a merge request against a built
+    # repository can add any repo this key can read as a flake input and
+    # thus read its contents. Use a deploy key or machine user scoped to
+    # the repositories you intend to expose, not an instance-wide key.
     # sshPrivateKeyFile = "/path/to/ssh-key";
     # sshKnownHostsFile = "/path/to/known-hosts";
   };
