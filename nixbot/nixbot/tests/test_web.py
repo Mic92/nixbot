@@ -1154,7 +1154,13 @@ def test_openapi_docs(client: WebHarness) -> None:
     # Responses are typed: every operation documents a response schema.
     for path, ops in spec["paths"].items():
         for method, op in ops.items():
-            schema = op["responses"]["200"]["content"]["application/json"]["schema"]
+            content = op["responses"]["200"]["content"]
+            if "application/json" not in content:
+                # Plain-text log and SSE endpoints document their own
+                # media type instead of a JSON schema.
+                assert "text/plain" in content or "text/event-stream" in content
+                continue
+            schema = content["application/json"]["schema"]
             assert schema not in ({}, None), f"{method} {path}"
     assert "Build" in spec["components"]["schemas"]
 
@@ -1931,3 +1937,134 @@ def test_scheduled_run_notify_build_events(client: WebHarness) -> None:
     assert [p["status"] for p in payloads] == ["running", "succeeded"]
     assert all(p["run_id"] == run_id for p in payloads)
     assert all("build_id" not in p for p in payloads)
+
+
+# --- JSON log API ------------------------------------------------------
+
+
+def seed_container(client: WebHarness, tmp_path: Path) -> None:
+    async def run() -> None:
+        ctx = client.ctx
+        ctx.state_dir = tmp_path
+        build_id = await ctx.pool.fetchval("SELECT id FROM builds WHERE number = 2")
+        log_file = attribute_log_path(tmp_path, build_id, "x86_64-linux.bad")
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        # Production writes both the flat log and the container sidecar.
+        log_file.write_bytes(
+            zstandard.ZstdCompressor().compress(
+                b"\x1b[31mCC main.o\x1b[0m\nerror: boom undeclared\n"
+            )
+        )
+        w = LogContainerWriter()
+        w.register("/nix/store/aaa-qtbase-5.0.drv", "qtbase-5.0")
+        w.phase("/nix/store/aaa-qtbase-5.0.drv", "build")
+        w.line("/nix/store/aaa-qtbase-5.0.drv", "\x1b[31mCC main.o\x1b[0m")
+        w.line("/nix/store/aaa-qtbase-5.0.drv", "error: boom undeclared")
+        w.status("/nix/store/aaa-qtbase-5.0.drv", "failed")
+        w.register("/nix/store/bbb-zlib-1.3.drv", "zlib-1.3")
+        w.status("/nix/store/bbb-zlib-1.3.drv", "built")
+        container_path(log_file).write_bytes(w.finalize())
+
+    client.loop.run_until_complete(run())
+
+
+def test_api_log_toc_and_text(client: WebHarness, tmp_path: Path) -> None:
+    seed_container(client, tmp_path)
+    base = "/api/repos/github/acme/widget/builds/2/logs/x86_64-linux.bad"
+
+    toc = client.get(base).json()
+    assert toc["attr"] == "x86_64-linux.bad"
+    assert [d["name"] for d in toc["derivations"]] == ["qtbase-5.0", "zlib-1.3"]
+    qt = toc["derivations"][0]
+    assert qt["drv"] == "/nix/store/aaa-qtbase-5.0.drv"
+    assert qt["status"] == "failed"
+    assert qt["n"] == 2
+    assert qt["ph"] == [["build", 0]]
+    assert client.get(f"{base}nope").status_code == 404
+
+    # Whole attribute, ANSI stripped by default.
+    text = client.get(f"{base}/text").text
+    assert "CC main.o" in text
+    assert "\x1b" not in text
+    # ?ansi=1 keeps SGR colors, ?tail keeps only the last lines.
+    assert "\x1b[31m" in client.get(f"{base}/text?ansi=1").text
+    assert client.get(f"{base}/text?tail=1").text == "error: boom undeclared\n"
+
+    # One derivation by store path or name substring.
+    by_path = client.get(f"{base}/text?drv=/nix/store/aaa-qtbase-5.0.drv").text
+    assert "error: boom undeclared" in by_path
+    assert "Running phase: build" in by_path
+    assert client.get(f"{base}/text?drv=qtbase").text == by_path
+    assert client.get(f"{base}/text?drv=nope").status_code == 404
+    ambiguous = client.get(f"{base}/text?drv=b")  # matches both names
+    assert ambiguous.status_code == 400
+    assert "qtbase-5.0" in ambiguous.json()["detail"]
+
+
+def test_api_log_toc_flat_log_fallback(client: WebHarness, tmp_path: Path) -> None:
+    """Logs without per-derivation structure appear as one synthetic
+    derivation; ?drv= is rejected."""
+    seed_log(client, tmp_path)  # flat .zst, no container
+    base = "/api/repos/github/acme/widget/builds/2/logs/x86_64-linux.bad"
+    toc = client.get(base).json()
+    assert toc["derivations"] == [
+        {
+            "idx": 0,
+            "drv": None,
+            "name": "x86_64-linux.bad",
+            "status": toc["status"],
+            "n": 1,
+            "ph": [],
+            "t0": None,
+            "t1": None,
+        }
+    ]
+    assert client.get(f"{base}/text").text == "build exploded\n"
+    assert client.get(f"{base}/text?drv=x").status_code == 404
+
+
+def test_api_log_stream_json(client: WebHarness, tmp_path: Path) -> None:
+    """The /api stream sends a TOC-shaped snapshot (no line history) and
+    raw-text deltas; no HTML."""
+    ctx = client.ctx
+    ctx.state_dir = tmp_path
+    registry = client.app.state.log_registry
+
+    async def run() -> str:
+        build_id = await ctx.pool.fetchval("SELECT id FROM builds WHERE number = 3")
+        writer = LogWriter(path=tmp_path / "logs" / "live" / "x86_64-linux.ok.zst")
+        cap = StructuredCapture(clock=lambda: 1.0)
+        writer.capture = cap
+        cap.start_build(1, "/nix/store/aaa-qtbase-5.0.drv")
+        cap.log_line(1, "CC main.o")  # history: must not appear in the stream
+        registry.register(build_id, "x86_64-linux.ok", writer)
+        try:
+            url = "/api/repos/github/acme/widget/builds/3/logs/x86_64-linux.ok/stream"
+            task = asyncio.ensure_future(client.http.get(url))
+            await asyncio.sleep(0.1)
+            cap.phase(1, "build")
+            cap.log_line(1, "\x1b[31mCC failed\x1b[0m")
+            cap.set_status("/nix/store/aaa-qtbase-5.0.drv", "failed")
+            cap.close()
+            return (await task).text
+        finally:
+            registry.unregister(build_id, "x86_64-linux.ok")
+
+    stream = client.loop.run_until_complete(run())
+    assert "event: state" in stream
+    assert '"drv":"/nix/store/aaa-qtbase-5.0.drv"' in stream
+    assert '"n":1' in stream  # snapshot carries counts...
+    assert "CC main.o" not in stream  # ...but no line history
+    assert "<span" not in stream  # no HTML anywhere
+    assert "event: phase" in stream
+    assert "event: line" in stream
+    assert '"text":"\\u001b[31mCC failed\\u001b[0m"' in stream  # raw ANSI text
+    assert "event: drv-done" in stream
+    assert '"status":"failed"' in stream
+    assert "event: done" in stream
+
+    # Finished/absent capture: just done, the client uses TOC + text.
+    finished = client.get(
+        "/api/repos/github/acme/widget/builds/2/logs/x86_64-linux.bad/stream"
+    ).text
+    assert finished == "event: done\ndata: {}\n\n"

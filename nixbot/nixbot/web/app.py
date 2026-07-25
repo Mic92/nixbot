@@ -655,8 +655,15 @@ the instance restricts project visibility.
 - GET /api/repos/{forge}/{owner}/{name}/builds/{number} -> build + all attributes
 - GET /api/repos/{forge}/{owner}/{name}/attrs/{attr} -> per-attribute history
 - GET /api/queue -> global build queue
-- GET /repos/{forge}/{owner}/{name}/builds/{number}/logs/raw/{attr}?tail=N
-  -> plain-text log (full when tail is omitted)
+- GET /api/repos/{forge}/{owner}/{name}/builds/{number}/logs/{attr}
+  -> log table of contents: derivations with drv path, status, phases,
+     line counts and timings
+- GET /api/repos/{forge}/{owner}/{name}/builds/{number}/logs/{attr}/text?tail=N&drv=<path|name>&ansi=1
+  -> plain-text log (whole attribute, or one derivation via drv=)
+- GET /api/repos/{forge}/{owner}/{name}/builds/{number}/logs/{attr}/stream
+  -> SSE while the attribute runs: `state` snapshot (no history), then
+     drv/line/phase/drv-done deltas with raw text, `done` at the end
+- GET /api/events?build=N -> SSE build/attribute status-change cues
 - GET /repos/{forge}/{owner}/{name}/badge.svg?branch=B
   -> SVG build-status badge for a branch (default branch when branch is omitted)
 
@@ -664,8 +671,17 @@ the instance restricts project visibility.
 
 - POST /api/repos/{forge}/{owner}/{name}/builds/{number}/restart
 - POST /api/repos/{forge}/{owner}/{name}/builds/{number}/cancel
+- POST /api/repos/{forge}/{owner}/{name}/builds/{number}/attrs/{attr}/restart
+- POST /api/repos/{forge}/{owner}/{name}/builds/{number}/attrs/{attr}/cancel
+- POST /api/repos/{forge}/{owner}/{name}/builds/{number}/effects/restart
 - POST /api/repos/{forge}/{owner}/{name}/enable (admin)
 - POST /api/repos/{forge}/{owner}/{name}/disable (admin)
+
+## Command line
+
+The `nbo` CLI (package `nixbot-cli`) wraps this API: repo/build
+listing, restart/cancel, failure summaries, log tails and live
+following. See docs/CLI.md in the nixbot repository.
 """
 
 

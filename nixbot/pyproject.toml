@@ -111,6 +111,8 @@ module = "asyncpg.*"
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
+# the CLI package's tests run in this suite against the real app
+pythonpath = ["../nixbot_cli"]
 timeout = 60
 asyncio_mode = "auto"
 # Distribute by module: module-scoped fixtures (ephemeral Postgres,

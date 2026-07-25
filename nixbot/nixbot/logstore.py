@@ -120,21 +120,23 @@ class LogContainerWriter:
         """(name, lines) for derivations left in a failed status."""
         return [(d.name, d.lines) for d in self._drvs.values() if d.status == "failed"]
 
-    def state(self) -> list[dict]:
+    def state(self, *, with_lines: bool = True) -> list[dict]:
         """Current per-derivation state for a live snapshot burst. Mirrors
-        the finalized TOC plus the lines seen so far."""
+        the finalized TOC plus the lines seen so far. with_lines=False
+        (the JSON API) omits the line history and keeps only counts."""
         return [
             {
                 "idx": i,
+                "drv": drv,
                 "name": d.name,
                 "status": d.status,
                 "ph": d.phases,
-                "lines": d.lines,
+                **({"lines": d.lines} if with_lines else {}),
                 "t0": d.t0,
                 "t1": d.t1,
                 "n": d.count,
             }
-            for i, d in enumerate(self._drvs.values())
+            for i, (drv, d) in enumerate(self._drvs.items())
         ]
 
     def finalize(self) -> bytes:
@@ -157,10 +159,11 @@ class LogContainerWriter:
             off += len(fr)
             buf, members, bufbytes = [], [], 0
 
-        for d in self._drvs.values():
+        for drv, d in self._drvs.items():
             lines = d.lines
             txt = "".join(t + "\n" for t in lines).encode()
             e = {
+                "drv": drv,
                 "name": d.name,
                 "status": d.status,
                 "off": 0,

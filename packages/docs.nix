@@ -33,6 +33,7 @@ let
       pages = [
         "EFFECTS.md"
         "OIDC.md"
+        "CLI.md"
       ];
     }
     {

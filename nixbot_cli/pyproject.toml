@@ -1,0 +1,17 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "nixbot-cli"
+description = "Command-line client (nbo) for the nixbot CI service."
+license = { text = "MIT" }
+authors = [
+    { name = "Jörg Thalheim", email = "joerg@thalheim.io" },
+]
+version = "0.0.1"
+requires-python = ">=3.12"
+dependencies = ["httpx"]
+
+[project.scripts]
+nbo = "nixbot_cli.main:main"

@@ -79,6 +79,7 @@
         pkgs.python3.pkgs.zstandard
         pkgs.python3.pkgs.python-multipart
         pkgs.python3.pkgs.playwright
+        pkgs.python3.pkgs.pyte
       ];
     };
   };
@@ -89,6 +90,7 @@
   settings.formatter."mypy-" = lib.mkIf pkgs.stdenv.buildPlatform.isLinux {
     includes = [
       "nixbot/**/*.py"
+      "nixbot_cli/**/*.py"
       "nixbot_effects/**/*.py"
     ];
   };

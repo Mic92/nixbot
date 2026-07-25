@@ -1096,3 +1096,33 @@ def test_webhook_panel_is_forge_aware(harness: WebHarness) -> None:
         assert "webhook setup" not in github_page
     finally:
         harness.ctx.webhook_base_url = None
+
+
+def test_api_attr_and_effects_control(harness: WebHarness) -> None:
+    BACKEND.attr_restarts.clear()
+    BACKEND.attr_cancels.clear()
+    BACKEND.effect_restarts.clear()
+    base = "/api/repos/github/acme/widget/builds/1"
+
+    # Anonymous rejected.
+    assert harness.post(f"{base}/attrs/bad1/restart").status_code == 403
+    assert BACKEND.attr_restarts == []
+
+    response = harness.post(f"{base}/attrs/bad1/restart", ROOT)
+    assert response.status_code == 200
+    assert response.json() == {"number": 1, "attr": "bad1", "action": "restart"}
+    assert [a for _, a in BACKEND.attr_restarts] == ["bad1"]
+    # Unknown attribute is a 404, not an enqueue.
+    assert harness.post(f"{base}/attrs/nope/restart", ROOT).status_code == 404
+    assert len(BACKEND.attr_restarts) == 1
+
+    response = harness.post(f"{base}/attrs/bad1/cancel", ROOT)
+    assert response.status_code == 200
+    assert response.json() == {"number": 1, "attr": "bad1", "action": "cancel"}
+    assert [a for _, a in BACKEND.attr_cancels] == ["bad1"]
+    assert harness.post(f"{base}/attrs/nope/cancel", ROOT).status_code == 404
+
+    response = harness.post(f"{base}/effects/restart", ROOT)
+    assert response.status_code == 200
+    assert response.json() == {"number": 1, "action": "restart-effects"}
+    assert len(BACKEND.effect_restarts) == 1

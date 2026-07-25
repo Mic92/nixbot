@@ -19,8 +19,12 @@
   postgresql,
   playwright,
   playwright-driver,
+  pyte,
   makeFontsConf,
   dejavu_fonts,
+  # Optional: the NixOS module calls this file with python.pkgs.callPackage,
+  # which cannot supply it. Only the pytest passthru check needs the CLI.
+  nixbot-cli ? null,
   lib,
 }:
 buildPythonPackage (finalAttrs: {
@@ -59,7 +63,10 @@ buildPythonPackage (finalAttrs: {
     pytest-benchmark
     postgresql
     playwright
-  ];
+    pyte
+  ]
+  # The CLI's tests (test_cli*.py) run against this app in-process.
+  ++ lib.optional (nixbot-cli != null) nixbot-cli;
 
   # Browser tests run headless Chromium from the pinned playwright
   # driver; the version matches the python playwright package.

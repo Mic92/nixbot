@@ -27,6 +27,8 @@ in
       # from sqlc.yaml.
       sqlc
       devProcessCompose
+      # nbo, the CLI client
+      self.packages.${system}.nixbot-cli
       (pkgs.python3.withPackages (
         ps:
         [
@@ -36,6 +38,7 @@ in
           ps.pytest-xdist
           ps.pytest-benchmark
           ps.playwright
+          ps.pyte
         ]
         ++ self.packages.${system}.nixbot.dependencies
       ))

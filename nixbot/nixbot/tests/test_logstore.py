@@ -44,6 +44,7 @@ def test_toc_metadata() -> None:
     w.status("pkg", "failed")
     r = LogContainerReader(w.finalize())
     e = r.entry(0)
+    assert e["drv"] == "pkg"  # the writer key: the full drv path in production
     assert e["name"] == "pkg"
     assert e["status"] == "failed"
     assert e["n"] == 4

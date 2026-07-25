@@ -607,7 +607,12 @@ async def test_structured_capture_live_stream() -> None:
     while not q.empty():
         deltas.append(q.get_nowait())
 
-    assert deltas[0] == {"t": "drv", "idx": 1, "name": "qtbase-5.0"}
+    assert deltas[0] == {
+        "t": "drv",
+        "idx": 1,
+        "drv": "/nix/store/aaa-qtbase-5.0.drv",
+        "name": "qtbase-5.0",
+    }
     assert {"t": "phase", "idx": 1, "phase": "build", "line": 0} in deltas
     assert {"t": "line", "idx": 1, "from": 1, "text": "CC main.o"} in deltas
     # stop marks built, finalize status overrides to failed. Both stream.
@@ -649,10 +654,16 @@ async def test_structured_capture_status_without_start_build() -> None:
     q = cap.subscribe()
     cap.set_status("/nix/store/aaa-qtbase-5.0.drv", "built")
     deltas = [q.get_nowait() for _ in range(q.qsize())]
-    assert deltas[0] == {"t": "drv", "idx": 1, "name": "qtbase-5.0"}
+    assert deltas[0] == {
+        "t": "drv",
+        "idx": 1,
+        "drv": "/nix/store/aaa-qtbase-5.0.drv",
+        "name": "qtbase-5.0",
+    }
     assert deltas[1] == {"t": "status", "idx": 1, "status": "built"}
     entry = next(e for e in cap.state() if e["idx"] == 1)
     assert entry["name"] == "qtbase-5.0"
+    assert entry["drv"] == "/nix/store/aaa-qtbase-5.0.drv"
 
 
 def test_structured_failure_excerpt_uses_failed_derivation() -> None:

@@ -20,6 +20,7 @@ from fastapi.responses import (
     Response,
     StreamingResponse,
 )
+from pydantic import BaseModel
 
 from ..ansi import (  # noqa: TID252
     ANSI_PARTIAL_RE,
@@ -308,7 +309,12 @@ def render_drv_window(
 def _toc_entries(reader: LogContainerReader) -> list[dict]:
     fields = ("name", "status", "n", "ph", "t0", "t1")
     return [
-        {"idx": i, **{k: reader.entry(i)[k] for k in fields}}
+        # .get("drv"): containers written before the drv path was recorded.
+        {
+            "idx": i,
+            "drv": reader.entry(i).get("drv"),
+            **{k: reader.entry(i)[k] for k in fields},
+        }
         for i in range(len(reader))
     ]
 
@@ -344,6 +350,64 @@ def _strip_tail(text: str, tail: int) -> str:
     """ANSI-stripped last `tail` lines; CPU-bound on multi-MB logs, so
     callers run it via asyncio.to_thread."""
     return "\n".join(strip_ansi(text).splitlines()[-tail:])
+
+
+def _plain(text: str, tail: int | None, *, ansi: bool) -> str:
+    """Tail/ANSI post-processing for the plain-text API responses.
+    CPU-bound on multi-MB logs, so callers run it via asyncio.to_thread."""
+    if not ansi:
+        text = strip_ansi(text)
+    if tail:
+        text = "\n".join(text.splitlines()[-tail:])
+    return text if not text or text.endswith("\n") else text + "\n"
+
+
+class EventStreamResponse(StreamingResponse):
+    """Documents SSE routes as text/event-stream in the OpenAPI spec."""
+
+    media_type = "text/event-stream"
+
+
+class LogDerivation(BaseModel):
+    """One derivation inside an attribute's structured log."""
+
+    idx: int
+    drv: str | None  # full .drv store path; None for setup/legacy entries
+    name: str
+    status: str
+    n: int  # line count
+    ph: list[list]  # [phase name, first 0-based line]
+    t0: int | None  # ms epoch
+    t1: int | None
+
+
+class LogToc(BaseModel):
+    """Table of contents of one attribute's structured log."""
+
+    attr: str
+    status: str | None
+    derivations: list[LogDerivation]
+
+
+def _api_derivations(entries: list[dict]) -> list[dict]:
+    """Normalize capture/container entries for LogDerivation: only real
+    store paths count as drv (not the synthetic setup key)."""
+    return [
+        {**e, "drv": d if (d := e.get("drv")) and d.endswith(".drv") else None}
+        for e in entries
+    ]
+
+
+def _match_drv(entries: list[dict], selector: str) -> dict:
+    """Entry whose drv path equals or name contains `selector`.
+    404 on no match, 400 listing candidates when ambiguous."""
+    matches = [e for e in entries if e.get("drv") == selector or selector in e["name"]]
+    if not matches:
+        raise HTTPException(status_code=404, detail="unknown derivation")
+    if len(matches) > 1:
+        names = ", ".join(e["name"] for e in matches)
+        raise HTTPException(status_code=400, detail=f"ambiguous derivation: {names}")
+    return matches[0]
 
 
 async def _failure_summary(
@@ -423,22 +487,16 @@ class _LogRoutes:
         attr: str,
         tail: int | None = Query(None, ge=1),
     ) -> PlainTextResponse:
-        """Full log as plain text; ?tail=N returns only the last N lines."""
+        """Full log as plain text; ?tail=N returns only the last N lines.
+        Falls back to the stored eval error (e.g. failed_eval) so raw
+        links work for every failure status."""
         _, build, path = await self._resolve(request, forge, owner, name, number, attr)
-        text = await _log_text(self.registry, build, attr, path)
-        if text is None:
-            # No build log (e.g. failed_eval): fall back to the stored
-            # eval error so raw links work for every failure status.
-            text = await gen.attribute_error(
-                self.ctx.pool, build_id=build["id"], attr=attr
-            )
+        text = await self._attr_text(build, attr, path)
         if text is None:
             raise HTTPException(status_code=404)
-        if tail:
-            return PlainTextResponse(
-                await asyncio.to_thread(_strip_tail, text, tail) + "\n"
-            )
-        return PlainTextResponse(await asyncio.to_thread(strip_ansi, text))
+        return PlainTextResponse(
+            await asyncio.to_thread(_plain, text, tail, ansi=False)
+        )
 
     async def log_raw_text_legacy(  # noqa: PLR0913
         self,
@@ -619,6 +677,122 @@ class _LogRoutes:
         """
         _, build = await self._build_or_404(request, forge, owner, name, number)
         return await _failure_summary(self.ctx, self.registry, build, tail)
+
+    def _capture(self, build: dict, attr: str) -> StructuredCapture | None:
+        writer = self.registry.get(build["id"], attr)
+        return writer.capture if writer else None
+
+    async def _attr_text(self, build: dict, attr: str, path: Path | None) -> str | None:
+        """The attribute's log text, falling back to the stored eval error
+        (e.g. failed_eval) so every failure status has readable output."""
+        text = await _log_text(self.registry, build, attr, path)
+        if text is None:
+            text = await gen.attribute_error(
+                self.ctx.pool, build_id=build["id"], attr=attr
+            )
+        return text
+
+    async def api_log_toc(  # noqa: PLR0913
+        self,
+        request: Request,
+        forge: str,
+        owner: str,
+        name: str,
+        number: int,
+        attr: str,
+    ) -> dict:
+        """Table of contents of one attribute's log: its derivations with
+        status, phases, line counts and timings. Running attributes are
+        served from the live capture; logs without per-derivation
+        structure appear as a single synthetic entry."""
+        _, build, path = await self._resolve(request, forge, owner, name, number, attr)
+        attr_status = await gen.attribute_status(
+            self.ctx.pool, build_id=build["id"], attr=attr
+        )
+        if attr_status is None:
+            raise HTTPException(status_code=404, detail="unknown attribute")
+        capture = self._capture(build, attr)
+        if capture is not None:
+            entries = capture.state(with_lines=False)
+        elif (reader := await _load_container(path)) is not None:
+            entries = _toc_entries(reader)
+        else:
+            # Flat log or eval error only: one synthetic derivation.
+            text = await self._attr_text(build, attr, path)
+            entries = (
+                []
+                if text is None
+                else [
+                    {
+                        "idx": 0,
+                        "drv": None,
+                        "name": attr,
+                        "status": attr_status,
+                        "n": len(text.splitlines()),
+                        "ph": [],
+                        "t0": None,
+                        "t1": None,
+                    }
+                ]
+            )
+        return {
+            "attr": attr,
+            "status": attr_status,
+            "derivations": _api_derivations(entries),
+        }
+
+    async def api_log_text(  # noqa: PLR0913
+        self,
+        request: Request,
+        forge: str,
+        owner: str,
+        name: str,
+        number: int,
+        attr: str,
+        tail: int | None = Query(None, ge=1),
+        drv: str | None = None,
+        ansi: bool = Query(default=False),
+    ) -> PlainTextResponse:
+        """The attribute's log as plain text. ?tail=N keeps the last N
+        lines, ?drv=<store path or name substring> selects one derivation
+        of a structured log, ?ansi=1 keeps SGR color sequences."""
+        _, build, path = await self._resolve(request, forge, owner, name, number, attr)
+        text: str | None
+        if drv:
+            capture = self._capture(build, attr)
+            if capture is not None:
+                entry = _match_drv(capture.state(), drv)
+                text = "\n".join(entry["lines"])
+            elif (reader := await _load_container(path)) is not None:
+                entry = _match_drv(_toc_entries(reader), drv)
+                text = "\n".join(
+                    await asyncio.to_thread(reader.lines_with_phases, entry["idx"])
+                )
+            else:
+                raise HTTPException(
+                    status_code=404, detail="log has no per-derivation structure"
+                )
+        else:
+            text = await self._attr_text(build, attr, path)
+            if text is None:
+                raise HTTPException(status_code=404)
+        return PlainTextResponse(await asyncio.to_thread(_plain, text, tail, ansi=ansi))
+
+    async def api_log_stream(  # noqa: PLR0913
+        self,
+        request: Request,
+        forge: str,
+        owner: str,
+        name: str,
+        number: int,
+        attr: str,
+    ) -> StreamingResponse:
+        """SSE stream of a running attribute: a `state` snapshot (the TOC,
+        no line history), then `drv`/`line`/`phase`/`drv-done` deltas with
+        raw text, and `done` when the attribute finishes. History comes
+        from the text endpoint."""
+        _, build, _ = await self._resolve(request, forge, owner, name, number, attr)
+        return EventStreamResponse(_structured_events_json(self._capture(build, attr)))
 
     async def log_drv_lines(  # noqa: PLR0913
         self,
@@ -874,14 +1048,54 @@ def create_log_router(ctx: WebContext, registry: LogRegistry) -> APIRouter:
 
 
 def create_log_api_router(ctx: WebContext, registry: LogRegistry) -> APIRouter:
-    """The failure summary belongs to the documented /api surface,
-    unlike the HTML/plain-text log routes."""
+    """JSON/plain-text log endpoints of the documented /api surface."""
     router = APIRouter(tags=["api"])
     routes = _LogRoutes(ctx, registry)
-    router.get(f"/api{_BASE}/failures", response_model=FailureSummary)(
-        routes.build_failures
+    base = f"/api{_BASE}"
+    router.get(f"{base}/failures", response_model=FailureSummary)(routes.build_failures)
+    # :path — attribute names may contain slashes; the /text and /stream
+    # suffixes are matched before the TOC catch-all.
+    router.get(f"{base}/logs/{{attr:path}}/text", response_class=PlainTextResponse)(
+        routes.api_log_text
     )
+    router.get(f"{base}/logs/{{attr:path}}/stream", response_class=EventStreamResponse)(
+        routes.api_log_stream
+    )
+    router.get(f"{base}/logs/{{attr:path}}", response_model=LogToc)(routes.api_log_toc)
     return router
+
+
+async def _structured_events_json(
+    capture: StructuredCapture | None,
+) -> AsyncGenerator[str, None]:
+    """JSON twin of _structured_events for the /api stream: no HTML, no
+    line history (the state snapshot is TOC-shaped), raw text in line
+    deltas. A finished/absent capture just signals done."""
+    if capture is None:
+        yield "event: done\ndata: {}\n\n"
+        return
+    queue = capture.subscribe()
+    # Atomic with subscribe (no await between): no delta lost or duplicated.
+    state = _api_derivations(capture.state(with_lines=False))
+    yield f"event: state\ndata: {json.dumps(state, separators=(',', ':'))}\n\n"
+    try:
+        while True:
+            try:
+                delta = await asyncio.wait_for(queue.get(), timeout=30)
+            except TimeoutError:
+                yield ": keepalive\n\n"
+                continue
+            if delta is None:
+                yield "event: done\ndata: {}\n\n"
+                return
+            # The capture's "status" delta is the derivation finishing.
+            event = "drv-done" if delta["t"] == "status" else delta["t"]
+            # json escapes any CR/LF in log text, so payloads cannot
+            # forge SSE fields.
+            payload = json.dumps(delta, separators=(",", ":"))
+            yield f"event: {event}\ndata: {payload}\n\n"
+    finally:
+        capture.unsubscribe(queue)
 
 
 async def _stream_events(
