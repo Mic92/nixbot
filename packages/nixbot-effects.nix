@@ -1,5 +1,6 @@
 {
   lib,
+  stdenv,
   bubblewrap,
   hatchling,
   buildPythonApplication,
@@ -11,5 +12,9 @@ buildPythonApplication {
   build-system = [
     hatchling
   ];
-  makeWrapperArgs = [ "--prefix PATH : ${lib.makeBinPath [ bubblewrap ]}" ];
+  # The bwrap sandbox only exists on Linux and bubblewrap does not
+  # evaluate on Darwin.
+  makeWrapperArgs = lib.optionals stdenv.hostPlatform.isLinux [
+    "--prefix PATH : ${lib.makeBinPath [ bubblewrap ]}"
+  ];
 }
