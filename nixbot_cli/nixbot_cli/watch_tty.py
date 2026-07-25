@@ -217,7 +217,7 @@ class TtyWatch:
         self.finished = 0
         self.failed = 0
         self.build_status = "pending"
-        self.started_at = time.time()
+        self.started_at = time.time()  # replaced by the build's start time
         self.spin = 0
 
     # --- worker: events + finished-attribute cursor ---------------------
@@ -226,6 +226,9 @@ class TtyWatch:
         detail = self.client.build(self.repo, self.number)
         with self.lock:
             self.build_status = detail["build"]["status"]
+            self.started_at = _epoch(
+                detail["build"].get("started_at") or detail["build"].get("created_at")
+            )
             for a in detail["attributes"]:
                 if a["status"] == "building":
                     self.running[a["attr"]] = _epoch(a.get("started_at"))
