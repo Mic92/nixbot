@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, NoReturn
 
 from .api import ApiError, NixbotClient, RepoRef
 from .config import Settings, config_path
+from .term import sanitize_block, sanitize_line
 from .watch_tty import TtyWatch
 
 if TYPE_CHECKING:
@@ -249,7 +250,7 @@ def print_failures(  # noqa: PLR0913
         if failure.get("error"):
             print(failure["error"])
         if failure.get("log_tail"):
-            print(failure["log_tail"])
+            print(sanitize_block(failure["log_tail"]))
 
 
 def cmd_build_watch(client: NixbotClient, args: argparse.Namespace) -> int:
@@ -366,7 +367,7 @@ def cmd_log(client: NixbotClient, args: argparse.Namespace) -> int:
                 if failure.get("error"):
                     print(failure["error"])
                 if failure.get("log_tail"):
-                    print(failure["log_tail"])
+                    print(sanitize_block(failure["log_tail"]))
         return EXIT_BUILD_FAILED if build_failed else EXIT_OK
 
     attr = _match_attr(detail["attributes"], args.attr)
@@ -402,7 +403,7 @@ def follow_attr(
         elif event == "phase":
             print(f"── {names.get(data['idx'], attr)}: {data['phase']} ──")
         elif event == "line":
-            print(data["text"])
+            print(sanitize_line(data["text"]))
             streamed = True
         elif event == "drv-done":
             name = names.get(data["idx"], attr)

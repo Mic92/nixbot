@@ -20,6 +20,8 @@ import tty
 from datetime import UTC, datetime
 from typing import IO, TYPE_CHECKING
 
+from .term import sanitize_line
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -267,7 +269,7 @@ class TtyWatch:
                     return
                 if event == "line":
                     with self.lock:
-                        self.gist[attr] = data["text"]
+                        self.gist[attr] = sanitize_line(data["text"])
                 elif event == "done":
                     return
 

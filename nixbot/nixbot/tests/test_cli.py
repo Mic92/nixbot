@@ -12,6 +12,7 @@ import zstandard
 from nixbot_cli import main as cli
 from nixbot_cli.api import NixbotClient, RepoRef
 from nixbot_cli.config import Settings
+from nixbot_cli.term import sanitize_line
 
 from nixbot.api_tokens import ApiTokenStore
 from nixbot.auth import AuthzConfig, User
@@ -391,3 +392,16 @@ def test_build_watch_reports_progress_and_failures(
     assert "✗ failed bad" in out
     assert "build #5: 2 finished, 1 failed" in out
     assert "error: boom" in out
+
+
+def test_sanitize_line_defuses_terminal_control_output() -> None:
+    """VM/BIOS boot logs (SeaBIOS etc.) emit clear-screen, cursor moves and
+    charset switches that must never reach our terminal, while colors stay."""
+    bios = "\x1b[2J\x1b[1;1H\x1b(B\x00SeaBIOS (version rel-1.17.0)\x07\tbooting"
+    assert sanitize_line(bios) == "SeaBIOS (version rel-1.17.0)    booting"
+
+    colored = "\x1b[31merror:\x1b[0m boom\x1b]0;title\x07"
+    assert sanitize_line(colored) == "\x1b[31merror:\x1b[0m boom\x1b[0m"
+
+    progress = "downloading   0%\rdownloading 100%"
+    assert sanitize_line(progress) == "downloading 100%"
