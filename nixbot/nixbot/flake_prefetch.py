@@ -95,7 +95,9 @@ def collect_input_paths(archive_json: dict[str, Any]) -> set[str]:
     return paths
 
 
-def _prefetch_env(credentials: FetchCredentials | None, home: Path) -> dict[str, str]:
+def _prefetch_env(
+    credentials: FetchCredentials | None, home: Path, cache_dir: Path | None = None
+) -> dict[str, str]:
     """nix shells out to `git fetch` for git inputs, which honors
     GIT_SSH_COMMAND and $HOME/.netrc. nix's own downloader reads the
     netrc-file setting instead."""
@@ -105,6 +107,10 @@ def _prefetch_env(credentials: FetchCredentials | None, home: Path) -> dict[str,
         "GIT_TERMINAL_PROMPT": "0",
         "HOME": str(home),
     }
+    if cache_dir is not None:
+        # Persistent fetcher/git cache across builds; HOME stays throwaway
+        # because it holds the per-build .netrc.
+        env["NIX_CACHE_HOME"] = str(cache_dir)
     # Environment-based git config, e.g. protocol.file.allow in tests.
     for key, value in os.environ.items():
         if key.startswith("GIT_CONFIG_") and key not in env:
@@ -157,6 +163,7 @@ async def prefetch_flake_inputs(
     branch_config: BranchConfig,
     gc_roots_dir: Path,
     credentials: FetchCredentials | None = None,
+    cache_dir: Path | None = None,
 ) -> None:
     """Copy all locked flake inputs into the local store and gc-root
     them. No-op without a flake. Callers bound the runtime with
@@ -164,10 +171,12 @@ async def prefetch_flake_inputs(
     flake_dir = worktree_path / branch_config.flake_dir
     if not await asyncio.to_thread((flake_dir / "flake.nix").exists):
         return
-    # Throwaway HOME for the scoped .netrc and the fetcher cache.
+    # Throwaway HOME for the per-build .netrc.
     home = Path(await asyncio.to_thread(tempfile.mkdtemp, prefix="flake-prefetch-"))
     try:
-        env = _prefetch_env(credentials, home)
+        if cache_dir is not None:
+            await asyncio.to_thread(cache_dir.mkdir, parents=True, exist_ok=True)
+        env = _prefetch_env(credentials, home, cache_dir)
         logger.info("prefetching flake inputs", extra={"flake_dir": str(flake_dir)})
         await _run(build_prefetch_command(flake_dir, branch_config), env, worktree_path)
         stdout = await _run(

@@ -69,6 +69,12 @@ def test_prefetch_env_uses_credentials(tmp_path: Path) -> None:
     assert (home / ".netrc").readlink() == netrc
     assert env["NIX_CONFIG"] == f"netrc-file = {netrc}"
     assert env["HOME"] == str(home)
+    assert "NIX_CACHE_HOME" not in env
+
+    home2 = tmp_path / "home2"
+    home2.mkdir()
+    env = _prefetch_env(creds, home2, cache_dir=tmp_path / "cache")
+    assert env["NIX_CACHE_HOME"] == str(tmp_path / "cache")
 
 
 async def test_prefetch_skips_repo_without_flake(tmp_path: Path) -> None:

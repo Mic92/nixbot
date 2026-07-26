@@ -269,6 +269,7 @@ async def _prefetch_inputs(
                 branch_config,
                 o.gcroots_dir(build),
                 credentials=credentials,
+                cache_dir=o.config.state_dir / "cache" / "nix",
             )
     except TimeoutError:
         msg = (
