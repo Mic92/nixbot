@@ -31,7 +31,7 @@ needs_nix = pytest.mark.skipif(shutil.which("nix") is None, reason="nix not avai
 def test_prefetch_command(tmp_path: Path) -> None:
     cmd = build_prefetch_command(tmp_path, BranchConfig())
     assert cmd[0] == "nix"
-    assert "archive" in cmd
+    assert "prefetch-inputs" in cmd
     assert "--no-write-lock-file" in cmd
     assert "--reference-lock-file" not in cmd
     assert cmd[-1] == str(tmp_path)

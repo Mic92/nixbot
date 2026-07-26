@@ -1,11 +1,17 @@
 """Prefetch flake inputs outside the eval sandbox.
 
 The sandboxed evaluator has no SSH keys, so it cannot fetch private
-`ssh://` flake inputs (issue #86). `nix flake archive` copies all
-locked inputs into the local store beforehand, with the same
+`ssh://` flake inputs (issue #86). `nix flake prefetch-inputs` copies
+all locked inputs into the local store beforehand, with the same
 credentials as the git fetch. Locked inputs are addressed by narHash,
 so the evaluator then finds them in the store without network access.
-Each input path is gc-rooted under the per-build gc-roots directory.
+`nix flake archive --dry-run --json` then reports the input store
+paths (computed from the locked narHashes, no fetching) so each one
+can be gc-rooted under the per-build gc-roots directory.
+
+The worktree itself is never re-fetched as a git input: Nix's workdir
+and rev-based exports of a repo with submodules produce different
+narHashes, which fails the `__final` lock check.
 """
 
 from __future__ import annotations
@@ -38,7 +44,9 @@ class PrefetchError(EvalError):
     """Prefetching flake inputs failed. Settled like an eval failure."""
 
 
-def build_prefetch_command(flake_dir: Path, branch_config: BranchConfig) -> list[str]:
+def _nix_flake_command(
+    subcommand: list[str], flake_dir: Path, branch_config: BranchConfig
+) -> list[str]:
     return [
         "nix",
         # Flakes may not be enabled in the system nix.conf.
@@ -49,8 +57,7 @@ def build_prefetch_command(flake_dir: Path, branch_config: BranchConfig) -> list
         "accept-flake-config",
         "true",
         "flake",
-        "archive",
-        "--json",
+        *subcommand,
         "--no-write-lock-file",
         *(
             ["--reference-lock-file", branch_config.lock_file]
@@ -59,6 +66,18 @@ def build_prefetch_command(flake_dir: Path, branch_config: BranchConfig) -> list
         ),
         str(flake_dir),
     ]
+
+
+def build_prefetch_command(flake_dir: Path, branch_config: BranchConfig) -> list[str]:
+    return _nix_flake_command(["prefetch-inputs"], flake_dir, branch_config)
+
+
+def build_input_paths_command(
+    flake_dir: Path, branch_config: BranchConfig
+) -> list[str]:
+    return _nix_flake_command(
+        ["archive", "--dry-run", "--json"], flake_dir, branch_config
+    )
 
 
 def collect_input_paths(archive_json: dict[str, Any]) -> set[str]:
@@ -150,8 +169,9 @@ async def prefetch_flake_inputs(
     try:
         env = _prefetch_env(credentials, home)
         logger.info("prefetching flake inputs", extra={"flake_dir": str(flake_dir)})
+        await _run(build_prefetch_command(flake_dir, branch_config), env, worktree_path)
         stdout = await _run(
-            build_prefetch_command(flake_dir, branch_config), env, worktree_path
+            build_input_paths_command(flake_dir, branch_config), env, worktree_path
         )
         try:
             archive = json.loads(stdout)
