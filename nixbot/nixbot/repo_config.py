@@ -35,6 +35,9 @@ class BranchConfig(BaseModel):
     attribute: str = "checks"
     effects_on_pull_requests: bool = False
     effects_branches: list[str] = []
+    # Deprecated: evaluate `flake_dir#attribute` directly like
+    # buildbot-nix did (no herculesCI traversal, no job prefix).
+    legacy_eval: bool = False
 
     @classmethod
     def loads(cls, text: str | None) -> Self:

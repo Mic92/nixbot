@@ -75,6 +75,19 @@ def test_eval_command(tmp_path: Path) -> None:
     assert json.dumps(json.dumps(["hydraJobs", "ci"])) in cmd[cmd.index("--select") + 1]
 
 
+def test_eval_command_legacy_eval(tmp_path: Path) -> None:
+    settings = EvalSettings(gc_roots_dir=tmp_path / "gcroots")
+    cmd = build_eval_command(
+        BranchConfig(flake_dir="sub", attribute="hydraJobs", legacy_eval=True),
+        settings,
+    )
+    # Deprecated compat mode: evaluate the attribute directly like
+    # buildbot-nix did, without herculesCI traversal or --apply.
+    assert cmd[cmd.index("--flake") + 1] == "sub#hydraJobs"
+    assert "--select" not in cmd
+    assert "--apply" not in cmd
+
+
 def test_sandbox_command_mounts(tmp_path: Path) -> None:
     netrc = tmp_path / "netrc"
     netrc.write_text("machine x login y password z\n")

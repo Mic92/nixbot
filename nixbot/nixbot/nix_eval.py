@@ -174,7 +174,20 @@ def build_eval_command(
     branch_config: BranchConfig, settings: EvalSettings
 ) -> list[str]:
     """The plain nix-eval-jobs invocation (without sandbox wrapping)."""
-    flake = branch_config.flake_dir
+    if branch_config.legacy_eval:
+        # Deprecated buildbot-nix behaviour: no herculesCI traversal,
+        # no build modifiers, unprefixed attribute names.
+        logger.warning("legacy_eval is deprecated and will be removed")
+        flake = f"{branch_config.flake_dir}#{branch_config.attribute}"
+        select_args = []
+    else:
+        flake = branch_config.flake_dir
+        select_args = [
+            "--select",
+            build_select_expr(branch_config, settings),
+            "--apply",
+            APPLY_EXPR,
+        ]
     return [
         "nix-eval-jobs",
         # The service drives nix entirely through flakes. On hosts where
@@ -197,10 +210,7 @@ def build_eval_command(
         str(settings.gc_roots_dir),
         "--force-recurse",
         "--check-cache-status",
-        "--select",
-        build_select_expr(branch_config, settings),
-        "--apply",
-        APPLY_EXPR,
+        *select_args,
         *settings.extra_args,
         *(["--show-trace"] if settings.show_trace else []),
         "--flake",
