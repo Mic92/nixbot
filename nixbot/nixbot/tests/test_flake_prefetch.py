@@ -31,7 +31,7 @@ needs_nix = pytest.mark.skipif(shutil.which("nix") is None, reason="nix not avai
 def test_prefetch_command(tmp_path: Path) -> None:
     cmd = build_prefetch_command(tmp_path, BranchConfig())
     assert cmd[0] == "nix"
-    assert "archive" in cmd
+    assert "prefetch-inputs" in cmd
     assert "--no-write-lock-file" in cmd
     assert "--reference-lock-file" not in cmd
     assert cmd[-1] == str(tmp_path)
@@ -69,6 +69,12 @@ def test_prefetch_env_uses_credentials(tmp_path: Path) -> None:
     assert (home / ".netrc").readlink() == netrc
     assert env["NIX_CONFIG"] == f"netrc-file = {netrc}"
     assert env["HOME"] == str(home)
+    assert "NIX_CACHE_HOME" not in env
+
+    home2 = tmp_path / "home2"
+    home2.mkdir()
+    env = _prefetch_env(creds, home2, cache_dir=tmp_path / "cache")
+    assert env["NIX_CACHE_HOME"] == str(tmp_path / "cache")
 
 
 async def test_prefetch_skips_repo_without_flake(tmp_path: Path) -> None:
