@@ -22,7 +22,9 @@ import asyncio
 import contextlib
 import logging
 import os
+import shlex
 import shutil
+import sys
 import tempfile
 import time
 from dataclasses import dataclass
@@ -142,16 +144,28 @@ async def run_git(
         if ssh_command is not None:
             env["GIT_SSH_COMMAND"] = ssh_command
     if credentials is not None and credentials.netrc_file is not None:
-        # git's libcurl reads $HOME/.netrc (CURL_NETRC_OPTIONAL). Point
-        # HOME at a throwaway directory containing only the scoped netrc.
+        # Git does not enable libcurl's netrc support. Install a helper for
+        # this invocation that answers Git's credential protocol from the
+        # scoped netrc. Keep HOME isolated as defense in depth.
         home = Path(tempfile.mkdtemp(prefix="git-netrc-"))
         (home / ".netrc").symlink_to(credentials.netrc_file)
         env["HOME"] = str(home)
+        helper = Path(__file__).with_name("git_credential_netrc.py")
+        helper_command = " ".join(
+            (
+                f"!{shlex.quote(sys.executable)}",
+                shlex.quote(str(helper)),
+                shlex.quote(str(credentials.netrc_file)),
+            )
+        )
+        git_options = ["-c", f"credential.helper={helper_command}"]
     else:
         home = None
+        git_options = []
     try:
         proc = await asyncio.create_subprocess_exec(
             "git",
+            *git_options,
             *args,
             cwd=cwd,
             env=env,

@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import base64
+import functools
+import http.server
 import os
 import shutil
 import subprocess
+import threading
 import time
 from typing import TYPE_CHECKING
 
@@ -423,6 +427,48 @@ async def test_static_credentials_provider(tmp_path: Path) -> None:
     creds = await provider.get("https://example.com/r.git")
     assert creds.netrc_file == netrc
     assert (await StaticCredentialsProvider().get("https://x/y.git")).netrc_file is None
+
+
+async def test_run_git_uses_netrc_credentials(tmp_path: Path, upstream: Path) -> None:
+    """Git itself does not read $HOME/.netrc; run_git must bridge the
+    scoped netrc through Git's credential-helper protocol."""
+    git(upstream, "update-server-info")
+    username = "oauth2"
+    password = "repo-scoped-token"
+    authorization = (
+        "Basic " + base64.b64encode(f"{username}:{password}".encode()).decode()
+    )
+
+    class AuthenticatedGitHandler(http.server.SimpleHTTPRequestHandler):
+        def do_GET(self) -> None:
+            if self.headers.get("Authorization") != authorization:
+                self.send_response(http.HTTPStatus.UNAUTHORIZED)
+                self.send_header("WWW-Authenticate", 'Basic realm="git"')
+                self.end_headers()
+                return
+            super().do_GET()
+
+        def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+            pass
+
+    handler = functools.partial(AuthenticatedGitHandler, directory=str(tmp_path))
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    try:
+        netrc = tmp_path / "netrc"
+        netrc.write_text(f"machine 127.0.0.1 login {username} password {password}\n")
+        netrc.chmod(0o600)
+        port = server.server_address[1]
+        output = await run_git(
+            ["ls-remote", f"http://127.0.0.1:{port}/upstream/.git"],
+            credentials=FetchCredentials(netrc_file=netrc),
+        )
+        assert "HEAD" in output
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
 
 
 async def test_run_git_error_includes_stderr(tmp_path: Path) -> None:
