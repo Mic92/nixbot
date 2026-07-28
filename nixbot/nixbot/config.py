@@ -202,6 +202,21 @@ class OIDCConfig(BaseModel):
         return read_secret_file(self.client_secret_file)
 
 
+class WorkloadIdentityConfig(BaseModel):
+    """nixbot as OIDC issuer for effect workload identity
+    (docs/WORKLOAD_IDENTITY.md)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enable: bool = True
+    # Operator-provided PEM RSA private key; auto-generated and rotated
+    # in the state dir when unset.
+    signing_key_file: Path | None = None
+    token_ttl: int = 300
+    # Rotation interval for the auto-generated key, in days.
+    key_rotation_days: int = 30
+
+
 class PostBuildStep(BaseModel):
     name: str
     environment: Mapping[str, str | Interpolate]
@@ -327,6 +342,9 @@ class Config(BaseModel):
     github: GitHubConfig | None = None
     pull_based: PullBasedConfig | None = None
     oidc: OIDCConfig | None = None
+    workload_identity: WorkloadIdentityConfig = Field(
+        default_factory=WorkloadIdentityConfig
+    )
     outputs_path: Path | None = None
     post_build_steps: list[PostBuildStep] = []
     failed_build_report_limit: int = (
