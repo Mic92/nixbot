@@ -13,6 +13,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from fnmatch import fnmatch
 from typing import TYPE_CHECKING, Any
 
 from . import db, discovery, restart_dispatch, schedule_runner
@@ -48,6 +49,7 @@ from .webhooks import (
     CheckRerequested,
     PrClosed,
     WebhookEvent,
+    is_merge_queue_branch,
     should_build_branch,
 )
 from .work_queue import WorkItem, WorkQueue
@@ -301,12 +303,27 @@ class CIService:
         project = await self.repo_store.by_forge_id(change.forge, change.forge_repo_id)
         if project is None or not project.enabled:
             return
-        if change.pr_number is None and not should_build_branch(
-            self.config.branches, project.default_branch, change.branch
-        ):
-            return
         info = repo_info(project)
         credentials = await self.credentials_provider(info.forge).get(info.clone_url)
+        if change.pr_number is None and not (
+            change.branch == project.default_branch
+            or is_merge_queue_branch(change.branch)
+        ):
+            # `build_branches` in the default branch's nixbot.toml
+            # decides which extra branches build. Without it the
+            # globally configured branch globs apply.
+            repo_config = await self.orchestrator.default_branch_repo_config(
+                info, credentials, fetch=True
+            )
+            if repo_config.build_branches is None:
+                if not should_build_branch(
+                    self.config.branches, project.default_branch, change.branch
+                ):
+                    return
+            elif not any(
+                fnmatch(change.branch, glob) for glob in repo_config.build_branches
+            ):
+                return
         event = ChangeEvent(
             repo=info,
             branch=change.branch,

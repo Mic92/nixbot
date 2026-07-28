@@ -54,6 +54,15 @@ def test_branch_config_from_toml(tmp_path: Path) -> None:
     assert config.effects_on_pull_requests
 
 
+def test_build_branches_default_is_none(tmp_path: Path) -> None:
+    assert BranchConfig.load(tmp_path).build_branches is None
+
+
+def test_build_branches_from_toml(tmp_path: Path) -> None:
+    (tmp_path / "nixbot.toml").write_text('build_branches = ["release-*"]\n')
+    assert BranchConfig.load(tmp_path).build_branches == ["release-*"]
+
+
 def test_branch_config_rejects_traversal(tmp_path: Path) -> None:
     (tmp_path / "nixbot.toml").write_text('flake_dir = "../../etc"\n')
     # Falls back to defaults on invalid config.

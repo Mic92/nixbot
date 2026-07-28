@@ -30,7 +30,6 @@ from .effects import (
 )
 from .events import effects_event_for_build
 from .executor import failure_excerpt
-from .repo_config import CONFIG_FILENAMES, BranchConfig
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -55,19 +54,9 @@ async def maybe_run_effects(
     # Gating config comes from the default branch of the central
     # clone: the worktree is PR-controlled, so its nixbot.toml
     # could grant the PR effects (and deploy secrets).
-    # refs/heads/ prefix: a bare branch name would resolve a tag
-    # of the same name first (tags auto-follow into the clone).
-    config_text = None
-    for filename in CONFIG_FILENAMES:
-        config_text = await o.repos.show_file(
-            repo.key,
-            f"refs/heads/{repo.default_branch}",
-            filename,
-            credentials=credentials,
-        )
-        if config_text is not None:
-            break
-    default_branch_config = BranchConfig.loads(config_text)
+    default_branch_config = await o.default_branch_repo_config(
+        repo, credentials=credentials
+    )
     if not should_run_effects(
         default_branch_config,
         repo.default_branch,

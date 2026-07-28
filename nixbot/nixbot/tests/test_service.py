@@ -221,6 +221,41 @@ async def test_pr_close_discards_queued_changes(service: CIService) -> None:
     assert status == "done"
 
 
+async def test_build_branches_gates_branch_pushes(
+    service: CIService, git_repo: tuple[Path, str]
+) -> None:
+    """`build_branches` in the default branch's nixbot.toml decides
+    which non-default branches build."""
+    repo, sha = git_repo
+    (repo / "nixbot.toml").write_text('build_branches = ["release-*"]\n')
+    git(repo, "add", "nixbot.toml")
+    git(repo, "commit", "-m", "opt release branches into CI")
+
+    pool = service.pool
+    project_id = await seed_project(pool, f"file://{repo}")
+    forge_repo_id = await pool.fetchval(
+        "SELECT forge_repo_id FROM projects WHERE id = $1", project_id
+    )
+    handled: list[Any] = []
+
+    async def fake_handle(event: Any, credentials: Any = None) -> None:
+        handled.append(event.branch)
+
+    service.orchestrator.handle_change_event = fake_handle  # type: ignore[method-assign]
+
+    for branch in ("release-1.0", "random-feature"):
+        await service.submit(
+            ChangeRequest(
+                forge="github",
+                forge_repo_id=forge_repo_id,
+                branch=branch,
+                commit_sha=sha,
+            )
+        )
+    await service.drain_work()
+    assert handled == ["release-1.0"]
+
+
 async def test_restart_gitlab_mr_build_fetches_mr_refs(
     service: CIService, git_repo: tuple[Path, str]
 ) -> None:
