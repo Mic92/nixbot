@@ -350,6 +350,8 @@ class Config(BaseModel):
     show_trace_on_failure: bool = False
     cache_failed_builds: bool = False
     allow_unauthenticated_control: bool = False
+    # Reverse-proxy auth header for the authenticated username (e.g. X-Remote-User).
+    proxy_auth_header: str | None = None
     build_max_silent_time: int = 60 * 20  # stop stuck builds after 20 minutes
     build_timeout: int = 60 * 60 * 3  # 3 hours default for nix build
     # Wall-clock limit for one nix-eval-jobs run. A hung evaluation

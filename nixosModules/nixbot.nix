@@ -149,6 +149,7 @@ let
       show_trace_on_failure = cfg.showTrace;
       cache_failed_builds = cfg.cacheFailedBuilds;
       allow_unauthenticated_control = cfg.allowUnauthenticatedControl;
+      proxy_auth_header = cfg.proxyAuthHeader;
       build_max_silent_time = cfg.buildMaxSilentTime;
       build_timeout = cfg.buildTimeout;
       http_port = cfg.port;
@@ -280,6 +281,16 @@ in
       unauthenticated control actions (cancel, restart). Useful behind a VPN
       where network access implies trust
     '';
+
+    proxyAuthHeader = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = ''
+        HTTP header carrying the authenticated username, set by the reverse
+        proxy. When set, nixbot trusts this header as the user identity.
+      '';
+      example = "X-Remote-User";
+    };
 
     statusContextPrefix = lib.mkOption {
       type = lib.types.str;

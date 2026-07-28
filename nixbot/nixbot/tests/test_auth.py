@@ -6,11 +6,13 @@ from __future__ import annotations
 
 import base64
 from typing import TYPE_CHECKING
+from unittest.mock import AsyncMock
 from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
 from nixbot.auth import (
     AuthzConfig,
@@ -30,6 +32,7 @@ from nixbot.auth import (
     rotate_signing_key,
 )
 from nixbot.forge_tokens import ForgeTokenRefresher, RefreshCredentials
+from nixbot.web.app import WebContext
 from nixbot.web.auth_routes import (
     SESSION_COOKIE,
     STATE_COOKIE,
@@ -759,3 +762,49 @@ async def test_oauth_callback_filters_session_groups() -> None:
         user = signer.user_from(session)
         assert user is not None
         assert user.groups == ("ci",)
+
+
+async def test_proxy_auth_header() -> None:
+    """The proxy auth header authenticates users through _request_user."""
+    app = FastAPI()
+    ctx = WebContext(pool=AsyncMock())
+    ctx.proxy_auth_header = "X-Remote-User"
+    app.state.web_context = ctx
+
+    @app.get("/me")
+    async def whoami(request: Request) -> JSONResponse:
+        user = await ctx.request_user(request)
+        if user is None:
+            return JSONResponse({"user": None})
+        return JSONResponse({"user": user.qualified})
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        # Without the header, no user is authenticated.
+        resp = await client.get("/me")
+        assert resp.status_code == 200
+        assert resp.json()["user"] is None
+
+        # With the header, the user is authenticated as proxy:alice.
+        resp = await client.get("/me", headers={"X-Remote-User": "alice"})
+        assert resp.status_code == 200
+        assert resp.json()["user"] == "proxy:alice"
+
+        # An empty header value should not authenticate.
+        resp = await client.get("/me", headers={"X-Remote-User": ""})
+        assert resp.status_code == 200
+        assert resp.json()["user"] is None
+
+        # A different header name does not authenticate when the
+        # configured header is X-Remote-User.
+        resp = await client.get("/me", headers={"X-Forwarded-User": "alice"})
+        assert resp.status_code == 200
+        assert resp.json()["user"] is None
+
+        # When proxy_auth_header is None (disabled), the header is
+        # not checked.
+        ctx.proxy_auth_header = None
+        resp = await client.get("/me", headers={"X-Remote-User": "alice"})
+        assert resp.status_code == 200
+        assert resp.json()["user"] is None

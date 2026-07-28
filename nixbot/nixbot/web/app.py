@@ -36,7 +36,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from nixbot.effects_state import TaskTokens
 
-from ..auth import can_control_build, is_admin  # noqa: TID252
+from ..auth import User, can_control_build, is_admin  # noqa: TID252
 from ..forge_tokens import RevokedSessionStore  # noqa: TID252
 from ..recovery import check_db_health  # noqa: TID252
 from ..schedules import ScheduledEffectsStore, schedule_overview  # noqa: TID252
@@ -54,7 +54,7 @@ from .templating import STATIC_DIR, CachedStaticFiles, make_env
 
 if TYPE_CHECKING:
     from ..api_tokens import ApiTokenStore  # noqa: TID252
-    from ..auth import AuthzConfig, SessionSigner, User  # noqa: TID252
+    from ..auth import AuthzConfig, SessionSigner  # noqa: TID252
     from ..forge_tokens import (  # noqa: TID252
         ForgeTokenRefresher,
         SessionRevocations,
@@ -113,6 +113,9 @@ class WebContext:
         # Logout denylist: stateless cookies stay verifiable until
         # expiry, so revoked session ids are checked server-side.
         self.revoked_sessions: SessionRevocations | None = RevokedSessionStore(pool)
+        # Reverse-proxy auth header for the authenticated username.
+        # Wired by bootstrap.
+        self.proxy_auth_header: str | None = None
 
     async def can_control(self, request: Request, build: dict[str, Any]) -> bool:
         """Whether the requester may restart/cancel this build (drives
@@ -148,9 +151,10 @@ class WebContext:
         return user
 
     async def request_user(self, request: Request) -> User | None:
-        """Session cookie or personal API token (Authorization: Bearer).
-        Cached per request: routes ask several times (authz checks,
-        visibility, toggleability) and token auth hits the database."""
+        """Session cookie, proxy auth header, or personal API token
+        (Authorization: ***). Cached per request: routes ask several
+        times (authz checks, visibility, toggleability) and token auth
+        hits the database."""
         if not hasattr(request.state, "bn_user"):
             request.state.bn_user = await self._request_user(request)
         return request.state.bn_user
@@ -161,6 +165,13 @@ class WebContext:
             return await self.token_store.authenticate(
                 auth_header.removeprefix("Bearer ")
             )
+        if self.proxy_auth_header is not None:
+            remote_user = request.headers.get(self.proxy_auth_header)
+            if remote_user:
+                return User(
+                    provider="proxy",
+                    username=remote_user,
+                )
         return await self.current_user(request)
 
     async def render(
