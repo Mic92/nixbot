@@ -1,0 +1,36 @@
+# Per-repository configuration, placed as `nixbot.toml` in the root of the
+# repository (the legacy name `buildbot-nix.toml` also works).
+#
+# All values are optional. `build_branches`, `effects_branches` and
+# `effects_on_pull_requests` are always read from the default branch's
+# nixbot.toml, so pull request authors cannot grant themselves builds or
+# effects.
+
+# Flake attribute to evaluate and build.
+#attribute = "checks"
+
+# Directory the flake is located in.
+#flake_dir = "."
+
+# Lock file to use during evaluation. Useful for a CI lockfile that replaces a
+# private input with a public one, or separate stable/unstable lockfiles.
+#lock_file = "flake.lock"
+
+# Glob patterns for branches to build on push. Replaces the globally
+# configured branch globs of the nixbot instance. The default branch and
+# merge-queue branches always build.
+#build_branches = ["release-*", "nixos-25.05"]
+
+# Glob patterns for additional branches that run hercules-ci effects.
+#effects_branches = ["staging", "release/*"]
+
+# Run hercules-ci effects on pull requests.
+# WARNING: PR effects receive the same effects_per_repo_secrets as
+# default-branch effects. Only enable this when you trust all contributors or
+# no secrets are configured.
+#effects_on_pull_requests = false
+
+# Deprecated: evaluate `flake_dir#attribute` directly like buildbot-nix did
+# (no herculesCI/onPush jobs, no build modifiers, unprefixed attribute names).
+# Eases migration of existing repos and will be removed in a future release.
+#legacy_eval = false

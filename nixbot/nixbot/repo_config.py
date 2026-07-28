@@ -35,6 +35,10 @@ class BranchConfig(BaseModel):
     attribute: str = "checks"
     effects_on_pull_requests: bool = False
     effects_branches: list[str] = []
+    # Branch globs whose pushes build, replacing the globally
+    # configured branch globs. Default branch and merge-queue
+    # branches always build. None means the global config applies.
+    build_branches: list[str] | None = None
     # Deprecated: evaluate `flake_dir#attribute` directly like
     # buildbot-nix did (no herculesCI traversal, no job prefix).
     legacy_eval: bool = False

@@ -135,22 +135,14 @@ See the [OIDC documentation](./docs/OIDC.md) for configuration details.
 
 Currently `nixbot` will look for a file named `nixbot.toml` (falling back to the
 legacy `buildbot-nix.toml`) in the root of whichever branch it's currently
-evaluating, parse it as TOML and apply the configuration specified. The
-following table illustrates the supported options.
+evaluating, parse it as TOML and apply the configuration specified. See
+[examples/nixbot.toml](./examples/nixbot.toml) for a commented example with all
+supported options.
 
-|                          | key                        | type        | description                                                                                                                                                      | default      | example                                                                                                                                                                                                 |
-| :----------------------- | :------------------------- | :---------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| lock file                | `lock_file`                | `str`       | dictates which lock file `nixbot` will use when evaluating your flake                                                                                            | `flake.lock` | have multiple lockfiles, one for `nixpkgs-stable`, one for `nixpkgs-unstable` or by default pin an input to a private repo, but have a lockfile with that private repo replaced by a public repo for CI |
-| attribute                | `attribute`                | `str`       | which attribute in the flake to evaluate and build                                                                                                               | `checks`     | using a different attribute, like `hydraJobs`                                                                                                                                                           |
-| flake_dir                | `flake_dir`                | `str`       | which directory the flake is located                                                                                                                             | `.`          | using a different flake, like `./tests`                                                                                                                                                                 |
-| effects on pull requests | `effects_on_pull_requests` | `bool`      | run hercules-ci effects on pull requests                                                                                                                         | `false`      | set to `true` to run effects on PRs                                                                                                                                                                     |
-| effects branches         | `effects_branches`         | `list[str]` | glob patterns for additional branches that run effects                                                                                                           | `[]`         | `["staging", "release/*"]`                                                                                                                                                                              |
-| legacy eval (deprecated) | `legacy_eval`              | `bool`      | evaluate `flake_dir#attribute` directly like buildbot-nix did: no `herculesCI`/`onPush` jobs, no build modifiers, attribute names keep their old unprefixed form | `false`      | ease migration of existing repos that rely on the old attribute names; will be removed in a future release                                                                                              |
-
-By default, effects only run on the default branch. The `effects_branches` and
-`effects_on_pull_requests` settings are always read from the **default
-branch's** `nixbot.toml` (via `git show`) so that pull request authors cannot
-grant themselves effects access.
+By default, effects only run on the default branch. The `build_branches`,
+`effects_branches` and `effects_on_pull_requests` settings are always read from
+the **default branch's** `nixbot.toml` (via `git show`) so that pull request
+authors cannot grant themselves builds or effects access.
 
 > **⚠️ Security warning:** PR effects receive the same
 > `effects_per_repo_secrets` as default-branch effects. A malicious PR can

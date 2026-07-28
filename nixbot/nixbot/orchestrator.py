@@ -51,6 +51,8 @@ from .executor import (
     log_path_for_key,
 )
 from .gitrepo import MergeConflictError, pr_refspec
+from .repo_config import CONFIG_FILENAMES
+from .repo_config import BranchConfig as RepoBranchConfig
 from .web.logs import LogRegistry
 from .work_queue import WorkQueue
 
@@ -160,6 +162,32 @@ class Orchestrator:
 
     def gcroots_dir(self, build: BuildRecord) -> Path:
         return self.config.state_dir / "eval-gcroots" / str(build.id)
+
+    async def default_branch_repo_config(
+        self,
+        repo: RepoInfo,
+        credentials: FetchCredentials | None = None,
+        *,
+        fetch: bool = False,
+    ) -> RepoBranchConfig:
+        """Read `nixbot.toml` from the repo's default branch in the
+        central clone. The default branch is the trust anchor: PRs must
+        not grant themselves effects or extra branch builds.
+        `refs/heads/` prefix: a bare branch name would resolve a
+        same-named tag first."""
+        ref = f"refs/heads/{repo.default_branch}"
+        if fetch:
+            await self.repos.fetch(
+                repo.key, repo.clone_url, [f"+{ref}:{ref}"], credentials
+            )
+        config_text = None
+        for filename in CONFIG_FILENAMES:
+            config_text = await self.repos.show_file(
+                repo.key, ref, filename, credentials=credentials
+            )
+            if config_text is not None:
+                break
+        return RepoBranchConfig.loads(config_text)
 
     async def handle_change_event(
         self, event: ChangeEvent, credentials: FetchCredentials | None = None
