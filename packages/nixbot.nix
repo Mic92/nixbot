@@ -15,6 +15,7 @@
   asyncpg,
   jinja2,
   httpx,
+  joserfc,
   zstandard,
   python-multipart,
   postgresql,
@@ -44,6 +45,7 @@ buildPythonPackage (finalAttrs: {
     asyncpg
     jinja2
     httpx
+    joserfc
     zstandard
     python-multipart
     nixbot-effects
