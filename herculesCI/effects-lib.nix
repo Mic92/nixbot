@@ -2,6 +2,14 @@
 # Avoids pulling hercules-ci-effects (and its transitive flake-parts input)
 # into every consumer of this flake.
 { pkgs }:
+let
+  # Fetches a workload-identity ID token from nixbot inside the effect
+  # sandbox, see docs/WORKLOAD_IDENTITY.md. --json prints the raw
+  # {token, expires_at} response (niks3's ScriptToken format).
+  idTokenScript = pkgs.writers.writePython3Bin "nixbot-id-token" { } (
+    builtins.readFile ./nixbot-id-token.py
+  );
+in
 {
   mkEffect =
     {
@@ -13,6 +21,9 @@
       # Pushable repository checkout at /build/checkout ($NIXBOT_EFFECT_CHECKOUT),
       # see docs/EFFECTS.md.
       checkout ? false,
+      # Audiences this effect may request workload-identity ID tokens
+      # for via `nixbot-id-token <audience>`, see docs/WORKLOAD_IDENTITY.md.
+      idTokenAudiences ? [ ],
       # Scheduling metadata read via `nixbot-effects list`: attribute paths
       # of effects that must succeed first, job name first
       # (e.g. [ [ "default" "deploy-staging" ] ]), and a named lock
@@ -32,11 +43,13 @@
       isEffect = true;
       __nixbot_effect_checkout = checkout;
       secretsMap = builtins.toJSON secretsMap;
+      idTokenAudiences = builtins.toJSON idTokenAudiences;
       nativeBuildInputs = [
         pkgs.cacert
         pkgs.curl
         pkgs.jq
       ]
+      ++ (if idTokenAudiences != [ ] then [ idTokenScript ] else [ ])
       ++ inputs;
       phases = [
         "initPhase"
