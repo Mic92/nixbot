@@ -124,6 +124,13 @@ let
             mapping = cfg.oidc.mapping;
             client_secret_file = "oidc-client-secret";
           };
+      workload_identity = {
+        enable = cfg.workloadIdentity.enable;
+        signing_key_file =
+          if cfg.workloadIdentity.signingKeyFile != null then "workload-identity-key" else null;
+        token_ttl = cfg.workloadIdentity.tokenTtl;
+        key_rotation_days = cfg.workloadIdentity.keyRotationDays;
+      };
       outputs_path = cfg.outputsPath;
       post_build_steps = map (step: {
         name = step.name;
@@ -601,6 +608,41 @@ in
       };
     };
 
+    workloadIdentity = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = ''
+          Serve OIDC discovery/JWKS documents and mint short-lived ID
+          tokens for effects that declare idTokenAudiences, so they can
+          authenticate to relying parties (Vault, AWS, niks3, ...)
+          without static secrets. See docs/WORKLOAD_IDENTITY.md.
+        '';
+      };
+
+      signingKeyFile = lib.mkOption {
+        type = lib.types.nullOr lib.types.path;
+        default = null;
+        description = ''
+          RSA private key (PEM) used to sign ID tokens. When unset, a
+          key is generated in the state directory and rotated
+          automatically.
+        '';
+      };
+
+      tokenTtl = lib.mkOption {
+        type = lib.types.ints.positive;
+        default = 300;
+        description = "Lifetime of issued ID tokens in seconds.";
+      };
+
+      keyRotationDays = lib.mkOption {
+        type = lib.types.ints.positive;
+        default = 30;
+        description = "Rotation interval of the auto-generated signing key.";
+      };
+    };
+
     pullBased = {
       repositories = lib.mkOption {
         default = { };
@@ -983,6 +1025,9 @@ in
             cfg.gitlab.enable && cfg.gitlab.sshPrivateKeyFile != null
           ) "gitlab-ssh-key:${cfg.gitlab.sshPrivateKeyFile}"
           ++ lib.optional cfg.oidc.enable "oidc-client-secret:${cfg.oidc.clientSecretFile}"
+          ++ lib.optional (
+            cfg.workloadIdentity.signingKeyFile != null
+          ) "workload-identity-key:${cfg.workloadIdentity.signingKeyFile}"
           ++ lib.optional (
             !cfg.database.createLocally && cfg.database.urlFile != null
           ) "db-url:${cfg.database.urlFile}"
