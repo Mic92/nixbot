@@ -35,7 +35,7 @@ def create_workload_identity_router(
 
     @router.get("/.well-known/jwks.json", include_in_schema=False)
     async def jwks() -> dict:
-        return issuer.jwks()
+        return dict(issuer.jwks())
 
     def _claim(request: Request) -> TaskClaim:
         auth = request.headers.get("authorization", "")

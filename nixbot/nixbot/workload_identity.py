@@ -10,6 +10,7 @@ request which audience) in effects_state.TaskTokens.
 
 from __future__ import annotations
 
+import dataclasses
 import secrets
 import time
 from dataclasses import dataclass
@@ -17,10 +18,12 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from joserfc import jwt
-from joserfc.jwk import RSAKey
+from joserfc.jwk import KeySetSerialization, RSAKey
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from .events import ChangeEvent
 
 # Relying parties commonly allow only small skew; nbf is backdated so a
 # slightly-behind verifier clock does not reject fresh tokens.
@@ -98,6 +101,34 @@ class EffectIdentity:
         return claims
 
 
+def identity_from_event(
+    event: ChangeEvent, effect: str, build_id: int
+) -> EffectIdentity:
+    """The identity of one push- or PR-triggered effect run. Audiences
+    are bound later, once the effect derivation is evaluated."""
+    repo = event.repo
+    identity = EffectIdentity(
+        forge=repo.forge,
+        owner=repo.owner,
+        repo=repo.repo,
+        event="push",
+        effect=effect,
+        build_id=build_id,
+        sha=event.commit_sha,
+        branch=event.branch,
+    )
+    if event.pr_number is None:
+        return identity
+    return dataclasses.replace(
+        identity,
+        event="pull_request",
+        pr_number=event.pr_number,
+        branch=None,
+        # ChangeEvent.branch of a PR is the base branch.
+        base_ref=f"refs/heads/{event.branch}",
+    )
+
+
 @dataclass(frozen=True)
 class IssuedToken:
     token: str
@@ -122,7 +153,7 @@ class IdentityIssuer:
     def _signing_key(self) -> RSAKey:
         return self._keys[0]
 
-    def jwks(self) -> dict[str, Any]:
+    def jwks(self) -> KeySetSerialization:
         return {
             "keys": [key.as_dict(private=False) for key in self._keys],
         }

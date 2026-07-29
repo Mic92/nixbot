@@ -11,6 +11,7 @@ if TYPE_CHECKING:
 from nixbot_effects import EffectError
 from nixbot_effects.options import EffectsOptions
 from nixbot_effects.sandbox import (
+    id_token_audiences,
     pass_as_file_env,
     sandbox_env,
     select_mounts,
@@ -74,6 +75,16 @@ def test_parse_secrets_map() -> None:
     assert parse_secrets_map({"secretsMap": "{}"}) == {}
     with pytest.raises(SecretsError):
         parse_secrets_map({"secretsMap": json.dumps({"x": {"type": "wat"}})})
+
+
+def test_id_token_audiences() -> None:
+    assert id_token_audiences({}) == []
+    assert id_token_audiences(
+        {"idTokenAudiences": json.dumps(["sts.amazonaws.com"])}
+    ) == ["sts.amazonaws.com"]
+    for bad in ("not json", json.dumps("aud"), json.dumps([1])):
+        with pytest.raises(EffectError, match="idTokenAudiences"):
+            id_token_audiences({"idTokenAudiences": bad})
 
 
 def _opts() -> EffectsOptions:

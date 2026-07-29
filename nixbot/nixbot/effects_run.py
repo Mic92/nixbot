@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 from contextlib import asynccontextmanager
+from functools import partial
 from typing import TYPE_CHECKING
 
 from nixbot_effects import EffectError
@@ -30,6 +31,7 @@ from .effects import (
 )
 from .events import effects_event_for_build
 from .executor import failure_excerpt
+from .workload_identity import identity_from_event
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -227,7 +229,9 @@ async def run_effect_item(
         # The checkout ref (build commit) differs from the report ref
         # (see effects_event_for_build).
         event = effects_event_for_build(worktree_event.repo, build)
-        task_token = o.task_tokens.issue(build.project_id)
+        task_token = o.task_tokens.issue(
+            build.project_id, identity_from_event(event, name, build.id)
+        )
         try:
             async with effect_checkout(
                 o.repos, info, worktree_path, event.commit_sha, credentials
@@ -242,6 +246,11 @@ async def run_effect_item(
                     task_token=task_token,
                 )
                 ctx.effect_checkout = checkout
+                # Audiences come from the effect derivation, evaluated by
+                # run_effect just before its sandbox starts.
+                ctx.bind_id_token_audiences = partial(
+                    o.task_tokens.bind_audiences, task_token
+                )
                 await _run_one_effect(o, event, ctx, build, name)
             await post_effects_summary(o, event, build)
         finally:

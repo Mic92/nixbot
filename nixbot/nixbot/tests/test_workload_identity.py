@@ -14,9 +14,12 @@ from joserfc.jwk import KeySet, RSAKey
 if TYPE_CHECKING:
     from pathlib import Path
 
+from nixbot.effects_state import TaskTokens
+from nixbot.events import ChangeEvent, RepoInfo
 from nixbot.workload_identity import (
     EffectIdentity,
     IdentityIssuer,
+    identity_from_event,
     load_issuer,
 )
 
@@ -136,6 +139,59 @@ def test_pull_request_claims_have_no_ref(tmp_path: Path) -> None:
     assert claims["pr_number"] == 7  # noqa: PLR2004
     assert claims["base_ref"] == "refs/heads/main"
     assert "ref" not in claims
+
+
+# --- run identity -------------------------------------------------------
+
+
+def change_event(pr_number: int | None = None) -> ChangeEvent:
+    repo = RepoInfo(
+        id=1,
+        key="github/acme/widgets",
+        name="acme/widgets",
+        owner="acme",
+        repo="widgets",
+        forge="github",
+        clone_url="https://github.com/acme/widgets.git",
+        default_branch="main",
+    )
+    return ChangeEvent(
+        repo=repo, branch="main", commit_sha="a" * 40, pr_number=pr_number
+    )
+
+
+def test_identity_from_push_event() -> None:
+    identity = identity_from_event(change_event(), "default.deploy", 42)
+    assert identity.sub == "repo:github:acme/widgets:ref:refs/heads/main"
+    assert identity.event == "push"
+    assert identity.sha == "a" * 40
+    assert identity.allowed_audiences == ()
+
+
+def test_identity_from_pull_request_event() -> None:
+    # ChangeEvent.branch of a PR is the base branch: it must appear as
+    # base_ref, never as ref/branch.
+    identity = identity_from_event(change_event(pr_number=7), "default.deploy", 42)
+    assert identity.sub == "repo:github:acme/widgets:pull_request"
+    assert identity.branch is None
+    assert identity.base_ref == "refs/heads/main"
+    assert identity.pr_number == 7  # noqa: PLR2004
+
+
+def test_task_tokens_bind_audiences() -> None:
+    tokens = TaskTokens()
+    discovery_token = tokens.issue(1)
+    tokens.bind_audiences(discovery_token, ["aud"])
+    claim = tokens.claim_for(discovery_token)
+    assert claim is not None
+    assert claim.identity is None  # discovery runs never gain an identity
+
+    run_token = tokens.issue(1, identity_from_event(change_event(), "e", 1))
+    tokens.bind_audiences(run_token, ["https://cache.example.com"])
+    claim = tokens.claim_for(run_token)
+    assert claim is not None
+    assert claim.identity is not None
+    assert claim.identity.allowed_audiences == ("https://cache.example.com",)
 
 
 def test_schedule_claims(tmp_path: Path) -> None:

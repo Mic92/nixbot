@@ -9,6 +9,7 @@ import asyncio
 import logging
 import re
 import time
+from functools import partial
 from typing import TYPE_CHECKING
 
 from .effects import EffectsContext, effects_context, run_scheduled_effect
@@ -20,6 +21,7 @@ from .schedules import (
     ScheduledEffectsStore,
     discover_schedules,
 )
+from .workload_identity import EffectIdentity
 
 if TYPE_CHECKING:
     from .events import RepoInfo
@@ -137,7 +139,17 @@ async def _run_scheduled_inner(
         base_commit=info.default_branch,
         credentials=credentials,
     )
-    task_token = s.orchestrator.task_tokens.issue(due.project_id)
+    task_token = s.orchestrator.task_tokens.issue(
+        due.project_id,
+        EffectIdentity(
+            forge=info.forge,
+            owner=info.owner,
+            repo=info.repo,
+            event="schedule",
+            effect=due.effect,
+            schedule=due.schedule_name,
+        ),
+    )
     log_dir = s.config.state_dir / "logs" / "scheduled"
     log_dir.mkdir(parents=True, exist_ok=True)
     log = LogWriter(
@@ -161,6 +173,9 @@ async def _run_scheduled_inner(
                 task_token=task_token,
             )
             ctx.effect_checkout = checkout
+            ctx.bind_id_token_audiences = partial(
+                s.orchestrator.task_tokens.bind_audiences, task_token
+            )
             return await run_scheduled_effect(
                 ctx, due.schedule_name, due.effect, log.write
             )

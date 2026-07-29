@@ -5,6 +5,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from .proc import LogWrite
 
 
@@ -30,6 +32,10 @@ class EffectsOptions:
     task_token: str | None = None
     # Hercules state API + project metadata.
     api_base_url: str | None = None
+    # Called with the audiences the effect declares via idTokenAudiences,
+    # once its derivation is evaluated. The daemon uses it to authorize
+    # the run's task token for the id-token endpoint.
+    bind_id_token_audiences: Callable[[list[str]], None] | None = None
     project_id: str | None = None
     project_path: str | None = None
     # Sandbox configuration.

@@ -12,6 +12,7 @@ actual effects (not discovery) carry an EffectIdentity there.
 
 from __future__ import annotations
 
+import dataclasses
 import secrets
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -53,6 +54,16 @@ class TaskTokens:
 
     def claim_for(self, token: str) -> TaskClaim | None:
         return self._tokens.get(token)
+
+    def bind_audiences(self, token: str, audiences: list[str]) -> None:
+        """Audiences the effect declared via idTokenAudiences, known only
+        once its derivation is evaluated (just before the sandbox starts)."""
+        claim = self._tokens.get(token)
+        if claim is None or claim.identity is None:
+            return
+        claim.identity = dataclasses.replace(
+            claim.identity, allowed_audiences=tuple(audiences)
+        )
 
 
 def state_file_path(state_dir: Path, project_id: int, name: str) -> Path:

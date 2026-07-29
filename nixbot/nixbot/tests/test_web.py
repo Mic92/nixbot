@@ -17,6 +17,8 @@ import pytest
 import zstandard
 from fastapi import Request
 from fastapi.responses import JSONResponse
+from joserfc import jwt
+from joserfc.jwk import KeySet
 
 from nixbot.auth import User
 from nixbot.build_scheduler import AttributeStatus
@@ -48,6 +50,8 @@ from nixbot.web.templating import (
     pr_url,
     timeago,
 )
+from nixbot.web.workload_routes import create_workload_identity_router
+from nixbot.workload_identity import EffectIdentity, load_issuer
 
 from .e2e.support import seed
 from .support import (
@@ -1635,6 +1639,57 @@ def test_effects_state_api(client: WebHarness, tmp_path: Path) -> None:
     client.loop.run_until_complete(run())
     # Scoped under the project directory, name percent-encoded.
     assert (tmp_path / "effects-state" / "7" / "known-hosts").exists()
+
+
+def test_workload_identity_api(client: WebHarness, tmp_path: Path) -> None:
+    issuer = load_issuer(tmp_path, "http://ci.example")
+    tokens = TaskTokens()
+    client.app.include_router(create_workload_identity_router(issuer, tokens))
+    identity = EffectIdentity(
+        forge="github",
+        owner="acme",
+        repo="widgets",
+        event="push",
+        effect="default.deploy",
+        branch="main",
+        allowed_audiences=("https://cache.example.com",),
+    )
+    run_token = tokens.issue(7, identity)
+    discovery_token = tokens.issue(7)
+    url = "/api/v1/id-token"
+    body = {"audience": "https://cache.example.com"}
+
+    async def run() -> None:
+        doc = await client.http.get("/.well-known/openid-configuration")
+        assert doc.json()["issuer"] == "http://ci.example"
+        jwks = await client.http.get("/.well-known/jwks.json")
+        assert jwks.json()["keys"]
+
+        # Only a valid task token of an effect run may mint tokens.
+        assert (await client.http.post(url, json=body)).status_code == 401
+        bad = {"Authorization": "Bearer nope"}
+        assert (await client.http.post(url, json=body, headers=bad)).status_code == 401
+        disc = {"Authorization": f"Bearer {discovery_token}"}
+        assert (await client.http.post(url, json=body, headers=disc)).status_code == 403
+
+        auth = {"Authorization": f"Bearer {run_token}"}
+        # Only audiences the effect declared via idTokenAudiences.
+        wrong = {"audience": "https://other.example.com"}
+        assert (
+            await client.http.post(url, json=wrong, headers=auth)
+        ).status_code == 403
+
+        resp = await client.http.post(url, json=body, headers=auth)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["expires_at"]
+        key_set = KeySet.import_key_set(jwks.json())
+        claims = jwt.decode(data["token"], key_set, algorithms=["RS256"]).claims
+        assert claims["sub"] == "repo:github:acme/widgets:ref:refs/heads/main"
+        assert claims["aud"] == "https://cache.example.com"
+        assert claims["iss"] == "http://ci.example"
+
+    client.loop.run_until_complete(run())
 
 
 def test_logout_revokes_session_cookie(postgres_dsn: str) -> None:
