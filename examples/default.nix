@@ -39,6 +39,17 @@ in
     ];
   };
 
+  # The base example plus header auth from a reverse proxy.
+  "example-nixbot-proxy-auth-${system}" = nixosSystem {
+    inherit system;
+    modules = [
+      dummy
+      nixbot.nixosModules.nixbot
+      ./nixbot.nix
+      ./proxy-auth.nix
+    ];
+  };
+
   # The base example plus OIDC login backed by Authelia.
   "example-nixbot-oidc-authelia-${system}" = nixosSystem {
     inherit system;

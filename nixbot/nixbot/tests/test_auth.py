@@ -767,7 +767,9 @@ async def test_oauth_callback_filters_session_groups() -> None:
 async def test_proxy_auth_header() -> None:
     """The proxy auth header authenticates users through _request_user."""
     app = FastAPI()
-    ctx = WebContext(pool=AsyncMock())
+    signer = SessionSigner([b"k" * 32])
+    ctx = WebContext(pool=AsyncMock(), signer=signer)
+    ctx.revoked_sessions = None
     ctx.proxy_auth_header = "X-Remote-User"
     app.state.web_context = ctx
 
@@ -801,6 +803,14 @@ async def test_proxy_auth_header() -> None:
         resp = await client.get("/me", headers={"X-Forwarded-User": "alice"})
         assert resp.status_code == 200
         assert resp.json()["user"] is None
+
+        # A session cookie takes precedence over the proxy header.
+        cookie = signer.session_for(User(provider="github", username="bob"))
+        client.cookies.set(SESSION_COOKIE, cookie)
+        resp = await client.get("/me", headers={"X-Remote-User": "alice"})
+        client.cookies.clear()
+        assert resp.status_code == 200
+        assert resp.json()["user"] == "github:bob"
 
         # When proxy_auth_header is None (disabled), the header is
         # not checked.

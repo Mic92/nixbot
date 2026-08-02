@@ -287,7 +287,9 @@ in
       default = null;
       description = ''
         HTTP header carrying the authenticated username, set by the reverse
-        proxy. When set, nixbot trusts this header as the user identity.
+        proxy. Users are qualified as `proxy:<username>` (e.g. in `admins`).
+        The proxy MUST set or strip this header on every request, otherwise
+        clients can impersonate any user.
       '';
       example = "X-Remote-User";
     };

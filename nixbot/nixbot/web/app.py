@@ -151,10 +151,10 @@ class WebContext:
         return user
 
     async def request_user(self, request: Request) -> User | None:
-        """Session cookie, proxy auth header, or personal API token
-        (Authorization: ***). Cached per request: routes ask several
-        times (authz checks, visibility, toggleability) and token auth
-        hits the database."""
+        """Session cookie, personal API token (Authorization: Bearer),
+        or reverse-proxy auth header. Cached per request: routes ask
+        several times (authz checks, visibility, toggleability) and
+        token auth hits the database."""
         if not hasattr(request.state, "bn_user"):
             request.state.bn_user = await self._request_user(request)
         return request.state.bn_user
@@ -165,14 +165,16 @@ class WebContext:
             return await self.token_store.authenticate(
                 auth_header.removeprefix("Bearer ")
             )
+        # Session cookie wins over the proxy header so forge/OIDC
+        # identities keep their authz rules.
+        user = await self.current_user(request)
+        if user is not None:
+            return user
         if self.proxy_auth_header is not None:
-            remote_user = request.headers.get(self.proxy_auth_header)
+            remote_user = request.headers.get(self.proxy_auth_header, "").strip()
             if remote_user:
-                return User(
-                    provider="proxy",
-                    username=remote_user,
-                )
-        return await self.current_user(request)
+                return User(provider="proxy", username=remote_user)
+        return None
 
     async def render(
         self, template: str, request: Request | None = None, **context: Any
