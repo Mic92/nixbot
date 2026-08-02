@@ -477,6 +477,24 @@ details.menu summary:hover {
 details.menu .menu-label {
 	font-size: 0.9rem;
 }
+.banner {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	flex-wrap: wrap;
+	gap: 0.6rem;
+	margin: 0.8rem auto 0;
+	max-width: calc(90rem - 2.5rem);
+	padding: 0.6rem 1rem;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	background: var(--card);
+}
+
+.banner-warning {
+	border-left: 4px solid var(--warn);
+}
+
 .menu-panel {
 	position: absolute;
 	right: 0;
