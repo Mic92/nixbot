@@ -19,4 +19,5 @@ in
 // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
   nixbot = import ./nixbot.nix checkArgs;
   nixbot-gitlab = import ./nixbot-gitlab.nix checkArgs;
+  nixbot-workload-identity = import ./nixbot-workload-identity.nix checkArgs;
 }

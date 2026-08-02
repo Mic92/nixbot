@@ -75,6 +75,31 @@ def select_secrets(
     return gather_secrets(secrets_map, secrets, secret_context(opts), opts.git_token)
 
 
+# Audiences the effect may request ID tokens for (JSON list), set by
+# mkEffect's idTokenAudiences argument. Effects without it cannot mint
+# workload-identity tokens.
+ID_TOKEN_AUDIENCES_ATTR = "idTokenAudiences"  # noqa: S105 (attribute name, not a secret)
+
+
+def id_token_audiences(drv_env: dict[str, str]) -> list[str]:
+    """The declared idTokenAudiences of an effect derivation."""
+    raw = drv_env.get(ID_TOKEN_AUDIENCES_ATTR)
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as e:
+        msg = f"could not parse {ID_TOKEN_AUDIENCES_ATTR} in the derivation: {e}"
+        raise EffectError(msg) from e
+    if not isinstance(parsed, list) or not all(isinstance(a, str) for a in parsed):
+        msg = (
+            f"{ID_TOKEN_AUDIENCES_ATTR} in the derivation must be a JSON "
+            "list of audience strings"
+        )
+        raise EffectError(msg)
+    return parsed
+
+
 # Effect derivations opt into the runner-prepared repository clone by
 # setting this environment attribute to true.
 EFFECT_CHECKOUT_ATTR = "__nixbot_effect_checkout"

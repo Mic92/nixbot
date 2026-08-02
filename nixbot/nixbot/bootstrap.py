@@ -9,6 +9,7 @@ import asyncio
 import logging
 import os
 from dataclasses import dataclass, field
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
 import asyncpg
@@ -73,6 +74,7 @@ from .webhooks import (
     create_webhook_router,
 )
 from .work_queue import WorkQueue
+from .workload_identity import load_issuer
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -308,8 +310,25 @@ async def build_service(config: Config) -> tuple[CIService, FastAPI]:
         orchestrator.reporter = RetryingReporter(reporter, service)
 
     # Web application.
+    identity_issuer = None
+    if config.workload_identity.enable:
+        identity_issuer = load_issuer(
+            config.state_dir,
+            config.url,
+            signing_key_file=resolve_credential_path(
+                config.workload_identity.signing_key_file
+            ),
+            token_ttl=config.workload_identity.token_ttl,
+            key_rotation_interval=timedelta(
+                days=config.workload_identity.key_rotation_days
+            ),
+        )
     app = create_app(
-        pool, config.state_dir, orchestrator.log_registry, orchestrator.task_tokens
+        pool,
+        config.state_dir,
+        orchestrator.log_registry,
+        orchestrator.task_tokens,
+        identity_issuer=identity_issuer,
     )
     ctx = app.state.web_context
     authz = AuthzConfig(

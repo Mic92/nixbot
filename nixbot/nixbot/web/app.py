@@ -51,6 +51,7 @@ from .queries import PAGE_SIZE, BuildFilters, WebQueries
 from .routing import register_owner_convertor
 from .state_routes import create_state_router
 from .templating import STATIC_DIR, CachedStaticFiles, make_env
+from .workload_routes import create_workload_identity_router
 
 if TYPE_CHECKING:
     from ..api_tokens import ApiTokenStore  # noqa: TID252
@@ -61,6 +62,7 @@ if TYPE_CHECKING:
         TokenVault,
     )
     from ..visibility import VisibilityService  # noqa: TID252
+    from ..workload_identity import IdentityIssuer  # noqa: TID252
 
 if TYPE_CHECKING:
     import asyncpg
@@ -691,6 +693,7 @@ def create_app(
     state_dir: Path | None = None,
     log_registry: LogRegistry | None = None,
     task_tokens: TaskTokens | None = None,
+    identity_issuer: IdentityIssuer | None = None,
 ) -> FastAPI:
     broker = EventBroker(pool)
 
@@ -735,6 +738,12 @@ def create_app(
         app.include_router(
             create_state_router(state_dir, task_tokens or TaskTokens()),
             include_in_schema=False,
+        )
+    if identity_issuer is not None:
+        app.include_router(
+            create_workload_identity_router(
+                identity_issuer, task_tokens or TaskTokens()
+            )
         )
     app.include_router(create_api_router(ctx))
     # Last: the legacy catch-alls must not shadow real routes.

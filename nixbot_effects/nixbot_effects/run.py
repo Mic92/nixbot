@@ -23,6 +23,7 @@ from .proc import stream_command
 from .sandbox import (
     effect_checkout_mount,
     env_args,
+    id_token_audiences,
     pass_as_file_env,
     select_mounts,
     select_secrets,
@@ -124,6 +125,12 @@ async def _run_in_sandbox(
     secrets = dict(select_secrets(drv, opts.secrets or {}, opts))
     bind_mounts = select_mounts(drv, opts)
     env, task_token = task_env(drv_env, opts)
+    audiences = id_token_audiences(drv_env)
+    if audiences and opts.api_base_url and opts.task_token:
+        if opts.bind_id_token_audiences is not None:
+            opts.bind_id_token_audiences(audiences)
+        env["NIXBOT_ID_TOKEN_REQUEST_URL"] = f"{opts.api_base_url}/api/v1/id-token"
+        env["NIXBOT_ID_TOKEN_REQUEST_TOKEN"] = opts.task_token
     uid, gid = virtual_ids(drv_env)
     bwrap = shutil.which("bwrap")
     if bwrap is None:

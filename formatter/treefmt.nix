@@ -69,6 +69,7 @@
       ];
       extraPythonPackages = [
         pkgs.python3.pkgs.pydantic
+        pkgs.python3.pkgs.joserfc
         pkgs.python3.pkgs.pytest
         pkgs.python3.pkgs.pytest-benchmark
         pkgs.python3.pkgs.httpx
