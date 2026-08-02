@@ -465,6 +465,45 @@ class _StubVisibility:
         self.seen_users.append(user)
         return self.visible
 
+    async def toggleable_repo_ids(
+        self,
+        user: object,  # noqa: ARG002
+        token: object = None,  # noqa: ARG002
+    ) -> list[int]:
+        return []
+
+    async def controllable_repo_ids(
+        self,
+        user: object,  # noqa: ARG002
+        token: object = None,  # noqa: ARG002
+    ) -> list[int]:
+        return []
+
+
+def test_expired_forge_token_shows_relogin_banner(client: WebHarness) -> None:
+    """When the forge token is gone but the session cookie is still
+    valid, private repos silently disappear. The page must call this
+    out prominently with a re-login link, not only inside the account
+    menu (issue #105)."""
+    ctx = client.ctx
+    ctx.visibility = cast("VisibilityService", _StubVisibility([]))
+    ctx.forge_tokens = ForgeTokenStore(ctx.pool)
+    try:
+        page = client.get("/", user=User(provider="github", username="alice"))
+        assert page.status_code == 200
+        assert 'class="banner banner-warning"' in page.text
+        assert 'href="/login/github"' in page.text
+
+        # With a live forge token the banner must not show.
+        page = client.get(
+            "/", user=User(provider="github", username="alice"), token="tok"
+        )
+        assert 'class="banner banner-warning"' not in page.text
+    finally:
+        ctx.visibility = None
+        ctx.forge_tokens = None
+        client.run(ctx.pool.execute("DELETE FROM forge_tokens"))
+
 
 def test_legacy_redirect_hides_invisible_projects(client: WebHarness) -> None:
     """Redirect-vs-404 must not let anonymous users probe private
