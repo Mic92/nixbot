@@ -57,6 +57,11 @@
     # behind a VPN where network access implies trust.
     # allowUnauthenticatedControl = true;
 
+    # Trust a username header set by an authenticating reverse proxy.
+    # The proxy MUST set or strip this header on every request. Users
+    # appear as "proxy:<name>", e.g. admins = [ "proxy:alice" ];
+    # proxyAuthHeader = "X-Remote-User";
+
     # Local PostgreSQL over the unix socket is provisioned by default.
     # Remote database instead:
     # database.createLocally = false;
