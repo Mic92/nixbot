@@ -1026,6 +1026,87 @@ async def test_eval_settings_wired(
         orchestrator.config.eval_max_memory_size, 1234
     )
     assert settings.netrc_file == netrc
+    assert "pullRequest" not in settings.hercules_args["primaryRepo"]
+
+
+async def test_pr_diff_is_exposed_in_hercules_args(
+    make_env: EnvFactory, upstream: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def no_prefetch(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(build_run_mod, "_prefetch_inputs", no_prefetch)
+    (upstream / "a-source.nix").write_text("{ changed = false; }\n")
+    git(upstream, "add", "a-source.nix")
+    git(upstream, "commit", "-m", "base source")
+    base = git(upstream, "rev-parse", "HEAD")
+    git(upstream, "checkout", "-b", "pr-diff-args")
+    unusual = 'odd tab\tquote" newline\n.nix'
+    (upstream / unusual).write_text("{}\n")
+    (upstream / "a-source.nix").write_text("{ changed = true; }\n")
+    git(upstream, "add", "-A")
+    git(upstream, "commit", "-m", "diffargs")
+    head = git(upstream, "rev-parse", "HEAD")
+    git(upstream, "update-ref", "refs/pull/12/head", head)
+    git(upstream, "checkout", "main")
+    git(upstream, "branch", "-D", "pr-diff-args")
+
+    eval_runner = FakeEvalRunner([mk_job("a")])
+    orchestrator, _, project = await make_env(eval_runner, FakeExecutor(), "diffargs")
+    await orchestrator.handle_change_event(
+        ChangeEvent(
+            repo=project,
+            branch="main",
+            commit_sha=head,
+            pr_number=12,
+            base_sha=base,
+        )
+    )
+    settings = eval_runner.last_settings
+    assert settings is not None
+    pr = settings.hercules_args["primaryRepo"]["pullRequest"]
+    assert pr["number"] == 12
+    assert pr["baseRev"] == base
+    assert pr["mergedRev"] != head
+    assert pr["diff"] == {
+        "complete": True,
+        "fileCount": 2,
+        "reason": None,
+        "files": [
+            {
+                "status": "modified",
+                "path": "a-source.nix",
+                "previousPath": None,
+                "score": None,
+            },
+            {
+                "status": "added",
+                "path": unusual,
+                "previousPath": None,
+                "score": None,
+            },
+        ],
+    }
+    # The compatibility aliases receive the same optional structure.
+    assert settings.hercules_args["pullRequest"] == pr
+
+    # A missing base must not be misrepresented as an empty head-to-head diff.
+    # Omitting the metadata makes consumers take their full fallback.
+    missing_base_runner = FakeEvalRunner([mk_job("a")])
+    missing_base_orchestrator, _, missing_base_project = await make_env(
+        missing_base_runner, FakeExecutor(), "missing-base"
+    )
+    await missing_base_orchestrator.handle_change_event(
+        ChangeEvent(
+            repo=missing_base_project,
+            branch="main",
+            commit_sha=head,
+            pr_number=13,
+        )
+    )
+    missing_base_settings = missing_base_runner.last_settings
+    assert missing_base_settings is not None
+    assert "pullRequest" not in missing_base_settings.hercules_args["primaryRepo"]
 
 
 async def test_eval_netrc_withheld_from_pr_with_instance_wide_creds(

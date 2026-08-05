@@ -15,7 +15,7 @@ import logging
 import shutil
 import uuid
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Protocol
 
 from . import (
@@ -240,6 +240,14 @@ class Orchestrator:
             return build
 
         try:
+            if event.pr_number is not None and event.base_sha is not None:
+                pr_diff = await worktree.pull_request_diff()
+                if pr_diff is not None:
+                    event = replace(
+                        event,
+                        base_sha=pr_diff.base_rev,
+                        pr_diff=pr_diff,
+                    )
             tree_hash = await worktree.tree_hash()
             build, created = await db.get_or_create_build(
                 self.pool,

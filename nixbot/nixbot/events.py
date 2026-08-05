@@ -8,7 +8,7 @@ build pipeline.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -33,6 +33,43 @@ class RepoInfo:
 
 
 @dataclass(frozen=True)
+class ChangedFile:
+    """One base-to-merged-tree path change for a pull request."""
+
+    status: Literal[
+        "added",
+        "modified",
+        "deleted",
+        "renamed",
+        "copied",
+        "type_changed",
+        "unmerged",
+        "unknown",
+        "broken_pairing",
+    ]
+    path: str
+    previous_path: str | None = None
+    score: int | None = None
+
+
+@dataclass(frozen=True)
+class PullRequestDiff:
+    """Pure PR diff metadata exposed to the flake evaluator.
+
+    complete=False is an explicit instruction to use the consumer's full
+    fallback. It bounds evaluator arguments and fails closed for path encodings
+    that cannot be represented losslessly in JSON/Nix strings.
+    """
+
+    base_rev: str
+    merged_rev: str
+    complete: bool
+    file_count: int
+    files: tuple[ChangedFile, ...] = ()
+    reason: str | None = None
+
+
+@dataclass(frozen=True)
 class ChangeEvent:
     """A push or pull-request event from a forge or poller."""
 
@@ -43,6 +80,7 @@ class ChangeEvent:
     pr_number: int | None = None
     pr_author: str | None = None
     base_sha: str | None = None
+    pr_diff: PullRequestDiff | None = None
     commit_message: str = ""
 
 

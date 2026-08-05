@@ -21,6 +21,7 @@ from nixbot.memory import (
     calculate_eval_workers,
     get_memory_info,
 )
+from nixbot.models import NixEvalJobSuccess
 from nixbot.nix_eval import (
     EvalError,
     EvalRunner,
@@ -298,6 +299,134 @@ async def test_eval_runner_hercules_ci_jobs(tmp_path: Path) -> None:
         "default.checks.x86_64-linux.ok": "ok-abcdef1",
         "docs.site": "site",
     }
+
+
+@pytest.mark.skipif(
+    shutil.which("nix-eval-jobs") is None or shutil.which("nix") is None,
+    reason="nix-eval-jobs not available",
+)
+async def test_pr_diff_overlay_replaces_full_checks_without_their_closure(
+    tmp_path: Path,
+) -> None:
+    """A consumer can keep status paths while replacing every expensive
+    leaf and aggregate. Unrelated configured checks remain scheduled."""
+    flake = tmp_path / "repo"
+    flake.mkdir()
+    (flake / "flake.nix").write_text(
+        """
+        {
+          outputs = { self }:
+            let
+              fullInput = derivation {
+                name = "full-test-input";
+                system = "x86_64-linux";
+                builder = "/bin/sh";
+                args = [ "-c" "echo full > $out" ];
+              };
+              fullShard = derivation {
+                name = "full-web-unit-1";
+                system = "x86_64-linux";
+                builder = "/bin/sh";
+                args = [ "-c" "cat ${fullInput} > $out" ];
+              };
+              fullAggregate = derivation {
+                name = "full-web-unit";
+                system = "x86_64-linux";
+                builder = "/bin/sh";
+                args = [ "-c" "test -e ${fullShard}; touch $out" ];
+              };
+            in {
+              checks.x86_64-linux = {
+                web-unit-1 = fullShard;
+                web-unit = fullAggregate;
+                worker-unit = derivation {
+                  name = "worker-unit-full";
+                  system = "x86_64-linux";
+                  builder = "/bin/sh";
+                  args = [ "-c" "touch $out" ];
+                };
+              };
+              herculesCI = { primaryRepo, ... }:
+                let
+                  manifest = builtins.toFile "pr-diff.json"
+                    (builtins.toJSON primaryRepo.pullRequest.diff);
+                  selectiveShard = derivation {
+                    name = "selective-web-unit-1";
+                    system = "x86_64-linux";
+                    builder = "/bin/sh";
+                    args = [ "-c" "cp ${manifest} $out" ];
+                  };
+                in {
+                  onPush.default.outputs.checks.x86_64-linux = {
+                    web-unit-1 = selectiveShard;
+                    web-unit = derivation {
+                      name = "selective-web-unit";
+                      system = "x86_64-linux";
+                      builder = "/bin/sh";
+                      args = [ "-c" "test -e ${selectiveShard}; touch $out" ];
+                    };
+                  };
+                };
+            };
+        }
+        """
+    )
+
+    def settings(path: str) -> EvalSettings:
+        pull_request = {
+            "number": 7,
+            "baseRev": "base",
+            "mergedRev": "merged",
+            "diff": {
+                "complete": True,
+                "fileCount": 1,
+                "reason": None,
+                "files": [
+                    {
+                        "status": "modified",
+                        "path": path,
+                        "previousPath": None,
+                        "score": None,
+                    }
+                ],
+            },
+        }
+        primary_repo = {
+            "rev": "abcdef1234567",
+            "shortRev": "abcdef1",
+            "pullRequest": pull_request,
+        }
+        return EvalSettings(
+            gc_roots_dir=tmp_path / f"gcroots-{len(path)}",
+            sandbox=False,
+            systemd_scope=False,
+            hercules_args={"primaryRepo": primary_repo, **primary_repo},
+        )
+
+    first = await EvalRunner().run(flake, BranchConfig(), settings("web/a.ts"))
+    assert all(isinstance(job, NixEvalJobSuccess) for job in first.jobs)
+    jobs = {job.attr: job for job in first.jobs if isinstance(job, NixEvalJobSuccess)}
+    assert {attr: job.name for attr, job in jobs.items()} == {
+        "default.checks.x86_64-linux.web-unit": "selective-web-unit",
+        "default.checks.x86_64-linux.web-unit-1": "selective-web-unit-1",
+        "default.checks.x86_64-linux.worker-unit": "worker-unit-full",
+    }
+    for attr in (
+        "default.checks.x86_64-linux.web-unit",
+        "default.checks.x86_64-linux.web-unit-1",
+    ):
+        assert all("full-test-input" not in path for path in jobs[attr].needed_builds)
+        assert all("full-web-unit" not in path for path in jobs[attr].needed_builds)
+
+    second = await EvalRunner().run(flake, BranchConfig(), settings("web/b.ts"))
+    assert all(isinstance(job, NixEvalJobSuccess) for job in second.jobs)
+    second_jobs = {
+        job.attr: job for job in second.jobs if isinstance(job, NixEvalJobSuccess)
+    }
+    assert (
+        jobs["default.checks.x86_64-linux.web-unit-1"].drv_path
+        != second_jobs["default.checks.x86_64-linux.web-unit-1"].drv_path
+    )
 
 
 async def test_stderr_noise_filtered_and_warnings_reach_callback(

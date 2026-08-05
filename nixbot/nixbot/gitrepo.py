@@ -31,6 +31,7 @@ from typing import Protocol
 from urllib.parse import urlsplit
 
 from .environ import passthrough_env
+from .events import ChangedFile, PullRequestDiff
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,10 @@ PR_REF_MAX_AGE = 90 * 86400
 # Crash-leaked plain files next to worktrees (e.g. effects side-files)
 # are swept once clearly older than any running build.
 ORPHAN_FILE_MAX_AGE = 86400
+# Keep the JSON embedded in nix-eval-jobs' --select argument comfortably below
+# platform argv limits. Consumers must run their full fallback when incomplete.
+MAX_PR_DIFF_FILES = 4096
+MAX_PR_DIFF_PATH_BYTES = 128 * 1024
 
 
 def pr_refspec(forge: str, pr_number: int) -> str:
@@ -191,12 +196,101 @@ def _worktree_paths(porcelain_output: str) -> set[Path]:
     }
 
 
+_DIFF_STATUS = {
+    "A": "added",
+    "M": "modified",
+    "D": "deleted",
+    "R": "renamed",
+    "C": "copied",
+    "T": "type_changed",
+    "U": "unmerged",
+    "X": "unknown",
+    "B": "broken_pairing",
+}
+
+
+def _parse_pull_request_diff(
+    base_rev: str, merged_rev: str, output: bytes
+) -> PullRequestDiff:
+    fields = output.removesuffix(b"\0").split(b"\0") if output else []
+    changes: list[ChangedFile] = []
+    path_bytes = 0
+    index = 0
+    try:
+        while index < len(fields):
+            token = fields[index].decode("ascii")
+            index += 1
+            code = token[:1]
+            if code not in _DIFF_STATUS or index >= len(fields):
+                return PullRequestDiff(
+                    base_rev=base_rev,
+                    merged_rev=merged_rev,
+                    complete=False,
+                    file_count=len(changes),
+                    reason="unrepresentable_or_malformed_path",
+                )
+            first_raw = fields[index]
+            index += 1
+            path_bytes += len(first_raw)
+            first = first_raw.decode("utf-8")
+            previous_path = None
+            path = first
+            score = int(token[1:]) if token[1:].isdigit() else None
+            if code in ("R", "C"):
+                if index >= len(fields):
+                    return PullRequestDiff(
+                        base_rev=base_rev,
+                        merged_rev=merged_rev,
+                        complete=False,
+                        file_count=len(changes),
+                        reason="unrepresentable_or_malformed_path",
+                    )
+                second_raw = fields[index]
+                index += 1
+                path_bytes += len(second_raw)
+                previous_path = first
+                path = second_raw.decode("utf-8")
+            changes.append(
+                ChangedFile(
+                    status=_DIFF_STATUS[code],  # type: ignore[arg-type]
+                    path=path,
+                    previous_path=previous_path,
+                    score=score,
+                )
+            )
+    except UnicodeDecodeError:
+        return PullRequestDiff(
+            base_rev=base_rev,
+            merged_rev=merged_rev,
+            complete=False,
+            file_count=len(changes),
+            reason="unrepresentable_or_malformed_path",
+        )
+    if len(changes) > MAX_PR_DIFF_FILES or path_bytes > MAX_PR_DIFF_PATH_BYTES:
+        return PullRequestDiff(
+            base_rev=base_rev,
+            merged_rev=merged_rev,
+            complete=False,
+            file_count=len(changes),
+            reason="diff_too_large",
+        )
+    return PullRequestDiff(
+        base_rev=base_rev,
+        merged_rev=merged_rev,
+        complete=True,
+        file_count=len(changes),
+        files=tuple(changes),
+    )
+
+
 @dataclass
 class Worktree:
     """A per-build checkout backed by a project's central clone."""
 
     path: Path
     clone_path: Path
+    # Immutable commit checked out before an optional PR merge.
+    base_revision: str | None = None
 
     async def rev_parse(self, rev: str) -> str:
         return (await run_git(["rev-parse", rev], cwd=self.path)).strip()
@@ -207,6 +301,42 @@ class Worktree:
 
     async def commit_message(self, rev: str = "HEAD") -> str:
         return await run_git(["log", "-1", "--format=%B", rev], cwd=self.path)
+
+    async def pull_request_diff(self) -> PullRequestDiff | None:
+        """Structured base-to-merged-tree diff for a PR worktree.
+
+        NUL-delimited output handles whitespace, quotes, tabs, and newlines in
+        filenames without shell parsing. Invalid UTF-8 cannot round-trip through
+        JSON/Nix strings, so it produces an explicit incomplete manifest.
+        """
+        if self.base_revision is None:
+            return None
+        merged_rev = await self.rev_parse("HEAD")
+        proc = await asyncio.create_subprocess_exec(
+            "git",
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--name-status",
+            "-z",
+            "--find-renames",
+            "--find-copies",
+            "--find-copies-harder",
+            self.base_revision,
+            merged_rev,
+            "--",
+            cwd=self.path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            raise GitError(
+                ["diff", self.base_revision, merged_rev],
+                proc.returncode or -1,
+                stderr.decode(errors="replace"),
+            )
+        return _parse_pull_request_diff(self.base_revision, merged_rev, stdout)
 
     async def merge(
         self, head_sha: str, credentials: FetchCredentials | None = None
@@ -468,6 +598,7 @@ class RepoManager:
             project_key, worktree_id, base_commit, credentials
         )
         try:
+            worktree.base_revision = await worktree.rev_parse("HEAD")
             if head_commit is not None and head_commit != base_commit:
                 await worktree.merge(head_commit, credentials)
             # .gitmodules is PR-controlled: with the primary repo's

@@ -164,7 +164,7 @@ def _eval_settings(
         netrc_file = credentials.netrc_file
     # Arguments hercules-ci-agent passes to the flake's herculesCI
     # function; tag is unknown here (builds are branch/PR driven).
-    primary_repo = {
+    primary_repo: dict[str, Any] = {
         "name": event.repo.repo,
         "owner": event.repo.owner,
         "branch": event.branch,
@@ -175,6 +175,27 @@ def _eval_settings(
         "remoteHttpUrl": event.repo.clone_url,
         "forgeType": event.repo.forge,
     }
+    if event.pr_number is not None and event.pr_diff is not None:
+        diff = event.pr_diff
+        primary_repo["pullRequest"] = {
+            "number": event.pr_number,
+            "baseRev": diff.base_rev,
+            "mergedRev": diff.merged_rev,
+            "diff": {
+                "complete": diff.complete,
+                "fileCount": diff.file_count,
+                "reason": diff.reason,
+                "files": [
+                    {
+                        "status": changed.status,
+                        "path": changed.path,
+                        "previousPath": changed.previous_path,
+                        "score": changed.score,
+                    }
+                    for changed in diff.files
+                ],
+            },
+        }
     hercules_args = {"primaryRepo": primary_repo, **primary_repo}
     return EvalSettings(
         gc_roots_dir=o.gcroots_dir(build),

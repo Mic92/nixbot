@@ -17,6 +17,7 @@ from nixbot.gitrepo import (
     MergeConflictError,
     RepoManager,
     StaticCredentialsProvider,
+    _parse_pull_request_diff,
     run_git,
 )
 
@@ -94,6 +95,59 @@ async def test_pr_merge_and_tree_hash_dedup(
     tree2 = await wt2.tree_hash()
     await manager.remove_worktree(wt2)
     assert tree1 == tree2
+
+
+async def test_pr_diff_represents_paths_and_change_kinds(
+    manager: RepoManager, upstream: Path
+) -> None:
+    for name, content in {
+        "modified.txt": "before\n",
+        "deleted.txt": "delete me\n",
+        "old name.txt": "rename me\n",
+        "copy-source.txt": "copy me\n",
+    }.items():
+        (upstream / name).write_text(content)
+    git(upstream, "add", ".")
+    git(upstream, "commit", "-m", "diff base")
+    base = git(upstream, "rev-parse", "HEAD")
+
+    git(upstream, "checkout", "-b", "pr-diff")
+    (upstream / "modified.txt").write_text("after\n")
+    (upstream / "deleted.txt").unlink()
+    (upstream / "old name.txt").rename(upstream / "renamed name.txt")
+    shutil.copyfile(upstream / "copy-source.txt", upstream / "copied name.txt")
+    unusual = 'space tab\tquote" newline\n.txt'
+    (upstream / unusual).write_text("odd\n")
+    git(upstream, "add", "-A")
+    git(upstream, "commit", "-m", "mixed changes")
+    head = git(upstream, "rev-parse", "HEAD")
+    git(upstream, "checkout", "main")
+    await fetch(manager, upstream)
+
+    wt = await manager.checkout_for_build(
+        KEY, "diff", base_commit=base, head_commit=head
+    )
+    diff = await wt.pull_request_diff()
+    assert diff is not None
+    assert diff.complete
+    assert diff.base_rev == base
+    assert diff.merged_rev == await wt.rev_parse("HEAD")
+    by_path = {change.path: change for change in diff.files}
+    assert by_path["modified.txt"].status == "modified"
+    assert by_path["deleted.txt"].status == "deleted"
+    assert by_path["renamed name.txt"].status == "renamed"
+    assert by_path["renamed name.txt"].previous_path == "old name.txt"
+    assert by_path["copied name.txt"].status == "copied"
+    assert by_path["copied name.txt"].previous_path == "copy-source.txt"
+    assert by_path[unusual].status == "added"
+    await manager.remove_worktree(wt)
+
+
+def test_pr_diff_falls_back_for_unrepresentable_path() -> None:
+    diff = _parse_pull_request_diff("base", "merged", b"M\0bad-\xff\0")
+    assert not diff.complete
+    assert diff.reason == "unrepresentable_or_malformed_path"
+    assert diff.files == ()
 
 
 async def test_merge_conflict_raises(manager: RepoManager, upstream: Path) -> None:
