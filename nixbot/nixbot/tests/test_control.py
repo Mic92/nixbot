@@ -526,6 +526,50 @@ def test_token_creation_with_expiry(harness: WebHarness) -> None:
     assert create({"name": "bad", "expires_days": "999999999999"}).status_code == 400
 
 
+def test_proxy_user_can_manage_api_tokens(harness: WebHarness) -> None:
+    ctx = harness.ctx
+    store = ctx.token_store
+    assert store is not None
+    old_proxy_auth_header = ctx.proxy_auth_header
+    ctx.proxy_auth_header = "X-Remote-User"
+    proxy_user = User(provider="proxy", username="alice@example.com")
+    headers = {"X-Remote-User": proxy_user.username}
+    try:
+        settings = harness.get("/settings", headers=headers)
+        assert settings.status_code == 200
+        assert proxy_user.qualified in settings.text
+
+        created = harness.post(
+            "/settings/tokens",
+            data={"name": "proxy-client"},
+            headers=headers,
+        )
+        assert created.status_code == 200
+        tokens = harness.run(store.list_for(proxy_user))
+        token = next(t for t in tokens if t.name == "proxy-client")
+
+        revoked = harness.post(f"/settings/tokens/{token.id}/revoke", headers=headers)
+        assert revoked.status_code == 303
+        assert all(t.id != token.id for t in harness.run(store.list_for(proxy_user)))
+    finally:
+        ctx.proxy_auth_header = old_proxy_auth_header
+
+
+def test_bearer_token_cannot_manage_api_tokens(harness: WebHarness) -> None:
+    store = harness.ctx.token_store
+    assert store is not None
+    token = harness.run(store.create(ALICE, "no-token-chaining"))
+    headers = {"Authorization": f"Bearer {token}"}
+
+    assert harness.get("/settings", headers=headers).status_code == 403
+    assert (
+        harness.post(
+            "/settings/tokens", data={"name": "chained"}, headers=headers
+        ).status_code
+        == 403
+    )
+
+
 def test_api_token_controls_build(harness: WebHarness) -> None:
     ctx = harness.ctx
     store = ApiTokenStore(ctx.pool)
