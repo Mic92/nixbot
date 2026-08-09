@@ -432,8 +432,6 @@ def github_oauth(
     client_id: str,
     client_secret: str,
     api_url: str = "https://api.github.com",
-    *,
-    private_repo_scope: bool = False,
 ) -> OAuthProvider:
     api = api_url.rstrip("/")
     if api == "https://api.github.com":
@@ -448,11 +446,9 @@ def github_oauth(
         userinfo_url=f"{api}/user",
         client_id=client_id,
         client_secret=client_secret,
-        # Private-repo visibility (GET /user/repos listing private
-        # repositories) requires "repo", which GitHub only offers with
-        # write access. Instances without private repos should not hold
-        # write-capable tokens, so it is opt-in.
-        scope="read:user repo" if private_repo_scope else "read:user",
+        # Identity only: repo permissions are checked with the bot's
+        # own credentials, never with the login token.
+        scope="read:user",
         username_field="login",
         provider_id="github",
     )
@@ -467,9 +463,7 @@ def gitea_oauth(instance_url: str, client_id: str, client_secret: str) -> OAuthP
         userinfo_url=f"{base}/api/v1/user",
         client_id=client_id,
         client_secret=client_secret,
-        # read:repository is required so the visibility repo-set fetch
-        # (GET /api/v1/user/repos) works with scoped tokens (Gitea >= 1.19).
-        scope="read:user read:repository",
+        scope="read:user",
         username_field="login",
         provider_id="gitea",
     )
@@ -486,9 +480,7 @@ def gitlab_oauth(
         userinfo_url=f"{base}/api/v4/user",
         client_id=client_id,
         client_secret=client_secret,
-        # read_api is required so the visibility repo-set fetch
-        # (GET /api/v4/projects?membership=true) works.
-        scope="read_user read_api",
+        scope="read_user",
         username_field="username",
         avatar_field="avatar_url",
         provider_id="gitlab",

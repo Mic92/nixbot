@@ -57,15 +57,6 @@ services.nixbot = {
     oauthId = "<oauth-client-id>";
     oauthSecretFile = "/path/to/oauth-secret";
 
-    # Optional: request the write-capable "repo" OAuth scope at login so
-    # private repositories are visible to their members, and so the login
-    # token carries the push access that drives the per-repo restart
-    # button (see "OAuth scope and the restart button" below). GitHub has
-    # no read-only repo scope: "repo" grants write access and nixbot
-    # stores the token server-side for the session. Off by default; leave
-    # it off unless the instance builds private repositories.
-    # oauthPrivateRepoScope = true;
-
     # A random secret used to verify incoming webhooks from GitHub
     webhookSecretFile = "/path/to/webhook-secret";
 

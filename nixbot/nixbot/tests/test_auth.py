@@ -339,14 +339,10 @@ async def test_userinfo_rejects_null_or_empty_username() -> None:
 
 
 def test_github_oauth_scope_and_enterprise_urls() -> None:
-    # Default is the minimal read-only scope: "repo" grants full write
-    # access and the token is held server-side for the session lifetime.
+    # Identity-only scope: repo permissions are checked with the bot's
+    # credentials, so the login token never needs repo access.
     default = github_oauth("cid", "cs")
     assert default.scope.split() == ["read:user"]
-    # Private-repo visibility needs "repo" (GitHub has no read-only
-    # repo scope). Explicit opt-in.
-    private = github_oauth("cid", "cs", private_repo_scope=True)
-    assert private.scope.split() == ["read:user", "repo"]
     assert default.authorize_url == "https://github.com/login/oauth/authorize"
     assert default.userinfo_url == "https://api.github.com/user"
 
@@ -390,8 +386,7 @@ def test_gitea_oauth_urls() -> None:
     provider = gitea_oauth("https://gitea.example.com/", "cid", "cs")
     assert provider.authorize_url == "https://gitea.example.com/login/oauth/authorize"
     assert provider.userinfo_url == "https://gitea.example.com/api/v1/user"
-    # read:repository is needed so /api/v1/user/repos works with scoped tokens.
-    assert "read:repository" in provider.scope.split()
+    assert provider.scope.split() == ["read:user"]
 
 
 async def test_oidc_exchange_uses_basic_auth() -> None:
