@@ -31,7 +31,6 @@ from nixbot.executor import (
     container_path,
     effect_log_path,
 )
-from nixbot.forge_tokens import ForgeTokenStore
 from nixbot.logstore import LogContainerWriter
 from nixbot.web import events as events_module
 from nixbot.web.auth_routes import SESSION_COOKIE, create_auth_router
@@ -457,52 +456,15 @@ class _StubVisibility:
         self.visible = visible
         self.seen_users: list[object] = []
 
-    async def visible_repo_ids(
-        self,
-        user: object,
-        token: object = None,  # noqa: ARG002
-    ) -> list[int]:
+    async def visible_repo_ids(self, user: object) -> list[int]:
         self.seen_users.append(user)
         return self.visible
 
-    async def toggleable_repo_ids(
-        self,
-        user: object,  # noqa: ARG002
-        token: object = None,  # noqa: ARG002
-    ) -> list[int]:
+    async def toggleable_repo_ids(self, user: object) -> list[int]:  # noqa: ARG002
         return []
 
-    async def controllable_repo_ids(
-        self,
-        user: object,  # noqa: ARG002
-        token: object = None,  # noqa: ARG002
-    ) -> list[int]:
+    async def controllable_repo_ids(self, user: object) -> list[int]:  # noqa: ARG002
         return []
-
-
-def test_expired_forge_token_shows_relogin_banner(client: WebHarness) -> None:
-    """When the forge token is gone but the session cookie is still
-    valid, private repos silently disappear. The page must call this
-    out prominently with a re-login link, not only inside the account
-    menu (issue #105)."""
-    ctx = client.ctx
-    ctx.visibility = cast("VisibilityService", _StubVisibility([]))
-    ctx.forge_tokens = ForgeTokenStore(ctx.pool)
-    try:
-        page = client.get("/", user=User(provider="github", username="alice"))
-        assert page.status_code == 200
-        assert 'class="banner banner-warning"' in page.text
-        assert 'href="/login/github"' in page.text
-
-        # With a live forge token the banner must not show.
-        page = client.get(
-            "/", user=User(provider="github", username="alice"), token="tok"
-        )
-        assert 'class="banner banner-warning"' not in page.text
-    finally:
-        ctx.visibility = None
-        ctx.forge_tokens = None
-        client.run(ctx.pool.execute("DELETE FROM forge_tokens"))
 
 
 def test_legacy_redirect_hides_invisible_projects(client: WebHarness) -> None:
@@ -1736,14 +1698,13 @@ def test_logout_revokes_session_cookie(postgres_dsn: str) -> None:
     once the user logs out, even though the cookie itself is still
     validly signed and unexpired."""
 
-    def configure(app: FastAPI, pool: asyncpg.Pool) -> None:
+    def configure(app: FastAPI) -> None:
         ctx = app.state.web_context
         app.include_router(
             create_auth_router(
                 {},
                 ctx.signer,
                 "http://test",
-                ForgeTokenStore(pool),
                 revoked_sessions=ctx.revoked_sessions,
             )
         )

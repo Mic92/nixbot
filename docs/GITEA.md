@@ -9,10 +9,16 @@ status updates, and secure authentication.
 1. **Create a dedicated Gitea user** (recommended for organizations):
    - This user will manage webhooks and report build statuses
    - Add this user as a collaborator with **Administrator** permission to every
-     repository you want to build: Gitea only allows repo admins to manage
-     webhooks. Without admin the repository is still discovered, but the webhook
-     (push, pull_request, pull_request_sync events) must be created manually.
-     Private repositories are invisible to the token until the user is added.
+     repository you want to build. Repo admin is required for:
+     - **Webhooks**: Gitea only lets repo admins manage webhooks. Without admin
+       the repository is still discovered, but the webhook (push, pull_request,
+       pull_request_sync events) must be created manually.
+     - **Per-user visibility**: nixbot decides who may see a private repository
+       by asking `GET /repos/{owner}/{repo}/collaborators/{user}/permission`
+       with this token. This endpoint is only available to repo admins (or site
+       admins). Without admin, private repositories are hidden from everyone but
+       nixbot instance admins.
+   - Private repositories are invisible to the token until the user is added.
 
 2. **Generate an access token**:
    - Log in as the dedicated user

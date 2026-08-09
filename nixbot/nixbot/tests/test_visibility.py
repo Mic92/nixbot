@@ -5,6 +5,8 @@ unauthorized access on HTML, fragment, log, and SSE endpoints."""
 
 from __future__ import annotations
 
+import shutil
+import subprocess
 from typing import TYPE_CHECKING
 
 import httpx
@@ -12,11 +14,12 @@ import pytest
 
 from nixbot.api_tokens import ApiTokenStore
 from nixbot.auth import AuthzConfig, User
-from nixbot.forge_tokens import ForgeTokenStore
+from nixbot.forge import GiteaClient, GitHubAppClient, GitlabClient
 from nixbot.visibility import (
     AccessCache,
-    ForgeRepoAccessFetcher,
+    BotRepoAccessFetcher,
     RepoAccess,
+    RepoRef,
     VisibilityService,
 )
 from nixbot.web.auth_routes import SESSION_COOKIE, create_auth_router
@@ -31,13 +34,15 @@ from .support import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Iterator, Sequence
+    from pathlib import Path
 
-    import asyncpg
     from fastapi import FastAPI
 
 
 class FakeFetcher:
+    """Grants per-user repo access keyed by qualified username."""
+
     def __init__(
         self,
         grants: dict[str, frozenset[str]],
@@ -49,9 +54,13 @@ class FakeFetcher:
         self.writable_grants = writable_grants or {}
         self.calls = 0
 
-    async def repo_access(self, user: User, token: str) -> RepoAccess:
+    async def repo_access(
+        self,
+        user: User,
+        repos: Sequence[RepoRef],  # noqa: ARG002
+    ) -> RepoAccess:
         self.calls += 1
-        key = f"{user.qualified}:{token}"
+        key = user.qualified
         return RepoAccess(
             accessible=self.grants.get(key, frozenset()),
             admin=self.admin_grants.get(key, frozenset()),
@@ -88,20 +97,19 @@ async def seed(dsn: str) -> None:
         )
 
 
-FETCHER = FakeFetcher({"github:carol:tok-carol": frozenset({"github:priv-1"})})
+FETCHER = FakeFetcher({"github:carol": frozenset({"github:priv-1"})})
 
 
 @pytest.fixture(scope="module")
 def harness(postgres_dsn: str) -> Iterator[WebHarness]:
-    def configure(app: FastAPI, pool: asyncpg.Pool) -> None:
+    def configure(app: FastAPI) -> None:
         ctx = app.state.web_context
         ctx.visibility = VisibilityService(
-            pool,
+            ctx.pool,
             AuthzConfig(admins=["github:root"]),
             fetcher=FETCHER,
             cache=AccessCache(ttl=3600),
         )
-        ctx.forge_tokens = ForgeTokenStore(pool)
 
     with web_harness(postgres_dsn, configure=configure) as h:
         yield h
@@ -131,19 +139,14 @@ def test_anonymous_sees_public_only(harness: WebHarness) -> None:
 
 
 def test_unauthorized_user_sees_public_only(harness: WebHarness) -> None:
-    assert (
-        harness.get("/repos/github/acme/secret", MALLORY, "tok-mallory").status_code
-        == 404
-    )
-    home = harness.get("/", MALLORY, "tok-mallory")
+    assert harness.get("/repos/github/acme/secret", MALLORY).status_code == 404
+    home = harness.get("/", MALLORY)
     assert "secret" not in home.text
 
 
 def test_authorized_user_sees_private(harness: WebHarness) -> None:
-    assert (
-        harness.get("/repos/github/acme/secret", CAROL, "tok-carol").status_code == 200
-    )
-    home = harness.get("/", CAROL, "tok-carol")
+    assert harness.get("/repos/github/acme/secret", CAROL).status_code == 200
+    home = harness.get("/", CAROL)
     assert "acme/secret" in home.text
 
 
@@ -161,7 +164,26 @@ def test_non_admin_does_not_see_disabled_repos(harness: WebHarness) -> None:
     # Anonymous and unauthorized users have an empty toggleable set, so
     # the disabled list stays hidden.
     assert "acme/pending" not in harness.get("/").text
-    assert "acme/pending" not in harness.get("/", MALLORY, "tok-mallory").text
+    assert "acme/pending" not in harness.get("/", MALLORY).text
+
+
+def test_api_token_sees_private(harness: WebHarness) -> None:
+    """Personal API tokens carry no forge OAuth token; access is
+    checked with the bot's credentials instead (issue #109)."""
+    ctx = harness.ctx
+    ctx.token_store = ApiTokenStore(ctx.pool)
+    token = harness.run(ctx.token_store.create(CAROL, "cli"))
+    response = harness.get(
+        "/repos/github/acme/secret", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 200
+    # A token of a user without forge access stays out.
+    mallory_token = harness.run(ctx.token_store.create(MALLORY, "cli"))
+    response = harness.get(
+        "/repos/github/acme/secret",
+        headers={"Authorization": f"Bearer {mallory_token}"},
+    )
+    assert response.status_code == 404
 
 
 def test_admin_api_token_sees_private(harness: WebHarness) -> None:
@@ -184,20 +206,20 @@ class FailingFetcher:
     async def repo_access(
         self,
         user: User,  # noqa: ARG002
-        token: str,  # noqa: ARG002
+        repos: Sequence[RepoRef],  # noqa: ARG002
     ) -> RepoAccess:
         self.calls += 1
         if self.fail:
             msg = "forge down"
             raise httpx.ConnectError(msg)
-        return RepoAccess(frozenset({"github:priv-1"}), frozenset())
+        return RepoAccess(frozenset({"github:priv-1"}))
 
 
 def test_forge_repo_admins_can_toggle_their_repos(harness: WebHarness) -> None:
     ctx = harness.ctx
     fetcher = FakeFetcher(
-        grants={"github:carol:tok-carol": frozenset({"github:priv-1"})},
-        admin_grants={"github:carol:tok-carol": frozenset({"github:priv-1"})},
+        grants={"github:carol": frozenset({"github:priv-1"})},
+        admin_grants={"github:carol": frozenset({"github:priv-1"})},
     )
     service = VisibilityService(
         ctx.pool,
@@ -210,11 +232,11 @@ def test_forge_repo_admins_can_toggle_their_repos(harness: WebHarness) -> None:
         # Instance admin: everything (None).
         assert await service.toggleable_repo_ids(ROOT) is None
         # Repo admin: exactly their repo.
-        ids = await service.toggleable_repo_ids(CAROL, "tok-carol")
+        ids = await service.toggleable_repo_ids(CAROL)
         assert ids is not None
         assert len(ids) == 1
         # Access without forge-admin permission: nothing.
-        assert await service.toggleable_repo_ids(MALLORY, "tok-mallory") == []
+        assert await service.toggleable_repo_ids(MALLORY) == []
         # Anonymous: nothing.
         assert await service.toggleable_repo_ids(None) == []
 
@@ -226,8 +248,8 @@ def test_forge_repo_writers_can_control_their_repos(harness: WebHarness) -> None
     without instance-admin or PR-author rights (issue #52)."""
     ctx = harness.ctx
     fetcher = FakeFetcher(
-        grants={"github:carol:tok-carol": frozenset({"github:priv-1"})},
-        writable_grants={"github:carol:tok-carol": frozenset({"github:priv-1"})},
+        grants={"github:carol": frozenset({"github:priv-1"})},
+        writable_grants={"github:carol": frozenset({"github:priv-1"})},
     )
     service = VisibilityService(
         ctx.pool,
@@ -240,11 +262,11 @@ def test_forge_repo_writers_can_control_their_repos(harness: WebHarness) -> None
         # Instance admin: everything (None).
         assert await service.controllable_repo_ids(ROOT) is None
         # Repo writer: exactly their repo.
-        ids = await service.controllable_repo_ids(CAROL, "tok-carol")
+        ids = await service.controllable_repo_ids(CAROL)
         assert ids is not None
         assert len(ids) == 1
         # Read-only access (no write grant): nothing.
-        assert await service.controllable_repo_ids(MALLORY, "tok-mallory") == []
+        assert await service.controllable_repo_ids(MALLORY) == []
         # Anonymous: nothing.
         assert await service.controllable_repo_ids(None) == []
 
@@ -265,11 +287,11 @@ def test_fetch_errors_are_not_cached(harness: WebHarness) -> None:
 
     async def run() -> None:
         # While the forge errors: public-only, nothing cached.
-        first = await service.visible_repo_ids(CAROL, "tok-carol")
+        first = await service.visible_repo_ids(CAROL)
         assert first is not None
         assert len(first) == 1
         fetcher.fail = False
-        second = await service.visible_repo_ids(CAROL, "tok-carol")
+        second = await service.visible_repo_ids(CAROL)
         assert second is not None
         assert len(second) == 2
         assert fetcher.calls == 2
@@ -279,15 +301,15 @@ def test_fetch_errors_are_not_cached(harness: WebHarness) -> None:
 
 def test_access_cache_used(harness: WebHarness) -> None:
     calls_before = FETCHER.calls
-    harness.get("/repos/github/acme/secret", CAROL, "tok-carol")
-    harness.get("/repos/github/acme/secret", CAROL, "tok-carol")
+    harness.get("/repos/github/acme/secret", CAROL)
+    harness.get("/repos/github/acme/secret", CAROL)
     # TTL cache: at most one fetch for repeated requests.
     assert FETCHER.calls <= calls_before + 1
 
 
 def test_cache_negative_results() -> None:
     cache = AccessCache(ttl=60)
-    empty = RepoAccess(frozenset(), frozenset())
+    empty = RepoAccess()
     assert cache.get("u") is None
     cache.set("u", empty)
     assert cache.get("u") == empty
@@ -307,7 +329,7 @@ def test_metrics_unauthenticated_no_private_names(harness: WebHarness) -> None:
 
 def test_configured_viewers_see_private(harness: WebHarness) -> None:
     """privateRepoViewers grants visibility to users without forge
-    tokens (e.g. OIDC logins)."""
+    accounts (e.g. OIDC logins)."""
     ctx = harness.ctx
     assert ctx.visibility is not None
     saved = ctx.visibility.authz
@@ -361,8 +383,8 @@ def test_api_token_inherits_login_groups(harness: WebHarness) -> None:
 def test_access_cache_prunes_expired_on_get() -> None:
     """Expired entries must not accumulate forever. get() prunes them."""
     cache = AccessCache(ttl=0)
-    cache.set("github:alice", RepoAccess(frozenset(), frozenset()))
-    cache.set("github:bob", RepoAccess(frozenset(), frozenset()))
+    cache.set("github:alice", RepoAccess())
+    cache.set("github:bob", RepoAccess())
     assert cache.get("github:alice") is None
     assert cache._entries == {}  # noqa: SLF001
 
@@ -370,18 +392,19 @@ def test_access_cache_prunes_expired_on_get() -> None:
 def test_logout_invalidates_access_cache(postgres_dsn: str) -> None:
     """The cache docstring promises entries are dropped on logout."""
 
-    def configure(app: FastAPI, pool: asyncpg.Pool) -> None:
+    def configure(app: FastAPI) -> None:
         ctx = app.state.web_context
         ctx.visibility = VisibilityService(
-            pool, AuthzConfig(admins=[]), fetcher=FETCHER, cache=AccessCache(ttl=3600)
+            ctx.pool,
+            AuthzConfig(admins=[]),
+            fetcher=FETCHER,
+            cache=AccessCache(ttl=3600),
         )
-        ctx.forge_tokens = ForgeTokenStore(pool)
         app.include_router(
             create_auth_router(
                 {},
                 ctx.signer,
                 "http://test",
-                ctx.forge_tokens,
                 revoked_sessions=ctx.revoked_sessions,
                 on_logout=ctx.visibility.invalidate_user,
             )
@@ -390,85 +413,138 @@ def test_logout_invalidates_access_cache(postgres_dsn: str) -> None:
     with web_harness(postgres_dsn, configure=configure) as h:
         visibility = h.ctx.visibility
         assert visibility is not None
-        visibility.cache.set(
-            CAROL.qualified, RepoAccess(frozenset({"github:priv-1"}), frozenset())
-        )
+        visibility.cache.set(CAROL.qualified, RepoAccess(frozenset({"github:priv-1"})))
         cookie = h.signer.session_for(CAROL, "sid-vis-logout")
         headers = cookie_header({SESSION_COOKIE: cookie}) | {"Origin": "http://test"}
         assert h.run(h.http.post("/logout", headers=headers)).status_code == 303
         assert visibility.cache.get(CAROL.qualified) is None
 
 
-async def test_gitlab_repo_access_fetcher() -> None:
-    """Private GitLab projects were invisible to everyone but admins
-    because no GitLab access fetcher existed."""
+REPOS = [
+    RepoRef("gitea", "1", "acme", "secret"),
+    RepoRef("gitea", "2", "acme", "other"),
+    RepoRef("github", "5", "acme", "widget"),
+]
+
+
+async def test_bot_fetcher_gitea() -> None:
+    """Per-user access via the collaborator-permission endpoint with
+    the bot's token; foreign-forge repos are skipped."""
+    seen: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/api/v4/projects"
-        assert request.url.params["membership"] == "true"
-        assert request.headers["Authorization"] == "Bearer tok-gl"
-        return httpx.Response(
-            200,
-            json=[
-                {
-                    "id": 31,
-                    "permissions": {
-                        "project_access": {"access_level": 40},
-                        "group_access": None,
-                    },
-                },
-                {
-                    "id": 32,
-                    "permissions": {
-                        "project_access": None,
-                        "group_access": {"access_level": 30},
-                    },
-                },
-                {
-                    "id": 33,
-                    "permissions": {
-                        "project_access": {"access_level": 20},
-                        "group_access": None,
-                    },
-                },
-            ],
-        )
+        seen.append(request.url.path)
+        assert request.headers["Authorization"] == "token bot-tok"
+        if (
+            request.url.path
+            == "/api/v1/repos/acme/secret/collaborators/carol/permission"
+        ):
+            return httpx.Response(200, json={"permission": "write"})
+        return httpx.Response(404)
 
-    fetcher = ForgeRepoAccessFetcher(
-        httpx.AsyncClient(transport=httpx.MockTransport(handler)),
-        gitlab_url="https://gitlab.example.com",
+    client = GiteaClient(
+        "https://gitea.example.com",
+        "bot-tok",
+        http=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     )
-    user = User(provider="gitlab", username="dora")
-    access = await fetcher.repo_access(user, "tok-gl")
-    assert access.accessible == frozenset({"gitlab:31", "gitlab:32", "gitlab:33"})
+    fetcher = BotRepoAccessFetcher(gitea=client)
+    access = await fetcher.repo_access(User(provider="gitea", username="carol"), REPOS)
+    assert access.accessible == frozenset({"gitea:1"})
+    assert access.writable == frozenset({"gitea:1"})
+    assert access.admin == frozenset()
+    # Only gitea repos were queried.
+    assert all(path.startswith("/api/v1/repos/acme/") for path in seen)
+
+
+async def test_bot_fetcher_gitea_owner_is_admin() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"permission": "owner"})
+
+    client = GiteaClient(
+        "https://gitea.example.com",
+        "bot-tok",
+        http=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    fetcher = BotRepoAccessFetcher(gitea=client)
+    access = await fetcher.repo_access(
+        User(provider="gitea", username="carol"), REPOS[:1]
+    )
+    assert access.admin == frozenset({"gitea:1"})
+
+
+async def test_bot_fetcher_gitlab() -> None:
+    """Username resolves to an id once, then membership access levels
+    map to read/write/admin."""
+    user_lookups = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal user_lookups
+        assert request.headers["PRIVATE-TOKEN"] == "bot-tok"
+        if request.url.path == "/api/v4/users":
+            user_lookups += 1
+            assert request.url.params["username"] == "dora"
+            return httpx.Response(200, json=[{"id": 7}])
+        if request.url.path == "/api/v4/projects/31/members/all/7":
+            return httpx.Response(200, json={"access_level": 40})
+        if request.url.path == "/api/v4/projects/32/members/all/7":
+            return httpx.Response(200, json={"access_level": 30})
+        return httpx.Response(404)
+
+    client = GitlabClient(
+        "https://gitlab.example.com",
+        "bot-tok",
+        http=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    fetcher = BotRepoAccessFetcher(gitlab=client)
+    repos = [
+        RepoRef("gitlab", "31", "grp", "a"),
+        RepoRef("gitlab", "32", "grp", "b"),
+        RepoRef("gitlab", "33", "grp", "c"),
+    ]
+    access = await fetcher.repo_access(User(provider="gitlab", username="dora"), repos)
+    assert access.accessible == frozenset({"gitlab:31", "gitlab:32"})
     assert access.admin == frozenset({"gitlab:31"})
-    # Developer (30) can write but not administer; Reporter (20) neither.
     assert access.writable == frozenset({"gitlab:31", "gitlab:32"})
+    assert user_lookups == 1  # id cached across repos
 
 
-async def test_github_repo_access_fetcher_enterprise_api_url() -> None:
-    """GitHub Enterprise: the fetch must hit the configured API base,
-    not hardcoded api.github.com."""
+async def test_bot_fetcher_unknown_provider() -> None:
+    """OIDC users have no forge account to check: empty access, the
+    configured viewer rules still apply on top."""
+    fetcher = BotRepoAccessFetcher()
+    access = await fetcher.repo_access(User(provider="oidc:idp", username="x"), REPOS)
+    assert access == RepoAccess()
+
+
+@pytest.mark.skipif(shutil.which("openssl") is None, reason="openssl required")
+async def test_bot_fetcher_github(tmp_path: Path) -> None:
+    """Repo-scoped installation token, then the collaborator-permission
+    endpoint decides the level."""
+    key = tmp_path / "app-key.pem"
+    subprocess.run(  # noqa: S603
+        ["openssl", "genrsa", "-out", str(key), "2048"],
+        check=True,
+        capture_output=True,
+    )
 
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.host == "ghe.example.com"
-        assert request.url.path == "/api/v3/user/repos"
-        return httpx.Response(
-            200,
-            json=[
-                {"id": 5, "permissions": {"admin": True, "push": True}},
-                {"id": 6, "permissions": {"admin": False, "push": True}},
-                {"id": 7, "permissions": {"admin": False, "push": False}},
-            ],
-        )
+        path = request.url.path
+        if path == "/repos/acme/widget/installation":
+            return httpx.Response(200, json={"id": 11})
+        if path == "/app/installations/11/access_tokens":
+            assert request.read() == b'{"repositories":["widget"]}'
+            return httpx.Response(201, json={"token": "ghs_tok"})
+        if path == "/repos/acme/widget/collaborators/erik/permission":
+            assert request.headers["Authorization"] == "Bearer ghs_tok"
+            return httpx.Response(200, json={"permission": "admin"})
+        return httpx.Response(404)
 
-    fetcher = ForgeRepoAccessFetcher(
-        httpx.AsyncClient(transport=httpx.MockTransport(handler)),
-        github_api_url="https://ghe.example.com/api/v3",
+    client = GitHubAppClient(
+        app_id=42,
+        private_key_file=key,
+        http=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     )
-    user = User(provider="github", username="erik")
-    access = await fetcher.repo_access(user, "tok")
-    assert access.accessible == frozenset({"github:5", "github:6", "github:7"})
+    fetcher = BotRepoAccessFetcher(github=client)
+    access = await fetcher.repo_access(User(provider="github", username="erik"), REPOS)
+    assert access.accessible == frozenset({"github:5"})
     assert access.admin == frozenset({"github:5"})
-    # write/maintain/admin all set the push flag. Read-only does not.
-    assert access.writable == frozenset({"github:5", "github:6"})

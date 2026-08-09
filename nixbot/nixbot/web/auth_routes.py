@@ -12,13 +12,12 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
 from ..auth import OAuthError, relevant_groups, same_origin  # noqa: TID252
-from ..forge_tokens import RefreshCredentials  # noqa: TID252
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from ..auth import OAuthProvider, SessionSigner, User  # noqa: TID252
-    from ..forge_tokens import SessionRevocations, TokenVault  # noqa: TID252
+    from ..forge_tokens import SessionRevocations  # noqa: TID252
 
 SESSION_COOKIE = "nixbot_session"
 STATE_COOKIE = "nixbot_oauth_state"
@@ -48,30 +47,23 @@ def _check_callback_params(request: Request, code: str, state: str, error: str) 
 
 async def _invalidate_session(
     signer: SessionSigner,
-    forge_tokens: TokenVault,
     revoked_sessions: SessionRevocations | None,
     cookie: str | None,
 ) -> None:
     """Captured cookie copies must not stay usable after logout: the
     cookie is stateless and stays validly signed until expiry, so the
-    session id goes on a server-side denylist and the forge token is
-    dropped."""
+    session id goes on a server-side denylist."""
     session_id = signer.session_id_from(cookie)
     if session_id is None:
         return
-    # Revoke first: if we crash in between, a still-present forge token
-    # is useless without an accepted session, but the reverse order
-    # would leave a cookie that keeps authenticating.
     if revoked_sessions is not None:
         await revoked_sessions.revoke(session_id, signer.lifetime)
-    await forge_tokens.delete(session_id)
 
 
-def create_auth_router(  # noqa: C901, PLR0913
+def create_auth_router(  # noqa: PLR0913
     providers: dict[str, OAuthProvider],
     signer: SessionSigner,
     base_url: str,
-    forge_tokens: TokenVault,
     http: httpx.AsyncClient | None = None,
     private_repo_viewers: dict[str, list[str]] | None = None,
     revoked_sessions: SessionRevocations | None = None,
@@ -113,7 +105,7 @@ def create_auth_router(  # noqa: C901, PLR0913
         _check_callback_params(request, code, state, error)
         redirect_uri = f"{base_url}/auth/{provider_name}/callback"
         try:
-            user, token = await provider.exchange_code(http, code, redirect_uri)
+            user = await provider.exchange_code(http, code, redirect_uri)
         except (OAuthError, httpx.HTTPError) as exc:
             # Expired/reused codes are routine (refresh, stale tab).
             raise HTTPException(
@@ -125,21 +117,6 @@ def create_auth_router(  # noqa: C901, PLR0913
                 user, groups=relevant_groups(user.groups, private_repo_viewers or {})
             )
         session_id = secrets.token_urlsafe(32)
-        # Cap the stored forge token at its own expiry: a Gitea token
-        # dies ~1h into a 30-day session, and an expired-but-stored
-        # token would fire a failing forge call on every request.
-        token_lifetime = signer.lifetime
-        if token.expires_in is not None:
-            token_lifetime = min(token_lifetime, token.expires_in)
-        await forge_tokens.save(
-            session_id,
-            token.access_token,
-            token_lifetime,
-            refresh=RefreshCredentials(token.refresh_token, provider_name)
-            if token.refresh_token
-            else None,
-            refresh_lifetime=signer.lifetime if token.refresh_token else None,
-        )
         response = RedirectResponse("/")
         response.delete_cookie(_state_cookie(state))
         response.set_cookie(
@@ -157,7 +134,7 @@ def create_auth_router(  # noqa: C901, PLR0913
         if not same_origin(request, base_url):
             raise HTTPException(status_code=403, detail="cross-origin request")
         cookie = request.cookies.get(SESSION_COOKIE)
-        await _invalidate_session(signer, forge_tokens, revoked_sessions, cookie)
+        await _invalidate_session(signer, revoked_sessions, cookie)
         user = signer.user_from(cookie)
         if user is not None and on_logout is not None:
             on_logout(user)

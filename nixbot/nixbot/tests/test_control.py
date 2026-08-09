@@ -19,7 +19,6 @@ from nixbot.bootstrap import build_service
 from nixbot.db_gen import builds as builds_q
 from nixbot.events import BuildResult, ChangeEvent, NullStatusReporter
 from nixbot.executor import attribute_log_path
-from nixbot.forge_tokens import ForgeTokenStore
 from nixbot.service import (
     MAX_REPORT_ATTEMPTS,
     RetryingReporter,
@@ -50,7 +49,6 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
     from pathlib import Path
 
-    import asyncpg
     from fastapi import FastAPI
 
 AUTHZ = AuthzConfig(admins=["github:root"])
@@ -148,14 +146,14 @@ BACKEND = FakeBackend()
 
 @pytest.fixture(scope="module")
 def harness(postgres_dsn: str) -> Iterator[WebHarness]:
-    def configure(app: FastAPI, pool: asyncpg.Pool) -> None:
+    def configure(app: FastAPI) -> None:
         ctx = app.state.web_context
         ctx.authz = AUTHZ
         app.include_router(create_control_router(ctx, BACKEND, AUTHZ, "http://test"))
         app.include_router(
             create_control_api_router(ctx, BACKEND, AUTHZ, "http://test")
         )
-        ctx.token_store = ApiTokenStore(pool)
+        ctx.token_store = ApiTokenStore(ctx.pool)
         app.include_router(create_token_router(ctx, ctx.token_store, "http://test"))
 
     with web_harness(postgres_dsn, configure=configure) as h:
@@ -210,32 +208,27 @@ def test_repo_writer_can_control_without_admin_or_authorship(
     when they are neither an instance admin nor the PR author (issue
     #52)."""
     frank = User(provider="github", username="frank")
+    grace = User(provider="github", username="grace")  # read-only
     ctx = harness.ctx
     saved_visibility = ctx.visibility
-    saved_tokens = ctx.forge_tokens
-    ctx.forge_tokens = ForgeTokenStore(ctx.pool)
     ctx.visibility = VisibilityService(
         ctx.pool,
         AUTHZ,
         fetcher=FakeFetcher(
-            grants={"github:frank:tok-frank": frozenset({"github:ctl-1"})},
-            writable_grants={"github:frank:tok-frank": frozenset({"github:ctl-1"})},
+            grants={"github:frank": frozenset({"github:ctl-1"})},
+            writable_grants={"github:frank": frozenset({"github:ctl-1"})},
         ),
         cache=AccessCache(ttl=3600),
     )
     try:
         BACKEND.restarted.clear()
         # Buttons show for the writer on the build page.
-        page = harness.get(
-            "/repos/github/acme/widget/builds/1", frank, "tok-frank"
-        ).text
+        page = harness.get("/repos/github/acme/widget/builds/1", frank).text
         assert ">restart</button>" in page
         # And the control endpoint accepts the request.
         assert (
             harness.post(
-                "/repos/github/acme/widget/builds/1/restart",
-                frank,
-                token="tok-frank",
+                "/repos/github/acme/widget/builds/1/restart", frank
             ).status_code
             == 303
         )
@@ -243,15 +236,12 @@ def test_repo_writer_can_control_without_admin_or_authorship(
         # A user without write access is still rejected.
         assert (
             harness.post(
-                "/repos/github/acme/widget/builds/1/restart",
-                frank,
-                token="",
+                "/repos/github/acme/widget/builds/1/restart", grace
             ).status_code
             == 403
         )
     finally:
         ctx.visibility = saved_visibility
-        ctx.forge_tokens = saved_tokens
 
 
 def test_cancel_all_requires_admin(harness: WebHarness) -> None:
@@ -534,18 +524,6 @@ def test_token_creation_with_expiry(harness: WebHarness) -> None:
     assert create({"name": "bad", "expires_days": "x"}).status_code == 400
     assert create({"name": "bad", "expires_days": "-1"}).status_code == 400
     assert create({"name": "bad", "expires_days": "999999999999"}).status_code == 400
-
-
-def test_forge_token_store(harness: WebHarness) -> None:
-    pool = harness.ctx.pool
-    store = ForgeTokenStore(pool)
-    harness.run(store.save("sid-1", "tok", 3600))
-    assert harness.run(store.get("sid-1")) == "tok"
-    harness.run(store.delete("sid-1"))
-    assert harness.run(store.get("sid-1")) is None
-    # Expired tokens are not returned.
-    harness.run(store.save("sid-2", "tok2", -1))
-    assert harness.run(store.get("sid-2")) is None
 
 
 def test_api_token_controls_build(harness: WebHarness) -> None:

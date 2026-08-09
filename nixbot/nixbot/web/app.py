@@ -56,11 +56,7 @@ from .workload_routes import create_workload_identity_router
 if TYPE_CHECKING:
     from ..api_tokens import ApiTokenStore  # noqa: TID252
     from ..auth import AuthzConfig, SessionSigner  # noqa: TID252
-    from ..forge_tokens import (  # noqa: TID252
-        ForgeTokenRefresher,
-        SessionRevocations,
-        TokenVault,
-    )
+    from ..forge_tokens import SessionRevocations  # noqa: TID252
     from ..visibility import VisibilityService  # noqa: TID252
     from ..workload_identity import IdentityIssuer  # noqa: TID252
 
@@ -109,9 +105,6 @@ class WebContext:
         # Wired by bootstrap. Admins see Gitea webhook setup with it.
         self.webhook_base_url: str | None = None
         self.token_store: ApiTokenStore | None = None
-        self.forge_tokens: TokenVault | None = None
-        # Wired by bootstrap. Renews expired forge access tokens.
-        self.token_refresher: ForgeTokenRefresher | None = None
         # Logout denylist: stateless cookies stay verifiable until
         # expiry, so revoked session ids are checked server-side.
         self.revoked_sessions: SessionRevocations | None = RevokedSessionStore(pool)
@@ -183,33 +176,20 @@ class WebContext:
     ) -> HTMLResponse:
         if request is not None and "user" not in context:
             context["user"] = await self.request_user(request)
-        if request is not None and "forge_token_expired" not in context:
-            # The forge token can expire long before the session does;
-            # private-repo visibility then silently degrades to public,
-            # so tell the user a re-login restores it.
-            context["forge_token_expired"] = (
-                self.visibility is not None
-                and self.forge_tokens is not None
-                and context.get("user") is not None
-                and request.cookies.get(SESSION_COOKIE) is not None
-                and await self._forge_token(request) is None
-            )
         return HTMLResponse(self.env.get_template(template).render(**context))
 
     async def visible_repo_ids(self, request: Request) -> list[int] | None:
         """None = all projects visible."""
         if self.visibility is None:
             return None
-        return await self.visibility.visible_repo_ids(
-            await self.request_user(request), await self._forge_token(request)
-        )
+        return await self.visibility.visible_repo_ids(await self.request_user(request))
 
     async def toggleable_repo_ids(self, request: Request) -> list[int] | None:
         """Projects the requester may enable/disable; None = all."""
         if self.visibility is None:
             return []
         return await self.visibility.toggleable_repo_ids(
-            await self.request_user(request), await self._forge_token(request)
+            await self.request_user(request)
         )
 
     async def controllable_repo_ids(self, request: Request) -> list[int] | None:
@@ -219,23 +199,8 @@ class WebContext:
         if self.visibility is None:
             return []
         return await self.visibility.controllable_repo_ids(
-            await self.request_user(request), await self._forge_token(request)
+            await self.request_user(request)
         )
-
-    async def _forge_token(self, request: Request) -> str | None:
-        if not hasattr(request.state, "bn_forge_token"):
-            request.state.bn_forge_token = await self._fetch_forge_token(request)
-        return request.state.bn_forge_token
-
-    async def _fetch_forge_token(self, request: Request) -> str | None:
-        if self.signer is None or self.forge_tokens is None:
-            return None
-        session_id = self.signer.session_id_from(request.cookies.get(SESSION_COOKIE))
-        if session_id is None:
-            return None
-        if self.token_refresher is not None:
-            return await self.token_refresher.access_token(session_id)
-        return await self.forge_tokens.get(session_id)
 
     async def repo_or_404(
         self, forge: str, owner: str, name: str, request: Request | None = None

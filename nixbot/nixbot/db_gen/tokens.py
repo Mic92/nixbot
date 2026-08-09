@@ -7,17 +7,12 @@ from __future__ import annotations
 __all__: collections.abc.Sequence[str] = (
     "ApiTokenByHashRow",
     "ApiTokensForUserRow",
-    "GetForgeRefreshTokenRow",
     "QueryResults",
     "api_token_by_hash",
     "api_tokens_for_user",
     "create_api_token",
-    "delete_forge_token",
-    "get_forge_refresh_token",
-    "get_forge_token",
     "revoke_api_token",
     "revoke_session",
-    "save_forge_token",
     "session_revoked",
 )
 
@@ -53,12 +48,6 @@ class ApiTokensForUserRow:
     expires_at: datetime.datetime | None
 
 
-@dataclasses.dataclass()
-class GetForgeRefreshTokenRow:
-    refresh_token: str | None
-    provider: str | None
-
-
 API_TOKEN_BY_HASH: typing.Final[str] = """-- name: ApiTokenByHash :one
 WITH pruned AS (
     DELETE FROM api_tokens WHERE expires_at < now()
@@ -81,23 +70,6 @@ INSERT INTO api_tokens (user_qualified, name, token_hash, expires_at, groups)
 VALUES ($1, $2, $3, $4, $5)
 """
 
-DELETE_FORGE_TOKEN: typing.Final[str] = """-- name: DeleteForgeToken :exec
-DELETE FROM forge_tokens WHERE session_id = $1
-"""
-
-GET_FORGE_REFRESH_TOKEN: typing.Final[str] = """-- name: GetForgeRefreshToken :one
-SELECT refresh_token, provider FROM forge_tokens
-WHERE session_id = $1
-  AND refresh_token IS NOT NULL
-  AND provider IS NOT NULL
-  AND COALESCE(refresh_expires_at, expires_at) > now()
-"""
-
-GET_FORGE_TOKEN: typing.Final[str] = """-- name: GetForgeToken :one
-SELECT token FROM forge_tokens
-WHERE session_id = $1 AND expires_at > now()
-"""
-
 REVOKE_API_TOKEN: typing.Final[str] = """-- name: RevokeApiToken :one
 DELETE FROM api_tokens WHERE id = $1 AND user_qualified = $2 RETURNING id
 """
@@ -110,29 +82,6 @@ INSERT INTO revoked_sessions (session_id, expires_at)
 VALUES ($1, now() + make_interval(secs => $2::float))
 ON CONFLICT (session_id) DO UPDATE
     SET expires_at = GREATEST(revoked_sessions.expires_at, EXCLUDED.expires_at)
-"""
-
-SAVE_FORGE_TOKEN: typing.Final[str] = """-- name: SaveForgeToken :exec
-WITH pruned AS (
-    DELETE FROM forge_tokens
-    WHERE GREATEST(expires_at, COALESCE(refresh_expires_at, expires_at)) < now()
-)
-INSERT INTO forge_tokens
-    (session_id, token, expires_at, refresh_token, provider, refresh_expires_at)
-VALUES (
-    $1,
-    $2,
-    now() + make_interval(secs => $3::float),
-    $4,
-    $5,
-    now() + make_interval(secs => $6::float)
-)
-ON CONFLICT (session_id) DO UPDATE
-    SET token = EXCLUDED.token,
-        expires_at = EXCLUDED.expires_at,
-        refresh_token = EXCLUDED.refresh_token,
-        provider = EXCLUDED.provider,
-        refresh_expires_at = EXCLUDED.refresh_expires_at
 """
 
 SESSION_REVOKED: typing.Final[str] = """-- name: SessionRevoked :one
@@ -201,24 +150,6 @@ async def create_api_token(conn: ConnectionLike, *, user_qualified: str, name: s
     await conn.execute(CREATE_API_TOKEN, user_qualified, name, token_hash, expires_at, groups)
 
 
-async def delete_forge_token(conn: ConnectionLike, *, session_id: str) -> None:
-    await conn.execute(DELETE_FORGE_TOKEN, session_id)
-
-
-async def get_forge_refresh_token(conn: ConnectionLike, *, session_id: str) -> GetForgeRefreshTokenRow | None:
-    row = await conn.fetchrow(GET_FORGE_REFRESH_TOKEN, session_id)
-    if row is None:
-        return None
-    return GetForgeRefreshTokenRow(refresh_token=row[0], provider=row[1])
-
-
-async def get_forge_token(conn: ConnectionLike, *, session_id: str) -> str | None:
-    row = await conn.fetchrow(GET_FORGE_TOKEN, session_id)
-    if row is None:
-        return None
-    return row[0]
-
-
 async def revoke_api_token(conn: ConnectionLike, *, id_: int, user_qualified: str) -> int | None:
     row = await conn.fetchrow(REVOKE_API_TOKEN, id_, user_qualified)
     if row is None:
@@ -228,10 +159,6 @@ async def revoke_api_token(conn: ConnectionLike, *, id_: int, user_qualified: st
 
 async def revoke_session(conn: ConnectionLike, *, session_id: str, lifetime: float) -> None:
     await conn.execute(REVOKE_SESSION, session_id, lifetime)
-
-
-async def save_forge_token(conn: ConnectionLike, *, session_id: str, token: str, lifetime: float, refresh_token: str | None, provider: str | None, refresh_lifetime: float | None) -> None:
-    await conn.execute(SAVE_FORGE_TOKEN, session_id, token, lifetime, refresh_token, provider, refresh_lifetime)
 
 
 async def session_revoked(conn: ConnectionLike, *, session_id: str) -> bool | None:

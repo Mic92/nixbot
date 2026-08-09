@@ -71,19 +71,6 @@
         </details>
       {% endif %}
     </header>
-    {% if forge_token_expired %}
-      {% set provider_keys = login_providers | map(attribute="key") | list %}
-      {% set relogin_key = "oidc" if user.provider.startswith("oidc") else user.provider %}
-      {% if relogin_key not in provider_keys and provider_keys %}
-        {% set relogin_key = provider_keys[0] %}
-      {% endif %}
-      <div class="banner banner-warning" role="alert">
-        <span>Your forge access has expired — private repositories and controls are hidden.</span>
-        {% if relogin_key %}
-          <a class="login-btn" href="/login/{{ relogin_key }}">Log in again</a>
-        {% endif %}
-      </div>
-    {% endif %}
     {% block body %}
     {% endblock body %}
     <footer class="site-footer muted">

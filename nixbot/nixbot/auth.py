@@ -312,17 +312,6 @@ def can_control_build(
 # --- OAuth/OIDC flows ---------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class ForgeToken:
-    """Access token plus its advertised lifetime (None = the provider
-    did not say, e.g. classic GitHub OAuth tokens that never expire)
-    and the refresh token, if the provider issued one."""
-
-    access_token: str
-    expires_in: int | None = None
-    refresh_token: str | None = None
-
-
 class OAuthError(Exception):
     """Token exchange or userinfo fetch failed (expired/reused code,
     provider error response, malformed body)."""
@@ -365,7 +354,7 @@ class OAuthProvider:
 
     async def _token_request(
         self, http: httpx.AsyncClient, data: dict[str, str]
-    ) -> ForgeToken:
+    ) -> str:
         auth = (
             httpx.BasicAuth(self.client_id, self.client_secret)
             if self.client_auth == "basic"
@@ -394,28 +383,12 @@ class OAuthProvider:
         if not access_token:
             msg = f"token exchange failed: {token_body.get('error', 'no access_token')}"
             raise OAuthError(msg)
-        # Gitea/OIDC tokens expire (typically 1h). Record the lifetime
-        # so the stored forge token is not trusted past it.
-        raw_expires = token_body.get("expires_in")
-        expires_in = int(raw_expires) if isinstance(raw_expires, (int, float)) else None
-        refresh = token_body.get("refresh_token")
-        return ForgeToken(
-            access_token,
-            expires_in,
-            refresh_token=refresh if isinstance(refresh, str) and refresh else None,
-        )
-
-    async def refresh(self, http: httpx.AsyncClient, refresh_token: str) -> ForgeToken:
-        """RFC 6749 refresh-token grant."""
-        return await self._token_request(
-            http,
-            {"grant_type": "refresh_token", "refresh_token": refresh_token},
-        )
+        return str(access_token)
 
     async def exchange_code(
         self, http: httpx.AsyncClient, code: str, redirect_uri: str
-    ) -> tuple[User, ForgeToken]:
-        token = await self._token_request(
+    ) -> User:
+        access_token = await self._token_request(
             http,
             {
                 "code": code,
@@ -425,7 +398,7 @@ class OAuthProvider:
         )
         userinfo = await http.get(
             self.userinfo_url,
-            headers={"Authorization": f"Bearer {token.access_token}"},
+            headers={"Authorization": f"Bearer {access_token}"},
         )
         if userinfo.is_error:
             msg = f"userinfo endpoint returned HTTP {userinfo.status_code}"
@@ -452,7 +425,7 @@ class OAuthProvider:
             username=username,
             avatar_url=str(avatar) if avatar else None,
             groups=groups,
-        ), token
+        )
 
 
 def github_oauth(
