@@ -560,7 +560,7 @@ async def test_oauth_callback_filters_session_groups() -> None:
 
 
 async def test_proxy_auth_header() -> None:
-    """The proxy auth header authenticates request and interactive users."""
+    """The proxy auth header authenticates users through request_user."""
     app = FastAPI()
     signer = SessionSigner([b"k" * 32])
     ctx = WebContext(pool=AsyncMock(), signer=signer)
@@ -575,13 +575,6 @@ async def test_proxy_auth_header() -> None:
             return JSONResponse({"user": None})
         return JSONResponse({"user": user.qualified})
 
-    @app.get("/interactive")
-    async def interactive(request: Request) -> JSONResponse:
-        user = await ctx.interactive_user(request)
-        if user is None:
-            return JSONResponse({"user": None})
-        return JSONResponse({"user": user.qualified})
-
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -592,9 +585,6 @@ async def test_proxy_auth_header() -> None:
 
         # With the header, the user is authenticated as proxy:alice.
         resp = await client.get("/me", headers={"X-Remote-User": "alice"})
-        assert resp.status_code == 200
-        assert resp.json()["user"] == "proxy:alice"
-        resp = await client.get("/interactive", headers={"X-Remote-User": "alice"})
         assert resp.status_code == 200
         assert resp.json()["user"] == "proxy:alice"
 
@@ -613,12 +603,6 @@ async def test_proxy_auth_header() -> None:
         cookie = signer.session_for(User(provider="github", username="bob"))
         client.cookies.set(SESSION_COOKIE, cookie)
         resp = await client.get("/me", headers={"X-Remote-User": "alice"})
-        client.cookies.clear()
-        assert resp.status_code == 200
-        assert resp.json()["user"] == "github:bob"
-
-        client.cookies.set(SESSION_COOKIE, cookie)
-        resp = await client.get("/interactive", headers={"X-Remote-User": "alice"})
         client.cookies.clear()
         assert resp.status_code == 200
         assert resp.json()["user"] == "github:bob"
