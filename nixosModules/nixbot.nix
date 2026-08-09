@@ -92,7 +92,6 @@ let
             };
             oauth_id = cfg.github.oauthId;
             oauth_secret_file = if cfg.github.oauthSecretFile != null then "github-oauth-secret" else null;
-            oauth_private_repo_scope = cfg.github.oauthPrivateRepoScope;
           };
       pull_based =
         if cfg.pullBased.repositories == { } then
@@ -177,6 +176,11 @@ in
     ./packages.nix
     ./cachix.nix
     ./niks3.nix
+    (lib.mkRemovedOptionModule [ "services" "nixbot" "github" "oauthPrivateRepoScope" ] ''
+      Private-repo visibility is now determined with nixbot's own forge
+      credentials instead of the user's login token, so the write-capable
+      "repo" OAuth scope is no longer requested.
+    '')
   ];
 
   options.services.nixbot = {
@@ -395,18 +399,6 @@ in
         type = lib.types.nullOr lib.types.path;
         default = null;
         description = "GitHub OAuth client secret file.";
-      };
-
-      oauthPrivateRepoScope = lib.mkOption {
-        type = lib.types.bool;
-        default = false;
-        description = ''
-          Request the "repo" OAuth scope at login so private repositories
-          are visible to their members. GitHub has no read-only repo
-          scope: "repo" grants write access and the token is stored
-          server-side for the session lifetime, so leave this off unless
-          the instance builds private repositories.
-        '';
       };
 
       userAllowlist = lib.mkOption {

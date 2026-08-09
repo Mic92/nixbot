@@ -312,17 +312,6 @@ def can_control_build(
 # --- OAuth/OIDC flows ---------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class ForgeToken:
-    """Access token plus its advertised lifetime (None = the provider
-    did not say, e.g. classic GitHub OAuth tokens that never expire)
-    and the refresh token, if the provider issued one."""
-
-    access_token: str
-    expires_in: int | None = None
-    refresh_token: str | None = None
-
-
 class OAuthError(Exception):
     """Token exchange or userinfo fetch failed (expired/reused code,
     provider error response, malformed body)."""
@@ -365,7 +354,7 @@ class OAuthProvider:
 
     async def _token_request(
         self, http: httpx.AsyncClient, data: dict[str, str]
-    ) -> ForgeToken:
+    ) -> str:
         auth = (
             httpx.BasicAuth(self.client_id, self.client_secret)
             if self.client_auth == "basic"
@@ -394,28 +383,12 @@ class OAuthProvider:
         if not access_token:
             msg = f"token exchange failed: {token_body.get('error', 'no access_token')}"
             raise OAuthError(msg)
-        # Gitea/OIDC tokens expire (typically 1h). Record the lifetime
-        # so the stored forge token is not trusted past it.
-        raw_expires = token_body.get("expires_in")
-        expires_in = int(raw_expires) if isinstance(raw_expires, (int, float)) else None
-        refresh = token_body.get("refresh_token")
-        return ForgeToken(
-            access_token,
-            expires_in,
-            refresh_token=refresh if isinstance(refresh, str) and refresh else None,
-        )
-
-    async def refresh(self, http: httpx.AsyncClient, refresh_token: str) -> ForgeToken:
-        """RFC 6749 refresh-token grant."""
-        return await self._token_request(
-            http,
-            {"grant_type": "refresh_token", "refresh_token": refresh_token},
-        )
+        return str(access_token)
 
     async def exchange_code(
         self, http: httpx.AsyncClient, code: str, redirect_uri: str
-    ) -> tuple[User, ForgeToken]:
-        token = await self._token_request(
+    ) -> User:
+        access_token = await self._token_request(
             http,
             {
                 "code": code,
@@ -425,7 +398,7 @@ class OAuthProvider:
         )
         userinfo = await http.get(
             self.userinfo_url,
-            headers={"Authorization": f"Bearer {token.access_token}"},
+            headers={"Authorization": f"Bearer {access_token}"},
         )
         if userinfo.is_error:
             msg = f"userinfo endpoint returned HTTP {userinfo.status_code}"
@@ -452,15 +425,13 @@ class OAuthProvider:
             username=username,
             avatar_url=str(avatar) if avatar else None,
             groups=groups,
-        ), token
+        )
 
 
 def github_oauth(
     client_id: str,
     client_secret: str,
     api_url: str = "https://api.github.com",
-    *,
-    private_repo_scope: bool = False,
 ) -> OAuthProvider:
     api = api_url.rstrip("/")
     if api == "https://api.github.com":
@@ -475,11 +446,9 @@ def github_oauth(
         userinfo_url=f"{api}/user",
         client_id=client_id,
         client_secret=client_secret,
-        # Private-repo visibility (GET /user/repos listing private
-        # repositories) requires "repo", which GitHub only offers with
-        # write access. Instances without private repos should not hold
-        # write-capable tokens, so it is opt-in.
-        scope="read:user repo" if private_repo_scope else "read:user",
+        # Identity only: repo permissions are checked with the bot's
+        # own credentials, never with the login token.
+        scope="read:user",
         username_field="login",
         provider_id="github",
     )
@@ -494,9 +463,7 @@ def gitea_oauth(instance_url: str, client_id: str, client_secret: str) -> OAuthP
         userinfo_url=f"{base}/api/v1/user",
         client_id=client_id,
         client_secret=client_secret,
-        # read:repository is required so the visibility repo-set fetch
-        # (GET /api/v1/user/repos) works with scoped tokens (Gitea >= 1.19).
-        scope="read:user read:repository",
+        scope="read:user",
         username_field="login",
         provider_id="gitea",
     )
@@ -513,9 +480,7 @@ def gitlab_oauth(
         userinfo_url=f"{base}/api/v4/user",
         client_id=client_id,
         client_secret=client_secret,
-        # read_api is required so the visibility repo-set fetch
-        # (GET /api/v4/projects?membership=true) works.
-        scope="read_user read_api",
+        scope="read_user",
         username_field="username",
         avatar_field="avatar_url",
         provider_id="gitlab",

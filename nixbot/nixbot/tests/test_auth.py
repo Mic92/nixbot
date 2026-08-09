@@ -31,7 +31,6 @@ from nixbot.auth import (
     relevant_groups,
     rotate_signing_key,
 )
-from nixbot.forge_tokens import ForgeTokenRefresher, RefreshCredentials
 from nixbot.web.app import WebContext
 from nixbot.web.auth_routes import (
     SESSION_COOKIE,
@@ -46,41 +45,6 @@ if TYPE_CHECKING:
 
 ALICE = User(provider="github", username="alice")
 BOB = User(provider="gitea", username="alice")  # same name, other forge
-
-
-class DictVault:
-    """In-memory TokenVault for tests without a database."""
-
-    def __init__(self) -> None:
-        self.tokens: dict[str, str] = {}
-        self.lifetimes: dict[str, int] = {}
-        self.refresh: dict[str, RefreshCredentials] = {}
-
-    async def save(
-        self,
-        session_id: str,
-        token: str,
-        lifetime: int,
-        *,
-        refresh: RefreshCredentials | None = None,
-        refresh_lifetime: int | None = None,  # noqa: ARG002
-    ) -> None:
-        self.tokens[session_id] = token
-        self.lifetimes[session_id] = lifetime
-        if refresh is not None:
-            self.refresh[session_id] = refresh
-        else:
-            self.refresh.pop(session_id, None)
-
-    async def get(self, session_id: str) -> str | None:
-        return self.tokens.get(session_id)
-
-    async def get_refresh(self, session_id: str) -> RefreshCredentials | None:
-        return self.refresh.get(session_id)
-
-    async def delete(self, session_id: str) -> None:
-        self.tokens.pop(session_id, None)
-        self.refresh.pop(session_id, None)
 
 
 def test_session_roundtrip() -> None:
@@ -187,7 +151,6 @@ def test_can_control_build() -> None:
 
 async def test_oauth_login_flow() -> None:
     provider = github_oauth("cid", "csecret")
-    vault = DictVault()
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/login/oauth/access_token":
@@ -211,7 +174,6 @@ async def test_oauth_login_flow() -> None:
             {"github": provider},
             signer,
             "https://ci.test",
-            vault,
             http=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
         )
     )
@@ -235,14 +197,11 @@ async def test_oauth_login_flow() -> None:
         assert session_user is not None
         assert session_user.qualified == ALICE.qualified
         assert session_user.avatar_url == "https://avatars.test/alice"
-        # The forge token lives server-side. The cookie only carries
-        # an opaque session id.
+        # The cookie only carries an opaque session id, no forge token.
         payload = signer.verify(session)
         assert payload is not None
         assert "token" not in payload
-        session_id = signer.session_id_from(session)
-        assert session_id is not None
-        assert vault.tokens[session_id] == "at"
+        assert signer.session_id_from(session) is not None
 
         # Bad state rejected.
         bad = await client.get(
@@ -269,162 +228,6 @@ async def test_oauth_login_flow() -> None:
             | cookie_header({SESSION_COOKIE: session}),
         )
         assert ok.status_code == 303
-        # Logout invalidates the server-side forge token.
-        assert vault.tokens == {}
-
-
-async def test_forge_token_lifetime_capped_by_expires_in() -> None:
-    """Gitea access tokens expire after ~1h while the session lives
-    30 days. The stored forge token must expire with the token, not
-    the session, so visibility falls back to public instead of
-    re-firing failing forge calls."""
-    provider = github_oauth("cid", "csecret")
-    vault = DictVault()
-    signer = SessionSigner([b"k"])
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/login/oauth/access_token":
-            return httpx.Response(200, json={"access_token": "at", "expires_in": 3600})
-        if request.url.path == "/user":
-            return httpx.Response(200, json={"login": "alice"})
-        return httpx.Response(404)
-
-    app = FastAPI()
-    app.include_router(
-        create_auth_router(
-            {"github": provider},
-            signer,
-            "https://ci.test",
-            vault,
-            http=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
-        )
-    )
-
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="https://ci.test"
-    ) as client:
-        login = await client.get("/login/github")
-        state = parse_qs(urlparse(login.headers["location"]).query)["state"][0]
-        callback = await client.get(
-            f"/auth/github/callback?code=c&state={state}",
-            headers=cookie_header({f"nixbot_oauth_state_{state}": state}),
-        )
-        assert callback.status_code == 307
-        session_id = signer.session_id_from(callback.cookies[SESSION_COOKIE])
-        assert session_id is not None
-        assert vault.lifetimes[session_id] == 3600
-
-
-async def test_callback_stores_refresh_token() -> None:
-    """Gitea returns a refresh token. It must be persisted with the
-    provider name so the ~1h access token can be renewed later."""
-    provider = gitea_oauth("https://gitea.test", "cid", "cs")
-    vault = DictVault()
-    signer = SessionSigner([b"k"])
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/login/oauth/access_token":
-            return httpx.Response(
-                200,
-                json={"access_token": "at", "expires_in": 3600, "refresh_token": "rt"},
-            )
-        if request.url.path == "/api/v1/user":
-            return httpx.Response(200, json={"login": "alice"})
-        return httpx.Response(404)
-
-    app = FastAPI()
-    app.include_router(
-        create_auth_router(
-            {"gitea": provider},
-            signer,
-            "https://ci.test",
-            vault,
-            http=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
-        )
-    )
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="https://ci.test"
-    ) as client:
-        login = await client.get("/login/gitea")
-        state = parse_qs(urlparse(login.headers["location"]).query)["state"][0]
-        callback = await client.get(
-            f"/auth/gitea/callback?code=c&state={state}",
-            headers=cookie_header({f"nixbot_oauth_state_{state}": state}),
-        )
-        assert callback.status_code == 307
-        session_id = signer.session_id_from(callback.cookies[SESSION_COOKIE])
-        assert session_id is not None
-        assert vault.tokens[session_id] == "at"
-        assert vault.refresh[session_id] == RefreshCredentials("rt", "gitea")
-
-
-class ExpiringVault(DictVault):
-    """Simulates a vault whose access token has expired but whose
-    refresh credentials are still valid (the issue-81 situation)."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.expired: set[str] = set()
-
-    async def get(self, session_id: str) -> str | None:
-        if session_id in self.expired:
-            return None
-        return await super().get(session_id)
-
-
-async def test_refresher_renews_expired_access_token() -> None:
-    """Regression for #81: the Gitea access token dies after ~1h while
-    the session cookie lives 30 days. The refresher must renew it via
-    the refresh token instead of degrading to public visibility."""
-    provider = gitea_oauth("https://gitea.test", "cid", "cs")
-    calls: list[dict[str, str]] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/login/oauth/access_token"
-        calls.append(dict(parse_qs(request.content.decode())))  # type: ignore[arg-type]
-        return httpx.Response(
-            200,
-            json={"access_token": "at2", "expires_in": 3600, "refresh_token": "rt2"},
-        )
-
-    vault = ExpiringVault()
-    await vault.save("sid", "at1", 3600, refresh=RefreshCredentials("rt1", "gitea"))
-    vault.expired.add("sid")
-    refresher = ForgeTokenRefresher(
-        vault,
-        {"gitea": provider},
-        httpx.AsyncClient(transport=httpx.MockTransport(handler)),
-        session_lifetime=30 * 24 * 3600,
-    )
-    assert await refresher.access_token("sid") == "at2"
-    # Refresh-token grant, rotated refresh token stored for next time.
-    assert calls[0]["grant_type"] == ["refresh_token"]
-    assert calls[0]["refresh_token"] == ["rt1"]
-    assert vault.refresh["sid"] == RefreshCredentials("rt2", "gitea")
-
-    # No refresh credentials (e.g. classic GitHub tokens): stays None.
-    vault.expired.add("other")
-    assert await refresher.access_token("other") is None
-
-
-async def test_refresher_handles_provider_failure() -> None:
-    """A revoked refresh token must degrade gracefully (None), not
-    raise into every page render."""
-    provider = gitea_oauth("https://gitea.test", "cid", "cs")
-    vault = ExpiringVault()
-    await vault.save("sid", "at", 3600, refresh=RefreshCredentials("rt", "gitea"))
-    vault.expired.add("sid")
-    refresher = ForgeTokenRefresher(
-        vault,
-        {"gitea": provider},
-        httpx.AsyncClient(
-            transport=httpx.MockTransport(
-                lambda _request: httpx.Response(400, json={"error": "invalid_grant"})
-            )
-        ),
-        session_lifetime=3600,
-    )
-    assert await refresher.access_token("sid") is None
 
 
 async def test_concurrent_logins_do_not_clobber_oauth_state() -> None:
@@ -446,7 +249,6 @@ async def test_concurrent_logins_do_not_clobber_oauth_state() -> None:
             {"github": provider},
             SessionSigner([b"k"]),
             "https://ci.test",
-            DictVault(),
             http=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
         )
     )
@@ -492,7 +294,6 @@ async def test_oauth_callback_handles_token_exchange_errors() -> None:
             {"github": provider},
             SessionSigner([b"k"]),
             "https://ci.test",
-            DictVault(),
             http=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
         )
     )
@@ -538,14 +339,10 @@ async def test_userinfo_rejects_null_or_empty_username() -> None:
 
 
 def test_github_oauth_scope_and_enterprise_urls() -> None:
-    # Default is the minimal read-only scope: "repo" grants full write
-    # access and the token is held server-side for the session lifetime.
+    # Identity-only scope: repo permissions are checked with the bot's
+    # credentials, so the login token never needs repo access.
     default = github_oauth("cid", "cs")
     assert default.scope.split() == ["read:user"]
-    # Private-repo visibility needs "repo" (GitHub has no read-only
-    # repo scope). Explicit opt-in.
-    private = github_oauth("cid", "cs", private_repo_scope=True)
-    assert private.scope.split() == ["read:user", "repo"]
     assert default.authorize_url == "https://github.com/login/oauth/authorize"
     assert default.userinfo_url == "https://api.github.com/user"
 
@@ -589,8 +386,7 @@ def test_gitea_oauth_urls() -> None:
     provider = gitea_oauth("https://gitea.example.com/", "cid", "cs")
     assert provider.authorize_url == "https://gitea.example.com/login/oauth/authorize"
     assert provider.userinfo_url == "https://gitea.example.com/api/v1/user"
-    # read:repository is needed so /api/v1/user/repos works with scoped tokens.
-    assert "read:repository" in provider.scope.split()
+    assert provider.scope.split() == ["read:user"]
 
 
 async def test_oidc_exchange_uses_basic_auth() -> None:
@@ -622,7 +418,7 @@ async def test_oidc_exchange_uses_basic_auth() -> None:
         client_auth="basic",
     )
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    user, _token = await provider.exchange_code(
+    user = await provider.exchange_code(
         client, "code123", "https://ci/auth/oidc/callback"
     )
     assert user.username == "alice"
@@ -744,7 +540,6 @@ async def test_oauth_callback_filters_session_groups() -> None:
             {"oidc": provider},
             signer,
             "https://ci.test",
-            DictVault(),
             http=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
             private_repo_viewers={"*": ["oidc:id.test:group:ci"]},
         )

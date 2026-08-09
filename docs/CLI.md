@@ -62,7 +62,7 @@ build number from the `HEAD` commit; both can be given explicitly
 
 ```console
 nbo repo list
-nbo repo enable github/acme/widget      # admin token required
+nbo repo enable github/acme/widget      # instance admin or forge repo admin
 nbo build list --branch main
 nbo build view 412                      # status, attribute summary, failed attributes
 nbo build watch 412                     # follow until it finishes, exit 1 on failure

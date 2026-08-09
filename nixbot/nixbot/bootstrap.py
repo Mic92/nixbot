@@ -44,7 +44,6 @@ from .forge import (
     GitlabClient,
     NetrcFetchCredentialsProvider,
 )
-from .forge_tokens import ForgeTokenRefresher, ForgeTokenStore
 from .gitrepo import (
     CredentialsProvider,
     RepoManager,
@@ -64,7 +63,7 @@ from .status import (
     GitHubCheckRunPoster,
     GitlabStatusPoster,
 )
-from .visibility import AccessCache, ForgeRepoAccessFetcher, VisibilityService
+from .visibility import AccessCache, BotRepoAccessFetcher, VisibilityService
 from .web.app import create_app
 from .web.auth_routes import create_auth_router
 from .web.control_routes import create_control_api_router, create_control_router
@@ -143,7 +142,6 @@ async def _login_providers(config: Config) -> dict[str, OAuthProvider]:
             config.github.oauth_id,
             config.github.oauth_secret,
             config.github.api_url,
-            private_repo_scope=config.github.oauth_private_repo_scope,
         )
     if config.gitea is not None and config.gitea.oauth_id:
         providers["gitea"] = gitea_oauth(
@@ -343,38 +341,21 @@ async def build_service(config: Config) -> tuple[CIService, FastAPI]:
     ctx.authz = authz
     ctx.webhook_base_url = config.webhook_base_url or config.url
     ctx.token_store = ApiTokenStore(pool)
-    ctx.forge_tokens = ForgeTokenStore(pool)
     ctx.proxy_auth_header = config.proxy_auth_header
     ctx.visibility = VisibilityService(
         pool,
         authz,
-        fetcher=ForgeRepoAccessFetcher(
-            httpx.AsyncClient(),
-            gitea_url=config.gitea.instance_url if config.gitea else None,
-            gitlab_url=config.gitlab.instance_url if config.gitlab else None,
-            github_api_url=config.github.api_url
-            if config.github
-            else "https://api.github.com",
-        ),
+        fetcher=BotRepoAccessFetcher(github=github, gitea=gitea, gitlab=gitlab),
         cache=AccessCache(config.repo_acl_cache_ttl),
     )
 
     providers, oidc_pending = await _login_and_oidc_providers(config)
     if providers or oidc_pending:
-        # The providers dict is shared, so late OIDC registration is
-        # picked up automatically.
-        ctx.token_refresher = ForgeTokenRefresher(
-            ctx.forge_tokens,
-            providers,
-            httpx.AsyncClient(),
-            config.session_lifetime,
-        )
         app.include_router(
             create_auth_router(
                 providers,
                 signer,
                 config.url,
-                ctx.forge_tokens,
                 private_repo_viewers=config.private_repo_viewers,
                 revoked_sessions=ctx.revoked_sessions,
                 on_logout=ctx.visibility.invalidate_user,

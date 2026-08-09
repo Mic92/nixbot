@@ -36,7 +36,6 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
     from pathlib import Path
 
-    import asyncpg
     from fastapi import FastAPI
 
 REPO = RepoRef("github", "acme", "widget")
@@ -70,10 +69,10 @@ async def postgres_dsn(postgres_dsn: str) -> str:
 
 @pytest.fixture(scope="module")
 def harness(postgres_dsn: str) -> Iterator[WebHarness]:
-    def configure(app: FastAPI, pool: asyncpg.Pool) -> None:
+    def configure(app: FastAPI) -> None:
         ctx = app.state.web_context
         ctx.authz = AuthzConfig(admins=["github:root"])
-        ctx.token_store = ApiTokenStore(pool)
+        ctx.token_store = ApiTokenStore(ctx.pool)
         app.include_router(
             create_control_api_router(
                 ctx, BACKEND, AuthzConfig(admins=["github:root"]), "http://test"

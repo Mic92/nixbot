@@ -149,7 +149,8 @@ defaults to `sub`. This means:
 
 ## Private Repositories
 
-OIDC users have no forge token, so they only see public repositories by default.
+OIDC users have no forge account, so nixbot cannot derive their repository
+permissions from the forge and they only see public repositories by default.
 `privateRepoViewers` grants visibility (read-only; build control stays with
 `admins`):
 
@@ -175,12 +176,9 @@ Group rules need the groups claim in the session: add the `groups` scope and set
 The owner segment of a repository key is any namespace: a user, an organization,
 or a nested GitLab group (`"gitlab:org/subgroup/*"`).
 
-Members of a GitHub/Gitea organization do not need viewer rules for their own
-organization's repositories: they log in with a forge token, and everything that
-token can access is visible to them. Viewer rules add visibility on top, for
-logins without forge access (OIDC) or for repositories outside a user's own
-forge permissions. The OIDC equivalent of an organization is a group rule
-(`"oidc:<issuer>:group:<name>"`).
+Viewer rules apply equally to web sessions and personal API tokens. Users who
+log in with a forge account need no viewer rules: they get private-repo
+visibility automatically from their forge permissions.
 
 Two caveats around group rules:
 

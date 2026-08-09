@@ -57,15 +57,6 @@ services.nixbot = {
     oauthId = "<oauth-client-id>";
     oauthSecretFile = "/path/to/oauth-secret";
 
-    # Optional: request the write-capable "repo" OAuth scope at login so
-    # private repositories are visible to their members, and so the login
-    # token carries the push access that drives the per-repo restart
-    # button (see "OAuth scope and the restart button" below). GitHub has
-    # no read-only repo scope: "repo" grants write access and nixbot
-    # stores the token server-side for the session. Off by default; leave
-    # it off unless the instance builds private repositories.
-    # oauthPrivateRepoScope = true;
-
     # A random secret used to verify incoming webhooks from GitHub
     webhookSecretFile = "/path/to/webhook-secret";
 
@@ -118,22 +109,25 @@ For each repository you want to build:
     builds
   - PR authors: Can restart/cancel the builds of their own pull request
 
-### OAuth scope and the restart button
+### Repository permissions
 
-The "repo writers" role is decided from the `permissions.push` flag GitHub
-returns for each repository from `GET /user/repos`, matched against the login
-user's OAuth token. Adding a user as a collaborator is therefore not enough on
-its own: they must log in via the GitHub button so nixbot holds a token, and
-that token must actually surface their push access.
+nixbot maps a user's GitHub collaborator permission onto its own roles. Each
+level includes the ones above it:
 
-`oauthPrivateRepoScope` controls the scope of that login token (`read:user` by
-default, `read:user repo` when enabled). GitHub classic OAuth has no read-only
-repo scope, so `repo` unavoidably grants write access and nixbot stores the
-token server-side for the session. Enable it only if you need private-repo
-visibility.
+| GitHub permission | Allowed in nixbot                                |
+| ----------------- | ------------------------------------------------ |
+| read              | view the project, including private repositories |
+| write / maintain  | restart and cancel the project's builds          |
+| admin             | enable or disable the project                    |
 
-Instance admins and PR authors can always restart their builds regardless of
-this setting.
+The lookup uses the App's own credentials
+(`GET /repos/{owner}/{repo}/collaborators/{user}/permission`) and only needs the
+Metadata (read) permission that every GitHub App has, so no extra configuration
+is required. The user's login token merely proves identity (`read:user` scope),
+which is why the same rules apply to web sessions and personal API tokens.
+
+Independent of repository permissions, instance admins can do everything, and PR
+authors can restart or cancel the builds of their own pull requests.
 
 ## Troubleshooting
 

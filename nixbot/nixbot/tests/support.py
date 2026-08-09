@@ -8,7 +8,6 @@ import contextlib
 import json
 import os
 import re
-import secrets
 import subprocess
 import time
 from dataclasses import dataclass
@@ -393,40 +392,31 @@ class WebHarness:
     def run[T](self, coro: Coroutine[None, None, T]) -> T:
         return self.loop.run_until_complete(coro)
 
-    def _cookies(self, user: User | None, token: str) -> dict[str, str]:
+    def _cookies(self, user: User | None) -> dict[str, str]:
         if user is None:
             return {}
-        session_id = None
-        if token:
-            # Forge tokens are stored server-side, keyed by session id.
-            vault = self.ctx.forge_tokens
-            assert vault is not None
-            session_id = secrets.token_urlsafe(8)
-            self.run(vault.save(session_id, token, 3600))
-        return {SESSION_COOKIE: self.signer.session_for(user, session_id)}
+        return {SESSION_COOKIE: self.signer.session_for(user, None)}
 
     def get(
         self,
         url: str,
         user: User | None = None,
-        token: str = "",
         headers: dict[str, str] | None = None,
     ) -> httpx.Response:
-        request_headers = cookie_header(self._cookies(user, token)) | (headers or {})
+        request_headers = cookie_header(self._cookies(user)) | (headers or {})
         return self.run(self.http.get(url, headers=request_headers))
 
-    def post(  # noqa: PLR0913
+    def post(
         self,
         url: str,
         user: User | None = None,
         origin: str = "http://test",
         data: dict[str, str] | None = None,
         headers: dict[str, str] | None = None,
-        token: str = "",
     ) -> httpx.Response:
         request_headers = (
             ({"Origin": origin} if origin else {})
-            | cookie_header(self._cookies(user, token))
+            | cookie_header(self._cookies(user))
             | (headers or {})
         )
         return self.run(self.http.post(url, headers=request_headers, data=data))
@@ -436,7 +426,7 @@ class WebHarness:
 def web_harness(
     dsn: str,
     *,
-    configure: Callable[[FastAPI, asyncpg.Pool], None] | None = None,
+    configure: Callable[[FastAPI], None] | None = None,
 ) -> Iterator[WebHarness]:
     """Web app harness on a dedicated event loop."""
     signer = SessionSigner([b"test-key"])
@@ -448,7 +438,7 @@ def web_harness(
         app = create_app(pool)
         app.state.web_context.signer = signer
         if configure is not None:
-            configure(app, pool)
+            configure(app)
         client = httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://test"
         )
