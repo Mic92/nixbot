@@ -733,18 +733,21 @@ async def test_pull_based_projects_synced_and_buildable(
 
     key = tmp_path / "id_ed25519"
     key.write_text("fake-key")
-    service, _app = await make_service(
-        pull_based=PullBasedConfig(
+
+    def config_with(names: list[str]) -> PullBasedConfig:
+        return PullBasedConfig(
             repositories={
-                "myrepo": PullBasedRepository(
-                    name="myrepo",
+                name: PullBasedRepository(
+                    name=name,
                     default_branch="main",
-                    url="ssh://git@example.com/x/y.git",
+                    url=f"ssh://git@example.com/x/{name}.git",
                     ssh_private_key_file=key,
                 )
+                for name in names
             }
         )
-    )
+
+    service, _app = await make_service(pull_based=config_with(["myrepo", "obsolete"]))
     pool = service.pool
     await service.discover_once()
     row = await pool.fetchrow(
@@ -774,6 +777,24 @@ async def test_pull_based_projects_synced_and_buildable(
     assert event.repo.forge == "pull_based"
     # SSH credentials resolved for the polled repository.
     assert credentials.ssh_private_key_file == key
+
+    # Disabled rows of repos removed from the config are pruned (issue #76)
+    await pool.execute(
+        "UPDATE projects SET enabled = FALSE "
+        "WHERE forge = 'pull_based' AND forge_repo_id = 'obsolete'"
+    )
+    service.config = service.config.model_copy(
+        update={"pull_based": config_with(["myrepo"])}
+    )
+    await service.discover_once()
+    rows = {
+        r["forge_repo_id"]: r["enabled"]
+        for r in await pool.fetch(
+            "SELECT * FROM projects WHERE forge = 'pull_based' "
+            "AND forge_repo_id IN ('myrepo', 'obsolete')"
+        )
+    }
+    assert rows == {"myrepo": True}
 
 
 # --- discovery topic handling ----------------------------------------------
