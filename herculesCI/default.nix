@@ -12,7 +12,6 @@ in
 { primaryRepo, ... }:
 {
   onPush.default.outputs = {
-    checks = self.checks.${system};
     effects.deploy = hci-effects.runIf (primaryRepo.branch or null == "main") (
       hci-effects.mkEffect {
         effectScript = ''
