@@ -82,6 +82,9 @@ async def discover_once(s: CIService) -> None:
                 for repo in s.config.pull_based.repositories.values()
             ]
         )
+        await s.repo_store.prune_missing_disabled(
+            "pull_based", list(s.config.pull_based.repositories)
+        )
     # None marks a failed forge: its rows are neither synced nor pruned.
     by_forge: dict[str, list[DiscoveredRepo] | None] = {}
     # The topic is only a legacy import aid (one-shot enablement in
