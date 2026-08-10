@@ -5,9 +5,10 @@ from __future__ import annotations
 import os
 import shlex
 import subprocess
-import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+
+import tomllib
 
 
 def config_path() -> Path:
@@ -47,7 +48,7 @@ def _run_token_command(entry: dict) -> str | None:
     if not command:
         return None
     try:
-        out = subprocess.run(  # noqa: S603
+        out = subprocess.run(
             shlex.split(command), capture_output=True, text=True, check=True
         )
     except (OSError, subprocess.CalledProcessError) as err:

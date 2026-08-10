@@ -208,7 +208,7 @@ def cmd_build_view(client: NixbotClient, args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-def print_failures(  # noqa: PLR0913
+def print_failures(
     client: NixbotClient, repo: RepoRef, number: int, status: str, finished: int
 ) -> None:
     """Result line plus a failure block with a clickable log URL per
@@ -452,7 +452,7 @@ def follow_attr(
         print(client.log_text(repo, number, attr, tail=tail), end="")
 
 
-def cmd_auth_status(client: NixbotClient, args: argparse.Namespace) -> int:  # noqa: ARG001
+def cmd_auth_status(client: NixbotClient, args: argparse.Namespace) -> int:
     settings = Settings.load()
     print(f"server: {settings.url}")
     if settings.token:
@@ -486,7 +486,7 @@ def _add_json_arg(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="nbo", description="nixbot CI client")
     sub = parser.add_subparsers(dest="command", required=True)
 

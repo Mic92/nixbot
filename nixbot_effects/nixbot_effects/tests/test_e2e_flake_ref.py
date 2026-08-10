@@ -80,8 +80,10 @@ def _cli(*args: str) -> subprocess.CompletedProcess[str]:
         [
             sys.executable,
             "-c",
-            "import sys; sys.argv = ['nbo', 'effects'] + sys.argv[1:]; "
-            "from nixbot_cli.main import main; main()",
+            (
+                "import sys; sys.argv = ['nbo', 'effects'] + sys.argv[1:]; "
+                "from nixbot_cli.main import main; main()"
+            ),
             *args,
         ],
         check=True,
