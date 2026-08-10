@@ -289,7 +289,7 @@ def init_upstream(repo: Path, files: dict[str, str] | None = None) -> Path:
     """A fresh git repo on branch main with an initial commit."""
     repo.mkdir()
     git(repo, "init", "-b", "main")
-    for name, content in (files or {"flake.nix": "{}"}).items():
+    for name, content in (files or {"flake.nix": "{ outputs = _: { }; }"}).items():
         (repo / name).write_text(content)
     git(repo, "add", ".")
     git(repo, "commit", "-m", "initial")

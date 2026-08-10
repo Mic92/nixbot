@@ -13,7 +13,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import shutil
-import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol
@@ -211,11 +210,9 @@ class Orchestrator:
             refspecs.append(pr_refspec(repo.forge, event.pr_number))
         await self.repos.fetch(repo.key, repo.clone_url, refspecs, credentials)
         try:
-            # Unique token: concurrent events for the same commit must
-            # not share (and destroy) one checkout.
             worktree = await self.repos.checkout_for_build(
                 repo.key,
-                f"{repo.id}-{event.commit_sha[:12]}-{uuid.uuid4().hex[:8]}",
+                f"{repo.id}-{event.commit_sha[:12]}",
                 base_commit=event.base_sha or event.commit_sha,
                 head_commit=event.commit_sha if event.base_sha else None,
                 credentials=credentials,

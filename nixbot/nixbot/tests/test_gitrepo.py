@@ -110,7 +110,7 @@ async def test_merge_conflict_raises(manager: RepoManager, upstream: Path) -> No
     with pytest.raises(MergeConflictError):
         await manager.checkout_for_build(KEY, "b3", base_commit=base, head_commit=head)
     # Worktree cleaned up after conflict.
-    assert not (manager.worktrees_dir / "b3").exists()
+    assert not list(manager.worktrees_dir.glob("b3-*"))
 
 
 async def test_reclone_on_corruption(manager: RepoManager, upstream: Path) -> None:
@@ -203,7 +203,7 @@ async def test_failed_submodule_checkout_removes_worktree(
 
     with pytest.raises(GitError):
         await manager.checkout_for_build(KEY, "sub-fail", base_commit=sha)
-    assert not (manager.worktrees_dir / "sub-fail").exists()
+    assert not list(manager.worktrees_dir.glob("sub-fail-*"))
 
 
 async def test_cleanup_sweeps_orphans(manager: RepoManager, upstream: Path) -> None:
