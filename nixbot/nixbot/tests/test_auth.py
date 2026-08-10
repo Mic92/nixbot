@@ -560,7 +560,7 @@ async def test_oauth_callback_filters_session_groups() -> None:
 
 
 async def test_proxy_auth_header() -> None:
-    """The proxy auth header authenticates users through _request_user."""
+    """The proxy auth header authenticates users through request_user."""
     app = FastAPI()
     signer = SessionSigner([b"k" * 32])
     ctx = WebContext(pool=AsyncMock(), signer=signer)

@@ -127,7 +127,27 @@ class WebContext:
         controllable = await self.controllable_repo_ids(request)
         return controllable is None or build["project_id"] in controllable
 
-    async def current_user(self, request: Request) -> User | None:
+    async def interactive_user(self, request: Request) -> User | None:
+        """User authenticated by a browser-oriented login mechanism:
+        session cookie or trusted reverse-proxy header.
+
+        Unlike request_user(), this deliberately excludes personal API
+        tokens.  Token-management routes use it so an existing bearer token
+        cannot mint or revoke other tokens, while deployments using trusted
+        reverse-proxy authentication can still manage tokens in the UI.
+        """
+        # Session cookies win over the proxy header so forge/OIDC identities
+        # keep their authz rules.
+        user = await self._session_user(request)
+        if user is not None:
+            return user
+        if self.proxy_auth_header is not None:
+            remote_user = request.headers.get(self.proxy_auth_header, "").strip()
+            if remote_user:
+                return User(provider="proxy", username=remote_user)
+        return None
+
+    async def _session_user(self, request: Request) -> User | None:
         if self.signer is None:
             return None
         token = request.cookies.get(SESSION_COOKIE)
@@ -160,16 +180,7 @@ class WebContext:
             return await self.token_store.authenticate(
                 auth_header.removeprefix("Bearer ")
             )
-        # Session cookie wins over the proxy header so forge/OIDC
-        # identities keep their authz rules.
-        user = await self.current_user(request)
-        if user is not None:
-            return user
-        if self.proxy_auth_header is not None:
-            remote_user = request.headers.get(self.proxy_auth_header, "").strip()
-            if remote_user:
-                return User(provider="proxy", username=remote_user)
-        return None
+        return await self.interactive_user(request)
 
     async def render(
         self, template: str, request: Request | None = None, **context: Any
