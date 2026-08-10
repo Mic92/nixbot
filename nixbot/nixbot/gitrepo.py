@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import itertools
 import logging
 import os
 import shutil
@@ -262,6 +263,7 @@ class RepoManager:
         # a corruption re-clone the new clone knows no worktrees, and
         # the orphan sweep must not delete those of running builds.
         self._active_worktrees: set[Path] = set()
+        self._worktree_seq = itertools.count()
 
     def clone_path(self, project_key: str) -> Path:
         # project_key like "github/owner/repo". One directory per project.
@@ -361,7 +363,8 @@ class RepoManager:
     ) -> Worktree:
         """Create a detached worktree for one build at `commit`."""
         clone = self.clone_path(project_key)
-        path = self.worktrees_dir / worktree_id
+        path = self.worktrees_dir / f"{worktree_id}-{next(self._worktree_seq)}"
+        # Stale directory from a previous process.
         if path.exists():
             await self.remove_worktree(Worktree(path=path, clone_path=clone))
         path.parent.mkdir(parents=True, exist_ok=True)

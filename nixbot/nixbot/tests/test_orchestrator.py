@@ -25,7 +25,7 @@ from nixbot.build_scheduler import (
 from nixbot.config import Config
 from nixbot.db import BuildStatus
 from nixbot.db_gen import builds as builds_q
-from nixbot.effects import EffectMeta
+from nixbot.effects import EffectMeta, EffectsContext
 from nixbot.events import BuildResult, ChangeEvent, EvalReport, RepoInfo
 from nixbot.executor import attribute_log_path, effect_log_path
 from nixbot.gitrepo import FetchCredentials, RepoManager
@@ -1380,6 +1380,44 @@ async def _effects_build(
     )
     assert build is not None
     return orchestrator, project, build
+
+
+async def test_concurrent_effects_use_independent_worktrees(
+    pool: asyncpg.Pool,
+    make_env: EnvFactory,
+    upstream: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for #114: concurrent effect items must not share a
+    worktree."""
+    barrier = asyncio.Barrier(2)
+    seen: dict[str, Path] = {}
+
+    async def blocking_run(
+        ctx: EffectsContext, name: str, log_write: object = None
+    ) -> bool:
+        seen[name] = ctx.path
+        await barrier.wait()
+        return ctx.path.is_dir()
+
+    patch_effects(
+        monkeypatch,
+        run_effect=blocking_run,
+        effects={"deploy-alaska": EffectMeta(), "deploy-kk": EffectMeta()},
+    )
+    orchestrator, project, build = await _effects_build(make_env, upstream, "eff-race")
+    await asyncio.gather(
+        orchestrator.run_effect_item(project, build, "deploy-alaska"),
+        orchestrator.run_effect_item(project, build, "deploy-kk"),
+    )
+    assert seen["deploy-alaska"] != seen["deploy-kk"]
+    rows = {
+        r["name"]: r["status"]
+        for r in await pool.fetch(
+            "SELECT name, status FROM build_effects WHERE build_id = $1", build.id
+        )
+    }
+    assert rows == {"deploy-alaska": "succeeded", "deploy-kk": "succeeded"}
 
 
 async def test_locked_effect_gets_shared_dedup_key(
