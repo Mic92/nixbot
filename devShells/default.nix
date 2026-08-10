@@ -9,6 +9,7 @@ let
   # (postgres + nixbot).
   devProcessCompose = pkgs.python3.pkgs.callPackage ../packages/process-compose.nix {
     nixbot = self.packages.${system}.nixbot;
+    inherit (self.packages.${system}) nix-eval-jobs;
   };
   # sqlc wrapped with the nix-pinned codegen plugin (same version as
   # the sqlc-generated flake check); works offline.
@@ -21,7 +22,7 @@ in
       pkgs.mypy
       pkgs.ruff
       pkgs.postgresql
-      pkgs.nix-eval-jobs
+      self.packages.${system}.nix-eval-jobs
       # SQL codegen: `sqlc generate` regenerates nixbot/nixbot/db_gen
       # from sqlc.yaml.
       sqlc
