@@ -13,6 +13,9 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 
+from nixbot_effects.eval import options_from_flake_ref
+from nixbot_effects.graph import render_tree
+
 from nixbot_effects import (
     EffectsOptions,
     list_effects,
@@ -20,8 +23,6 @@ from nixbot_effects import (
     run_effect,
     run_scheduled_effect,
 )
-from nixbot_effects.eval import options_from_flake_ref
-from nixbot_effects.graph import render_tree
 
 
 async def _log_stderr(data: bytes) -> None:

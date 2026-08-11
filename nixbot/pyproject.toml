@@ -58,6 +58,10 @@ force-exclude = true
 [tool.ruff.lint]
 select = ["ALL"]
 ignore = [
+  # no copyright headers in this repo
+  "CPY",
+  # duplicate of PLR0913, handled per site
+  "PLR0917",
   # pydocstyle
   "D",
   # todo comments

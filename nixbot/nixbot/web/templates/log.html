@@ -106,9 +106,7 @@
                     <span class="meta browse-hint"></span>
                   </span>
                 </summary>
-                <div id="succeeded-list">
-                  {% for d in ok %}{{ drv_card(d, base) }}{% endfor %}
-                </div>
+                <div id="succeeded-list">{% for d in ok %}{{ drv_card(d, base) }}{% endfor %}</div>
               </details>
             {% endif %}
           {% endif %}

@@ -458,7 +458,7 @@ async def _read_stderr_tail(
     buf = bytearray()
     pending = bytearray()
 
-    async def keep(raw_line: bytes) -> bool:
+    async def keep(raw_line: bytes | bytearray) -> bool:
         text = strip_ansi(raw_line.decode(errors="replace")).strip()
         if _is_stderr_noise(text):
             return False
@@ -480,7 +480,7 @@ async def _read_stderr_tail(
                 buf += line + b"\n"
         if len(buf) > 2 * limit:
             del buf[:-limit]
-    if pending and await keep(bytes(pending)):
+    if pending and await keep(pending):
         buf += pending
     return bytes(buf[-limit:])
 

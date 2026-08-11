@@ -948,7 +948,7 @@ in
         pkgs.bash
         pkgs.coreutils
         pkgs.bubblewrap
-        pkgs.nix-eval-jobs
+        packages.nix-eval-jobs
         config.nix.package
       ];
 

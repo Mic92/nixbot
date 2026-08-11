@@ -96,6 +96,7 @@
           pkgs.coreutils
           pkgs.bash
           pkgs.util-linux
+          pkgs.systemd
         ];
         serviceConfig = {
           Type = "oneshot";
@@ -107,24 +108,17 @@
           set -x
           timeout 900 bash -c 'until curl -fs http://gitlab/users/sign_in > /dev/null; do sleep 5; done'
 
-          BEARER=$(curl -fs -X POST -H 'Content-Type: application/json' \
-            -d '{"grant_type":"password","username":"root","password":"notproduction"}' \
-            http://gitlab/oauth/token | jq -r .access_token)
-          AUTH="Authorization: Bearer $BEARER"
+          TOKEN=nixbot-test-token-of-20-chars
+          runuser -u gitlab -- /run/current-system/sw/bin/gitlab-rails runner "
+            ApplicationSetting.current.update!(allow_local_requests_from_web_hooks_and_services: true)
+            Rails.cache.clear
+            token = User.find_by_username('root').personal_access_tokens.create!(
+              name: 'nixbot', scopes: [:api], expires_at: 7.days.from_now)
+            token.set_token('$TOKEN')
+            token.save!
+          "
+          systemctl restart gitlab-sidekiq.service
 
-          # GitLab refuses webhooks to local addresses by default. The
-          # setting is Rails-cached for a minute and earlier requests
-          # already cached the default, so drop the cache afterwards.
-          curl -fs -X PUT -H "$AUTH" \
-            "http://gitlab/api/v4/application/settings?allow_local_requests_from_web_hooks_and_services=true" > /dev/null
-          runuser -u gitlab -- /run/current-system/sw/bin/gitlab-rails runner 'Rails.cache.clear'
-
-          # nixbot authenticates with a PAT (PRIVATE-TOKEN), not OAuth.
-          # expires_at is mandatory-bounded (max 400 days); a week outlives the test.
-          TOKEN=$(curl -fs -X POST -H "$AUTH" -H 'Content-Type: application/json' \
-            -d "{\"name\":\"nixbot\",\"scopes\":[\"api\"],\"expires_at\":\"$(date -d '+7 days' +%F)\"}" \
-            http://gitlab/api/v4/users/1/personal_access_tokens | jq -r .token)
-          test -n "$TOKEN" && test "$TOKEN" != null
           mkdir -p /var/lib/secrets
           echo "$TOKEN" > /var/lib/secrets/gitlab-token
           chmod 644 /var/lib/secrets/gitlab-token

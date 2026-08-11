@@ -308,9 +308,11 @@ class TtyWatch:
         elapsed = fmt_duration(time.time() - self.started_at)
         _, term_rows = self.display.size()
         lines = [
-            f" {BOLD}build #{self.number}{RESET} {status} · "
-            f"{GREEN}✓{finished - failed}{RESET} {RED}✗{failed}{RESET} "
-            f"⏵{len(running)} · {elapsed}"
+            (
+                f" {BOLD}build #{self.number}{RESET} {status} · "
+                f"{GREEN}✓{finished - failed}{RESET} {RED}✗{failed}{RESET} "
+                f"⏵{len(running)} · {elapsed}"
+            )
         ]
         budget = max(2, term_rows - 3)
         now = time.time()

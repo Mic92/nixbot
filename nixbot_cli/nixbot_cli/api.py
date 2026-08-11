@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Self
 
 import httpx
 
@@ -63,7 +63,7 @@ class NixbotClient:
     def close(self) -> None:
         self.http.close()
 
-    def __enter__(self) -> NixbotClient:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *exc: object) -> None:
@@ -107,7 +107,7 @@ class NixbotClient:
 
     # --- builds --------------------------------------------------------
 
-    def builds(  # noqa: PLR0913
+    def builds(
         self,
         repo: RepoRef,
         *,
@@ -185,7 +185,7 @@ class NixbotClient:
         """Table of contents of one attribute's structured log."""
         return self._json("GET", f"/api/repos/{repo}/builds/{number}/logs/{attr}")
 
-    def log_text(  # noqa: PLR0913
+    def log_text(
         self,
         repo: RepoRef,
         number: int,

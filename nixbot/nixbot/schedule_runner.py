@@ -30,12 +30,12 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def scheduled_worktree_id(due: DueEffect, run_id: int) -> str:
-    """Per-run worktree id: concurrent effects (or a run outlasting the
-    next due fire) must not share a checkout. Schedule/effect names are
-    repo-controlled, so sanitize against path traversal."""
+def scheduled_worktree_id(due: DueEffect) -> str:
+    """Worktree id for one scheduled effect run.
+    Schedule/effect names are repo-controlled,
+    so sanitize against path traversal."""
     safe = re.sub(r"[^A-Za-z0-9_-]+", "_", f"{due.schedule_name}-{due.effect}")
-    return f"scheduled-{due.project_id}-{safe}-{run_id}"
+    return f"scheduled-{due.project_id}-{safe}"
 
 
 async def scheduled_effects_loop(s: CIService) -> None:
@@ -135,7 +135,7 @@ async def _run_scheduled_inner(
     )
     worktree = await s.orchestrator.repos.checkout_for_build(
         info.key,
-        scheduled_worktree_id(due, run_id),
+        scheduled_worktree_id(due),
         base_commit=info.default_branch,
         credentials=credentials,
     )

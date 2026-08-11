@@ -5,6 +5,7 @@ let
   scope = lib.makeScope newScope (
     self:
     {
+      nix-eval-jobs = self.callPackage ./nix-eval-jobs.nix { };
       nixbot = self.callPackage ./nixbot.nix { };
       nixbot-cli = self.callPackage ./nixbot-cli.nix { };
       docs = self.callPackage ./docs.nix { };
