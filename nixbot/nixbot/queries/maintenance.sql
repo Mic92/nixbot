@@ -45,13 +45,22 @@ WHERE builds.id = sqlc.arg(build_id)::bigint;
 -- name: ResetEffectsState :exec
 -- Drop the started-flag and reset the effect rows atomically (a
 -- crash between the two writes must not leave re-runnable effects
--- behind a still-set flag).
+-- behind a still-set flag). A NULL names resets every row. Otherwise
+-- only the named effects are reset.
 WITH flag AS (
     UPDATE builds SET effects_started = FALSE WHERE id = sqlc.arg(build_id)
 )
 UPDATE build_effects SET status = 'pending', error = NULL,
     finished_at = NULL, log_size = 0,
-    log_truncated = FALSE WHERE build_id = sqlc.arg(build_id);
+    log_truncated = FALSE
+WHERE build_id = sqlc.arg(build_id)
+  AND (sqlc.narg(names)::text[] IS NULL OR name = ANY(sqlc.narg(names)::text[]));
+
+-- name: DeleteEffectsByName :exec
+-- Removes rows of effects that a rerun selected but discovery no
+-- longer found in the flake. They would stay pending forever.
+DELETE FROM build_effects WHERE build_id = $1
+AND name = ANY(sqlc.arg(names)::text[]);
 
 -- name: CountUnfinishedAttributes :one
 SELECT count(*) AS count FROM build_attributes

@@ -19,6 +19,7 @@ __all__: collections.abc.Sequence[str] = (
     "commit_built",
     "count_unfinished_attributes",
     "delete_attributes_by_name",
+    "delete_effects_by_name",
     "drop_removed_effects",
     "effect_status",
     "fail_interrupted_effects",
@@ -157,6 +158,11 @@ DELETE FROM build_attributes WHERE build_id = $1
 AND attr = ANY($2::text[])
 """
 
+DELETE_EFFECTS_BY_NAME: typing.Final[str] = """-- name: DeleteEffectsByName :exec
+DELETE FROM build_effects WHERE build_id = $1
+AND name = ANY($2::text[])
+"""
+
 DROP_REMOVED_EFFECTS: typing.Final[str] = """-- name: DropRemovedEffects :exec
 DELETE FROM build_effects WHERE build_id = $1
 AND NOT (name = ANY($2::text[]))
@@ -224,7 +230,9 @@ WITH flag AS (
 )
 UPDATE build_effects SET status = 'pending', error = NULL,
     finished_at = NULL, log_size = 0,
-    log_truncated = FALSE WHERE build_id = $1
+    log_truncated = FALSE
+WHERE build_id = $1
+  AND ($2::text[] IS NULL OR name = ANY($2::text[]))
 """
 
 RESET_EVAL_FOR_REEVAL: typing.Final[str] = """-- name: ResetEvalForReeval :exec
@@ -350,6 +358,10 @@ async def delete_attributes_by_name(conn: ConnectionLike, *, build_id: int, attr
     await conn.execute(DELETE_ATTRIBUTES_BY_NAME, build_id, attrs)
 
 
+async def delete_effects_by_name(conn: ConnectionLike, *, build_id: int, names: collections.abc.Sequence[str]) -> None:
+    await conn.execute(DELETE_EFFECTS_BY_NAME, build_id, names)
+
+
 async def drop_removed_effects(conn: ConnectionLike, *, build_id: int, names: collections.abc.Sequence[str]) -> None:
     await conn.execute(DROP_REMOVED_EFFECTS, build_id, names)
 
@@ -388,8 +400,8 @@ async def reset_build_for_restart(conn: ConnectionLike, *, attr: str | None, bui
     await conn.execute(RESET_BUILD_FOR_RESTART, attr, build_id)
 
 
-async def reset_effects_state(conn: ConnectionLike, *, build_id: int) -> None:
-    await conn.execute(RESET_EFFECTS_STATE, build_id)
+async def reset_effects_state(conn: ConnectionLike, *, build_id: int, names: collections.abc.Sequence[str] | None) -> None:
+    await conn.execute(RESET_EFFECTS_STATE, build_id, names)
 
 
 async def reset_eval_for_reeval(conn: ConnectionLike, *, build_id: int) -> None:

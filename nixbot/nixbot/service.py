@@ -379,8 +379,11 @@ class CIService:
             await self.orchestrator.reporter.build_restarted(event, build, attr)
         await self.enqueue_work("rerun", f"build-{build_id}", {"build_id": build_id})
 
-    async def restart_effects(self, build_id: int) -> None:
-        await self.enqueue_work("effects", f"build-{build_id}", {"build_id": build_id})
+    async def restart_effects(self, build_id: int, name: str | None = None) -> None:
+        # Per-build dedup key: single-effect and full reruns serialize.
+        await self.enqueue_work(
+            "effects", f"build-{build_id}", {"build_id": build_id, "name": name}
+        )
 
     async def run_scheduled_now(
         self, project_id: int, schedule_name: str, effect: str, when_spec: str
@@ -461,7 +464,9 @@ class CIService:
                 # Previous run still unwinding. Retry, don't drop.
                 await self.enqueue_work("rerun", item.dedup_key, payload)
         elif item.kind == "effects":
-            await restart_dispatch.restart_effects(self, payload["build_id"])
+            await restart_dispatch.restart_effects(
+                self, payload["build_id"], payload.get("name")
+            )
         elif item.kind == "effect":
             await self._run_effect_item(payload["build_id"], payload["name"])
         elif item.kind == "report":

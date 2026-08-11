@@ -1166,6 +1166,84 @@ async def test_rerun_effects_runs_effects_again(
     assert attrs_before == attrs_after
 
 
+async def test_rerun_single_effect(
+    pool: asyncpg.Pool,
+    make_env: EnvFactory,
+    upstream: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rerunning one effect resets that effect and the dependents
+    skipped because of it. Every other effect keeps its result."""
+    add_commit(upstream, "single")
+    fail_deploy = True
+    ran: list[str] = []
+
+    async def run(ctx: object, name: str, log_write: object = None) -> bool:
+        ran.append(name)
+        return not (name == "deploy" and fail_deploy)
+
+    patch_effects(
+        monkeypatch,
+        run_effect=run,
+        effects={
+            "deploy": EffectMeta(),
+            "notify": EffectMeta(after=("deploy",)),
+            "other": EffectMeta(),
+        },
+    )
+    orchestrator, _, project = await make_env(
+        FakeEvalRunner([mk_job("a")]), FakeExecutor()
+    )
+    build = await orchestrator.handle_change_event(
+        ChangeEvent(
+            repo=project, branch="main", commit_sha=git(upstream, "rev-parse", "HEAD")
+        )
+    )
+    assert build is not None
+    await drain_effect_items(orchestrator, project, pool)
+    assert sorted(ran) == ["deploy", "other"]  # notify skipped
+    statuses = {
+        r["name"]: r["status"]
+        for r in await pool.fetch(
+            "SELECT name, status FROM build_effects WHERE build_id = $1", build.id
+        )
+    }
+    assert statuses == {
+        "deploy": "failed",
+        "notify": "skipped",
+        "other": "succeeded",
+    }
+    other_finished = await pool.fetchval(
+        "SELECT finished_at FROM build_effects WHERE build_id = $1 AND name = 'other'",
+        build.id,
+    )
+
+    fail_deploy = False
+    ran.clear()
+    await orchestrator.rerun_effects(project, build, only="deploy")
+    await drain_effect_items(orchestrator, project, pool)
+    assert sorted(ran) == ["deploy", "notify"]  # "other" untouched
+    statuses = {
+        r["name"]: r["status"]
+        for r in await pool.fetch(
+            "SELECT name, status FROM build_effects WHERE build_id = $1", build.id
+        )
+    }
+    assert statuses == {
+        "deploy": "succeeded",
+        "notify": "succeeded",
+        "other": "succeeded",
+    }
+    assert (
+        await pool.fetchval(
+            "SELECT finished_at FROM build_effects "
+            "WHERE build_id = $1 AND name = 'other'",
+            build.id,
+        )
+        == other_finished
+    )
+
+
 async def test_recovery_rerun_runs_effects(
     pool: asyncpg.Pool, run_effect_build: EffectBuildRunner, upstream: Path
 ) -> None:

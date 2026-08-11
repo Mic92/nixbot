@@ -47,6 +47,7 @@ from .executor import (
     LogWriter,
     attribute_log_path,
     build_log_dir,
+    effect_log_path,
     log_path_for_key,
 )
 from .gitrepo import MergeConflictError, pr_refspec
@@ -155,9 +156,16 @@ class Orchestrator:
                 missing_ok=True
             )
 
-    def reset_effect_logs(self, build_id: int) -> None:
-        """Drop all effect log files when a build's effects are reset."""
-        shutil.rmtree(self._log_dir(build_id) / "effects", ignore_errors=True)
+    def reset_effect_logs(self, build_id: int, names: list[str] | None = None) -> None:
+        """Drop effect log files when a build's effects are reset.
+        `names` limits the cleanup to those effects."""
+        if names is None:
+            shutil.rmtree(self._log_dir(build_id) / "effects", ignore_errors=True)
+            return
+        for name in names:
+            effect_log_path(self.config.state_dir, build_id, name).unlink(
+                missing_ok=True
+            )
 
     def gcroots_dir(self, build: BuildRecord) -> Path:
         return self.config.state_dir / "eval-gcroots" / str(build.id)
@@ -394,10 +402,11 @@ class Orchestrator:
         info: RepoInfo,
         build: BuildRecord,
         credentials: FetchCredentials | None = None,
+        only: str | None = None,
     ) -> None:
         """Effects-only restart: fresh worktree at the recorded commit,
-        attributes untouched."""
-        await rerun_exec.rerun_effects(self, info, build, credentials)
+        attributes untouched. `only` narrows the rerun to one effect."""
+        await rerun_exec.rerun_effects(self, info, build, credentials, only)
 
     async def maybe_run_effects(
         self,
