@@ -340,6 +340,11 @@ def cmd_build_restart(client: NixbotClient, args: argparse.Namespace) -> int:
     if args.effects:
         client.restart_effects(repo, number)
         print(f"restarting effects of build #{number}")
+    elif args.effect:
+        detail = client.build(repo, number)
+        for effect in [_match_effect(detail["effects"], sel) for sel in args.effect]:
+            client.restart_effects(repo, number, effect)
+            print(f"restarting effect {effect} of build #{number}")
     elif args.attr:
         attr = resolve_attr(client, repo, number, args.attr)
         client.restart_attr(repo, number, attr)
@@ -361,6 +366,21 @@ def cmd_build_cancel(client: NixbotClient, args: argparse.Namespace) -> int:
         client.cancel_build(repo, number)
         print(f"cancelling build #{number}")
     return EXIT_OK
+
+
+def _match_effect(effects: list[dict], selector: str) -> str:
+    """Effect name by exact match or unambiguous substring."""
+    names = [e["name"] for e in effects]
+    if selector in names:
+        return selector
+    matches = [n for n in names if selector in n]
+    if not matches:
+        msg = f"no effect matches {selector!r}"
+        raise UsageError(msg)
+    if len(matches) > 1:
+        msg = f"{selector!r} is ambiguous: {', '.join(matches)}"
+        raise UsageError(msg)
+    return matches[0]
 
 
 def _match_attr(attrs: list[dict], selector: str) -> dict:
@@ -551,12 +571,18 @@ running ones. Piped or in CI it prints one line per finished attribute.""",
   nbo build restart                 rebuild the current commit's build
   nbo build restart 412             rebuild everything of build #412
   nbo build restart 412 --attr nixos-eve   one attribute only (substring is enough)
-  nbo build restart 412 --effects   re-run the effects""",
+  nbo build restart 412 --effects   re-run the effects
+  nbo build restart 412 --effect deploy   one effect only""",
     )
     b_restart.add_argument("number", type=int, nargs="?")
     _add_repo_arg(b_restart)
     b_restart.add_argument("--attr", help="restart only this attribute")
     b_restart.add_argument("--effects", action="store_true", help="restart the effects")
+    b_restart.add_argument(
+        "--effect",
+        action="append",
+        help="restart only this effect (repeatable)",
+    )
     b_restart.set_defaults(func=cmd_build_restart)
 
     b_cancel = build.add_parser("cancel", help="cancel a build or attribute")

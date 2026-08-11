@@ -49,6 +49,11 @@ async def postgres_dsn(postgres_dsn: str) -> str:
             """,
             failed,
         )
+        await pool.execute(
+            "INSERT INTO build_effects (build_id, name, status) "
+            "VALUES ($1, 'deploy', 'failed')",
+            failed,
+        )
     return postgres_dsn
 
 
@@ -148,6 +153,11 @@ def test_control_requires_token(harness: WebHarness, api: NixbotClient) -> None:
     assert api.restart_attr(REPO, 1, "bad1")["attr"] == "bad1"
     assert api.cancel_attr(REPO, 1, "bad1")["attr"] == "bad1"
     assert api.restart_effects(REPO, 1)["action"] == "restart-effects"
+    assert api.restart_effects(REPO, 1, "deploy")["action"] == "restart-effects"
+    assert BACKEND.effect_restarts[-2:] == [(1, None), (1, "deploy")]
+    with pytest.raises(ApiError) as err:
+        api.restart_effects(REPO, 1, "nope")
+    assert err.value.status == 404
     assert len(BACKEND.restarted) == 1
     assert [a for _, a in BACKEND.attr_restarts] == ["bad1"]
     assert [a for _, a in BACKEND.attr_cancels] == ["bad1"]
