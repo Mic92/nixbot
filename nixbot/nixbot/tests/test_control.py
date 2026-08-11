@@ -62,7 +62,7 @@ MALLORY = User(provider="gitea", username="alice")  # same name, wrong forge
 class FakeBackend:
     restarted: list[int] = field(default_factory=list)
     attr_restarts: list[tuple[int, str]] = field(default_factory=list)
-    effect_restarts: list[int] = field(default_factory=list)
+    effect_restarts: list[tuple[int, str | None]] = field(default_factory=list)
     cancelled: list[int] = field(default_factory=list)
     attr_cancels: list[tuple[int, str]] = field(default_factory=list)
     scheduled_runs: list[tuple[int, str, str, str]] = field(default_factory=list)
@@ -75,8 +75,8 @@ class FakeBackend:
     async def restart_attribute(self, build_id: int, attr: str) -> None:
         self.attr_restarts.append((build_id, attr))
 
-    async def restart_effects(self, build_id: int) -> None:
-        self.effect_restarts.append(build_id)
+    async def restart_effects(self, build_id: int, name: str | None = None) -> None:
+        self.effect_restarts.append((build_id, name))
 
     async def cancel_build(self, build_id: int) -> None:
         self.cancelled.append(build_id)
@@ -128,6 +128,11 @@ async def seed(dsn: str) -> None:
               ($1, 'bad2', 'x', 'dependency_failed'),
               ($1, 'pkgs/o k?#100%', 'x', 'succeeded')
             """,
+            build_id,
+        )
+        await pool.execute(
+            "INSERT INTO build_effects (build_id, name, status) "
+            "VALUES ($1, 'deploy', 'failed')",
             build_id,
         )
         # Queue for the mass-cancel tests: two pending, one running.
@@ -1078,7 +1083,17 @@ def test_effects_restart_route(harness: WebHarness) -> None:
     url = "/repos/github/acme/widget/builds/1/effects/restart"
     assert harness.post(url).status_code == 403
     assert harness.post(url, ROOT).status_code == 303
-    assert BACKEND.effect_restarts == [1]
+    assert BACKEND.effect_restarts == [(1, None)]
+
+
+def test_single_effect_restart_route(harness: WebHarness) -> None:
+    BACKEND.effect_restarts.clear()
+    url = "/repos/github/acme/widget/builds/1/effects/restart"
+    assert harness.post(f"{url}?name=deploy", ROOT).status_code == 303
+    assert BACKEND.effect_restarts == [(1, "deploy")]
+    # Unknown effect is a 404, not an enqueue.
+    assert harness.post(f"{url}?name=nope", ROOT).status_code == 404
+    assert len(BACKEND.effect_restarts) == 1
 
 
 def test_webhook_panel_is_forge_aware(harness: WebHarness) -> None:
@@ -1148,3 +1163,8 @@ def test_api_attr_and_effects_control(harness: WebHarness) -> None:
     assert response.status_code == 200
     assert response.json() == {"number": 1, "action": "restart-effects"}
     assert len(BACKEND.effect_restarts) == 1
+
+    response = harness.post(f"{base}/effects/restart?name=deploy", ROOT)
+    assert response.status_code == 200
+    assert BACKEND.effect_restarts[-1] == (1, "deploy")
+    assert harness.post(f"{base}/effects/restart?name=nope", ROOT).status_code == 404

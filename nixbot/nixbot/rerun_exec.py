@@ -8,16 +8,20 @@ imported directly since it has no runtime dependency on this module.
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
-from . import build_run, db
+from . import build_run, db, effects_run
 from .canceller import branch_key
 from .db import BuildStatus
 from .db_gen import builds as builds_q
 from .db_gen import maintenance as q
 from .events import ChangeEvent, EvalReport, event_for_build
 from .gitrepo import pr_refspec
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -134,30 +138,80 @@ async def rerun_pending_attributes(
         o.cancel_events.pop(build.id, None)
 
 
+async def _rerun_names(
+    o: Orchestrator, build: BuildRecord, only: str
+) -> list[str] | None:
+    """The effect plus its transitively skipped dependents. A skipped
+    row must not stay skipped after a green rerun. Returns None when
+    `only` is not a row of this build."""
+    rows = await builds_q.effects_for_build(o.pool, build_id=build.id)
+    if all(r.name != only for r in rows):
+        return None
+    names = {only}
+    changed = True
+    while changed:
+        changed = False
+        for r in rows:
+            deps = set(json.loads(r.deps)) if r.deps else set()
+            if r.status == "skipped" and r.name not in names and deps & names:
+                names.add(r.name)
+                changed = True
+    return sorted(names)
+
+
 async def rerun_effects(
     o: Orchestrator,
     info: RepoInfo,
     build: BuildRecord,
     credentials: FetchCredentials | None = None,
+    only: str | None = None,
 ) -> None:
     """Effects-only restart: fresh worktree at the recorded commit,
-    attributes untouched."""
+    attributes untouched. `only` narrows the rerun to one effect and
+    its skipped dependents."""
     if build.id in o.cancel_events:
         # A concurrent rerun (or double click) would deploy twice.
         return
     o.cancel_events[build.id] = asyncio.Event()
     try:
+        names: list[str] | None = None
+        if only is not None:
+            names = await _rerun_names(o, build, only)
+            if names is None:
+                logger.warning(
+                    "rerun of unknown effect ignored",
+                    extra={"build_id": build.id, "effect": only},
+                )
+                return
         # Reset under the claim: resetting earlier (e.g. in the
         # service) could clobber a rerun already in flight. Drop the
         # previous run's logs here too, so pending rows show no stale
         # output.
-        await q.reset_effects_state(o.pool, build_id=build.id)
-        o.reset_effect_logs(build.id)
+        await q.reset_effects_state(o.pool, build_id=build.id, names=names)
+        o.reset_effect_logs(build.id, names)
         async with rerun_worktree(o, info, build, "effects", credentials) as (
             event,
             worktree_path,
         ):
-            await o.maybe_run_effects(event, build, worktree_path, credentials)
+            if names is None:
+                await o.maybe_run_effects(event, build, worktree_path, credentials)
+            else:
+                effects = await effects_run.discover_effects(
+                    o, event, build, worktree_path, credentials
+                )
+                if effects is not None:
+                    # Selected effects that discovery no longer found
+                    # would stay pending forever.
+                    if missing := sorted(set(names) - effects.keys()):
+                        await q.delete_effects_by_name(
+                            o.pool, build_id=build.id, names=missing
+                        )
+                    await effects_run.enqueue_effects(
+                        o,
+                        event,
+                        build,
+                        {n: m for n, m in effects.items() if n in names},
+                    )
             await o.refresh_schedules(event)
         # The enqueued effect items share this build's key and only
         # become claimable once this item finishes.

@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 UNWIND_RETRY_SECONDS = 0.5
 
 
-async def restart_effects(s: CIService, build_id: int) -> None:
+async def restart_effects(s: CIService, build_id: int, name: str | None = None) -> None:
     if build_id in s.orchestrator.cancel_events:
         return  # build (or an effects rerun) still running
     build = await builds_q.get_build(s.orchestrator.pool, id_=build_id)
@@ -45,7 +45,7 @@ async def restart_effects(s: CIService, build_id: int) -> None:
         return
     info = repo_info(project)
     credentials = await s.credentials_provider(info.forge).get(info.clone_url)
-    await s.orchestrator.rerun_effects(info, build, credentials)
+    await s.orchestrator.rerun_effects(info, build, credentials, only=name)
 
 
 async def rerun(s: CIService, build_id: int) -> bool:

@@ -52,6 +52,24 @@ async def maybe_run_effects(
     worktree_path: Path,
     credentials: FetchCredentials | None = None,
 ) -> None:
+    effects = await discover_effects(o, event, build, worktree_path, credentials)
+    if effects is None:
+        return
+    # Effects removed from the flake since the last run would
+    # otherwise linger as stale pending rows.
+    await q.drop_removed_effects(o.pool, build_id=build.id, names=list(effects))
+    await enqueue_effects(o, event, build, effects)
+
+
+async def discover_effects(
+    o: Orchestrator,
+    event: ChangeEvent,
+    build: BuildRecord,
+    worktree_path: Path,
+    credentials: FetchCredentials | None = None,
+) -> dict[str, EffectMeta] | None:
+    """Gating, the started-flag, and effect discovery. Returns None
+    when effects must not or cannot run."""
     repo = event.repo
     # Gating config comes from the default branch of the central
     # clone: the worktree is PR-controlled, so its nixbot.toml
@@ -65,7 +83,7 @@ async def maybe_run_effects(
         event.branch,
         is_pull_request=event.pr_number is not None,
     ):
-        return
+        return None
     # The started-flag guards against auto-re-running effects on crash
     # recovery (deploys are not idempotent). Record the triggering ref:
     # effect items carry only build_id and must report on this commit,
@@ -80,7 +98,7 @@ async def maybe_run_effects(
         )
         is None
     ):
-        return
+        return None
     task_token = o.task_tokens.issue(build.project_id)
     ctx = effects_context(
         o.config,
@@ -99,13 +117,10 @@ async def maybe_run_effects(
         # OSError: nix/git missing from PATH. Effects are best-effort
         # and must not fail the (already reported) build.
         logger.exception("effects discovery failed", extra={"build_id": build.id})
-        return
+        return None
     finally:
         o.task_tokens.revoke(task_token)
-    # Effects removed from the flake since the last run would
-    # otherwise linger as stale pending rows.
-    await q.drop_removed_effects(o.pool, build_id=build.id, names=list(effects))
-    await _enqueue_effects(o, event, build, effects)
+    return effects
 
 
 def _dedup_key(build: BuildRecord, name: str, meta: EffectMeta) -> str:
@@ -118,7 +133,7 @@ def _dedup_key(build: BuildRecord, name: str, meta: EffectMeta) -> str:
     return f"build-{build.id}-effect-{name}"
 
 
-async def _enqueue_effects(
+async def enqueue_effects(
     o: Orchestrator,
     event: ChangeEvent,
     build: BuildRecord,

@@ -197,6 +197,13 @@ td.attr-duration {
 	color: var(--muted);
 	font-variant-numeric: tabular-nums;
 }
+td.attr-restart {
+	white-space: nowrap;
+}
+button.icon-button {
+	padding: 0 0.4rem;
+	line-height: 1.4;
+}
 .dot {
 	display: inline-block;
 	width: 0.6rem;

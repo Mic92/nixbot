@@ -141,6 +141,7 @@
               <th scope="col">status</th>
               <th scope="col">effect</th>
               <th scope="col">duration</th>
+              <th scope="col">restart</th>
             </tr>
           </thead>
           {% for e in effects %}
@@ -154,6 +155,16 @@
                 {% endif %}
               </td>
               <td class="attr-duration">{{ e | duration }}</td>
+              <td class="attr-restart">
+                {% if can_control and build.status == "succeeded" and e.status not in ("pending", "running") %}
+                  <form method="post"
+                        action="{{ build_path(project, build.number) }}/effects/restart?name={{ e.name | urlencode }}">
+                    <button class="icon-button"
+                            title="restart {{ e.name }}"
+                            aria-label="restart effect {{ e.name }}"><span aria-hidden="true">↻</span></button>
+                  </form>
+                {% endif %}
+              </td>
             </tr>
             {% if e.error %}{{ error_row(e.error) }}{% endif %}
           {% endfor %}
