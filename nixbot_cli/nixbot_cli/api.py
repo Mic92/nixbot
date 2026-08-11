@@ -176,8 +176,14 @@ class NixbotClient:
             "POST", f"/api/repos/{repo}/builds/{number}/attrs/{attr}/cancel"
         )
 
-    def restart_effects(self, repo: RepoRef, number: int) -> dict:
-        return self._json("POST", f"/api/repos/{repo}/builds/{number}/effects/restart")
+    def restart_effects(
+        self, repo: RepoRef, number: int, name: str | None = None
+    ) -> dict:
+        """Re-run every effect of the build, or a single one by name."""
+        params = {"name": name} if name is not None else None
+        return self._json(
+            "POST", f"/api/repos/{repo}/builds/{number}/effects/restart", params
+        )
 
     # --- logs ----------------------------------------------------------
 

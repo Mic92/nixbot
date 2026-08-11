@@ -14,10 +14,11 @@ nbo build watch 412 [--attr treefmt]         # exit 1 on failure
 nbo log 412                                  # failure summary with log tails
 nbo log 412 checks.x86_64-linux.foo --tail 200   # or --follow
 nbo build restart 412 --attr treefmt         # token: NIXBOT_TOKEN / hosts.toml
+nbo build restart 412 --effects|--effect deploy  # all or one (repeatable)
 nbo build cancel 412
 nbo effects list | run default.deploy        # local, no token
 ```
 
-Attribute args accept unambiguous substrings; `--json [fields]` for
+Attribute and effect args accept unambiguous substrings; `--json [fields]` for
 machine-readable output. `nbo auth status` shows server/token. HTTP API docs at
 `/llms.txt`.

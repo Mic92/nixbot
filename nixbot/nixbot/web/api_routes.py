@@ -95,9 +95,18 @@ class Attribute(BaseModel):
     log_truncated: bool | None = None
 
 
+class Effect(BaseModel):
+    name: str
+    status: str
+    error: str | None
+    started_at: datetime | None
+    finished_at: datetime | None
+
+
 class BuildDetail(BaseModel):
     build: Build
     attributes: list[Attribute]
+    effects: list[Effect]
 
 
 class AttributeDelta(BaseModel):
@@ -225,12 +234,14 @@ def create_api_router(ctx: WebContext) -> APIRouter:
     async def get_build(
         request: Request, forge: str, owner: str, name: str, number: int
     ) -> dict[str, Any]:
-        """Build plus all of its attributes."""
+        """Build plus all of its attributes and effects."""
         build = await _build_or_404(ctx, request, forge, owner, name, number)
         attributes = await ctx.queries.attributes(build["id"])
+        effects = await ctx.queries.effects(build["id"])
         return {
             "build": clean_row(build),
             "attributes": [clean_row(a) for a in attributes],
+            "effects": [clean_row(e) for e in effects],
         }
 
     @router.get(

@@ -64,6 +64,11 @@ async def postgres_dsn(postgres_dsn: str) -> str:
             """,
             failed,
         )
+        await pool.execute(
+            "INSERT INTO build_effects (build_id, name, status) "
+            "VALUES ($1, 'deploy', 'failed'), ($1, 'notify', 'skipped')",
+            failed,
+        )
     return postgres_dsn
 
 
@@ -150,6 +155,24 @@ def test_build_restart_cancel(
     )
     assert [a for _, a in BACKEND.attr_restarts] == ["bad1"]
     assert run_cli(api, "build", "restart", "1", "-R", "acme/widget", "--effects") == 0
+    BACKEND.effect_restarts.clear()
+    assert (
+        run_cli(
+            api,
+            "build",
+            "restart",
+            "1",
+            "-R",
+            "acme/widget",
+            "--effect",
+            "dep",
+            "--effect",
+            "not",
+        )
+        == 0
+    )
+    assert BACKEND.effect_restarts == [(1, "deploy"), (1, "notify")]
+    assert "restarting effect deploy" in capsys.readouterr().out
     assert run_cli(api, "build", "cancel", "2", "-R", "acme/widget") == 0
     assert "cancelling build #2" in capsys.readouterr().out
     assert len(BACKEND.cancelled) == 1
