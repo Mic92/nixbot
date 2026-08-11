@@ -1051,8 +1051,12 @@ details.webhook-setup summary {
 	contain-intrinsic-size: auto 20px;
 	scroll-margin-top: 2rem;
 }
-/* Space the gutter with margin, not flex gap: ANSI colors split a line
-   into several span children and gap would space them apart mid-line. */
+/* One wrapper per line: bare ANSI spans as flex items would each
+   wrap inside their own box, scrambling long lines. */
+.log-lines .logtext {
+	flex: 1;
+	min-width: 0;
+}
 .log-lines .lineno {
 	width: 5ch;
 	margin: 0 1ch 0 0;
