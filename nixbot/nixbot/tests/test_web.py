@@ -1231,6 +1231,36 @@ def test_structured_live_stream(client: WebHarness, tmp_path: Path) -> None:
     assert "event: done" in stream
 
 
+def test_drv_raw_serves_running_attribute(client: WebHarness, tmp_path: Path) -> None:
+    """The per-derivation raw link works during the build, served from the live capture."""
+    ctx = client.ctx
+    ctx.state_dir = tmp_path
+    registry = client.app.state.log_registry
+
+    async def run() -> None:
+        build_id = await ctx.pool.fetchval("SELECT id FROM builds WHERE number = 3")
+        writer = LogWriter(path=tmp_path / "logs" / "live" / "x86_64-linux.ok.zst")
+        cap = StructuredCapture(clock=lambda: 1.0)
+        writer.capture = cap
+        cap.start_build(1, "/nix/store/aaa-qtbase-5.0.drv")
+        cap.log_line(1, "CC main.o")
+        cap.phase(1, "build")
+        cap.log_line(1, "\x1b[31mCC failed\x1b[0m")
+        registry.register(build_id, "x86_64-linux.ok", writer)
+        try:
+            base = "/repos/github/acme/widget/builds/3/logs/x86_64-linux.ok"
+            raw = await client.http.get(f"{base}/drv/1/raw")
+            assert raw.status_code == 200
+            assert "CC main.o" in raw.text
+            assert "Running phase: build" in raw.text
+            assert "\x1b" not in raw.text  # ANSI stripped
+            assert (await client.http.get(f"{base}/drv/99/raw")).status_code == 404
+        finally:
+            registry.unregister(build_id, "x86_64-linux.ok")
+
+    client.loop.run_until_complete(run())
+
+
 def test_log_sse_stream_caps_history_backlog(
     client: WebHarness, tmp_path: Path
 ) -> None:

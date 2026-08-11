@@ -214,6 +214,21 @@ def render_log_lines(text: str) -> str:
     return "".join(lines)
 
 
+def _reinject_phases(lines: list[str], ph: list[list]) -> list[str]:
+    """Mirrors LogContainerReader.lines_with_phases for capture lines."""
+    if not ph:
+        return lines
+    at: dict[int, list[str]] = {}
+    for name, line in ph:
+        at.setdefault(line, []).append(name)
+    out: list[str] = []
+    for n in range(len(lines) + 1):
+        out.extend(f"Running phase: {name}" for name in at.get(n, []))
+        if n < len(lines):
+            out.append(lines[n])
+    return out
+
+
 def phase_sep(name: str) -> str:
     """Inline phase divider; CSS pins it as the current-phase header."""
     safe = html.escape(name)
@@ -879,12 +894,19 @@ class _LogRoutes:
         attr: str,
         idx: int,
     ) -> PlainTextResponse:
-        """One derivation's log as plain text (ANSI stripped)."""
-        _, _, path = await self._resolve(request, forge, owner, name, number, attr)
-        reader = await _load_container(path)
-        if reader is None or not (0 <= idx < len(reader)):
-            raise HTTPException(status_code=404)
-        lines = await asyncio.to_thread(reader.lines_with_phases, idx)
+        """One derivation's log as plain text (ANSI stripped). Served from the live capture until the container exists."""
+        _, build, path = await self._resolve(request, forge, owner, name, number, attr)
+        capture = self._capture(build, attr)
+        if capture is not None:
+            entry = next((e for e in capture.state() if e["idx"] == idx), None)
+            if entry is None:
+                raise HTTPException(status_code=404)
+            lines = _reinject_phases(entry["lines"], entry["ph"])
+        else:
+            reader = await _load_container(path)
+            if reader is None or not (0 <= idx < len(reader)):
+                raise HTTPException(status_code=404)
+            lines = await asyncio.to_thread(reader.lines_with_phases, idx)
         return PlainTextResponse(strip_ansi("\n".join(lines)))
 
     async def build_search(  # noqa: PLR0913
