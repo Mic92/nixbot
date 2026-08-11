@@ -206,7 +206,8 @@ def render_log_lines(text: str) -> str:
         rendered, style = _ansi_convert(line, style)
         lines.append(
             f'<span class="logline" id="L{i}">'
-            f'<a class="lineno" href="#L{i}">{i}</a>{rendered}</span>'
+            f'<a class="lineno" href="#L{i}">{i}</a>'
+            f'<span class="logtext">{rendered}</span></span>'
         )
     # .logline is display:block. A joining "\n" inside <pre> would
     # render as an extra blank line.
@@ -249,7 +250,8 @@ def render_rows(
         rendered, style = _ansi_convert(line, style)
         out.append(
             f'<span class="logline" id="d{idx}-L{n}">'
-            f'<a class="lineno" href="#d{idx}-L{n}">{n}</a>{rendered}</span>'
+            f'<a class="lineno" href="#d{idx}-L{n}">{n}</a>'
+            f'<span class="logtext">{rendered}</span></span>'
         )
         n += 1
     return "".join(out), style
