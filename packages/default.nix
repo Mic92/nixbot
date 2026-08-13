@@ -10,7 +10,7 @@ let
       nixbot-cli = self.callPackage ./nixbot-cli.nix { };
       docs = self.callPackage ./docs.nix { };
     }
-    // lib.optionalAttrs pkgs.stdenv.isLinux {
+    // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
       nixbot-effects = self.callPackage ./nixbot-effects.nix { };
     }
   );
