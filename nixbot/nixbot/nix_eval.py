@@ -91,6 +91,9 @@ class EvalSettings:
     # herculesCI arguments (primaryRepo, rev, branch, ...) passed to the
     # flake's herculesCI output when it is a function.
     hercules_args: dict[str, Any] = field(default_factory=dict)
+    # Instance systems are the fallback when the repository does not set
+    # herculesCI.ciSystems. Empty preserves evaluation of every flake system.
+    eval_systems: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -117,7 +120,8 @@ let
     "x86_64-linux" "aarch64-linux" "i686-linux" "armv7l-linux"
     "riscv64-linux" "powerpc64le-linux" "x86_64-darwin" "aarch64-darwin"
   ];
-  ciSystems = hci.ciSystems or null;
+  configuredSystems = builtins.fromJSON {eval_systems_json};
+  ciSystems = hci.ciSystems or configuredSystems;
   keepName = name: ciSystems == null || !(builtins.elem name knownSystems)
     || builtins.elem name ciSystems;
   isDrv = v: (v.type or null) == "derivation";
@@ -166,6 +170,7 @@ drv: {
 def build_select_expr(branch_config: BranchConfig, settings: EvalSettings) -> str:
     return SELECT_TEMPLATE.format(
         args_json=json.dumps(json.dumps(settings.hercules_args)),
+        eval_systems_json=json.dumps(json.dumps(settings.eval_systems or None)),
         # The attribute may be a dotted path (e.g. "hydraJobs.ci").
         attr_path_json=json.dumps(json.dumps(branch_config.attribute.split("."))),
     )

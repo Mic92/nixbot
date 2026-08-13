@@ -316,6 +316,7 @@ async def test_eval_runner_hercules_ci_jobs(tmp_path: Path) -> None:
             "rev": "abcdef1234567",
             "shortRev": "abcdef1",
         },
+        eval_systems=["aarch64-linux"],
     )
     result = await EvalRunner().run(flake, BranchConfig(), settings)
     attrs = {job.attr: job.name for job in result.jobs}  # type: ignore[union-attr]
@@ -324,6 +325,60 @@ async def test_eval_runner_hercules_ci_jobs(tmp_path: Path) -> None:
         "default.checks.x86_64-linux.ok": "ok-abcdef1",
         "docs.site": "site",
     }
+
+
+@pytest.mark.skipif(
+    shutil.which("nix-eval-jobs") is None or shutil.which("nix") is None,
+    reason="nix-eval-jobs not available",
+)
+@pytest.mark.parametrize(
+    ("eval_systems", "expected_attrs"),
+    [
+        (
+            [],
+            [
+                "default.checks.aarch64-linux.foreign",
+                "default.checks.x86_64-linux.native",
+            ],
+        ),
+        (["x86_64-linux"], ["default.checks.x86_64-linux.native"]),
+    ],
+)
+async def test_eval_runner_filters_configured_eval_systems(
+    tmp_path: Path, eval_systems: list[str], expected_attrs: list[str]
+) -> None:
+    flake = tmp_path / "repo"
+    flake.mkdir()
+    (flake / "flake.nix").write_text(
+        """
+        {
+          outputs = { self }: {
+            checks.x86_64-linux.native = derivation {
+              name = "native";
+              system = "x86_64-linux";
+              builder = "/bin/sh";
+              args = [ "-c" "echo native > $out" ];
+            };
+            checks.aarch64-linux.foreign = derivation {
+              name = "foreign";
+              system = "aarch64-linux";
+              builder = "/bin/sh";
+              args = [ "-c" "echo foreign > $out" ];
+            };
+          };
+        }
+        """
+    )
+    settings = EvalSettings(
+        gc_roots_dir=tmp_path / "gcroots",
+        sandbox=False,
+        systemd_scope=False,
+        eval_systems=eval_systems,
+    )
+
+    result = await EvalRunner().run(flake, BranchConfig(), settings)
+
+    assert [job.attr for job in result.jobs] == expected_attrs
 
 
 async def test_stderr_noise_filtered_and_warnings_reach_callback(
