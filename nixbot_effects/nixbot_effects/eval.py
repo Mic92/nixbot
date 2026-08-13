@@ -82,6 +82,8 @@ async def effects_args(opts: EffectsOptions) -> dict[str, Any]:
     return {
         "primaryRepo": primary_repo,
         **primary_repo,
+        # HerculesCIMeta: ciSystems null = no platform default
+        "herculesCI": {"apiBaseUrl": opts.api_base_url, "ciSystems": None},
     }
 
 
@@ -101,12 +103,22 @@ async def _effects_expr(opts: EffectsOptions, body: str) -> str:
     rev = args["rev"]
     escaped_args = json.dumps(json.dumps(args))
     url = json.dumps(_flake_url(opts, rev))
+    # ciSystems normalization follows addDefaults in hercules-ci-agent's
+    # default-herculesCI-for-flake.nix.
     return f"""
       let
         flake = builtins.getFlake {url};
-        args = builtins.fromJSON {escaped_args};
-        call = f: if builtins.isFunction f then f args else f;
-        hci = call (flake.outputs.herculesCI or {{}});
+        evalArgs = builtins.fromJSON {escaped_args};
+        optionalCall = f: a: if builtins.isFunction f then f a else f;
+        hci = optionalCall (flake.outputs.herculesCI or {{}}) evalArgs;
+        args = evalArgs // {{
+          ciSystems =
+            if hci ? ciSystems
+            then builtins.listToAttrs
+              (map (s: {{ name = s; value = {{ }}; }}) hci.ciSystems)
+            else evalArgs.herculesCI.ciSystems;
+        }};
+        call = f: optionalCall f args;
       in {body}
     """
 
