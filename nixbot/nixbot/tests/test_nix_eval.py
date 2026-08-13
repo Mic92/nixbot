@@ -31,6 +31,8 @@ from nixbot.nix_eval import (
 )
 from nixbot.repo_config import BranchConfig
 
+from .support import git, init_upstream
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -41,7 +43,7 @@ def test_eval_command(tmp_path: Path) -> None:
     settings = EvalSettings(
         gc_roots_dir=tmp_path / "gcroots", worker_count=4, max_memory_size_mib=1024
     )
-    cmd = build_eval_command(BranchConfig(), settings)
+    cmd = build_eval_command(tmp_path, BranchConfig(), settings)
     assert cmd[0] == "nix-eval-jobs"
     assert "--workers" in cmd
     assert cmd[cmd.index("--workers") + 1] == "4"
@@ -62,6 +64,7 @@ def test_eval_command(tmp_path: Path) -> None:
 
     settings.show_trace = True
     cmd = build_eval_command(
+        tmp_path,
         BranchConfig(flake_dir="sub", lock_file="alt.lock", attribute="hydraJobs"),
         settings,
     )
@@ -71,13 +74,36 @@ def test_eval_command(tmp_path: Path) -> None:
     assert cmd[cmd.index("--reference-lock-file") + 1] == "alt.lock"
 
     # A dotted attribute selects the nested path, like `--flake .#a.b` did.
-    cmd = build_eval_command(BranchConfig(attribute="hydraJobs.ci"), settings)
+    cmd = build_eval_command(tmp_path, BranchConfig(attribute="hydraJobs.ci"), settings)
     assert json.dumps(json.dumps(["hydraJobs", "ci"])) in cmd[cmd.index("--select") + 1]
+
+
+def test_eval_command_pins_worktree_rev(tmp_path: Path) -> None:
+    repo = init_upstream(tmp_path / "wt")
+    settings = EvalSettings(gc_roots_dir=tmp_path / "gcroots")
+
+    cmd = build_eval_command(repo, BranchConfig(), settings)
+    assert cmd[cmd.index("--flake") + 1] == "."
+
+    rev = git(repo, "rev-parse", "HEAD")
+    git(repo, "checkout", "-q", "--detach")
+
+    cmd = build_eval_command(repo, BranchConfig(), settings)
+    assert cmd[cmd.index("--flake") + 1] == f"git+file://{repo}?rev={rev}"
+
+    cmd = build_eval_command(repo, BranchConfig(flake_dir="sub"), settings)
+    assert cmd[cmd.index("--flake") + 1] == f"git+file://{repo}?rev={rev}&dir=sub"
+
+    cmd = build_eval_command(
+        repo, BranchConfig(attribute="hydraJobs", legacy_eval=True), settings
+    )
+    assert cmd[cmd.index("--flake") + 1] == f"git+file://{repo}?rev={rev}#hydraJobs"
 
 
 def test_eval_command_legacy_eval(tmp_path: Path) -> None:
     settings = EvalSettings(gc_roots_dir=tmp_path / "gcroots")
     cmd = build_eval_command(
+        tmp_path,
         BranchConfig(flake_dir="sub", attribute="hydraJobs", legacy_eval=True),
         settings,
     )

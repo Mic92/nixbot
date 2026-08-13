@@ -22,6 +22,7 @@ import itertools
 import json
 import logging
 import os
+import re
 import signal
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -170,18 +171,50 @@ def build_select_expr(branch_config: BranchConfig, settings: EvalSettings) -> st
     )
 
 
+def detached_head_rev(worktree_path: Path) -> str | None:
+    """HEAD commit of a detached checkout; None on a branch or non-git dir."""
+    git = worktree_path / ".git"
+    try:
+        if git.is_file():  # linked worktree: pointer file to the gitdir
+            pointer = git.read_text().strip()
+            if not pointer.startswith("gitdir: "):
+                return None
+            gitdir = worktree_path / pointer.removeprefix("gitdir: ")
+        else:
+            gitdir = git
+        head = (gitdir / "HEAD").read_text().strip()
+    except OSError:
+        return None
+    return head if re.fullmatch(r"[0-9a-fA-F]{40,64}", head) else None
+
+
+def build_flake_ref(worktree_path: Path, branch_config: BranchConfig) -> str:
+    """Pin the worktree to its HEAD rev: locking from the plain directory
+    uses nix's workdir export, whose narHash includes checked-out
+    submodule contents, while the eval workers re-fetch the locked
+    __final input by rev (submodules as empty dirs) and fail the
+    narHash check (nix >= 2.36)."""
+    rev = detached_head_rev(worktree_path)
+    if rev is None:
+        return branch_config.flake_dir
+    url = f"git+file://{worktree_path}?rev={rev}"
+    if branch_config.flake_dir != ".":
+        url += f"&dir={branch_config.flake_dir}"
+    return url
+
+
 def build_eval_command(
-    branch_config: BranchConfig, settings: EvalSettings
+    worktree_path: Path, branch_config: BranchConfig, settings: EvalSettings
 ) -> list[str]:
     """The plain nix-eval-jobs invocation (without sandbox wrapping)."""
+    flake = build_flake_ref(worktree_path, branch_config)
     if branch_config.legacy_eval:
         # Deprecated buildbot-nix behaviour: no herculesCI traversal,
         # no build modifiers, unprefixed attribute names.
         logger.warning("legacy_eval is deprecated and will be removed")
-        flake = f"{branch_config.flake_dir}#{branch_config.attribute}"
+        flake = f"{flake}#{branch_config.attribute}"
         select_args = []
     else:
-        flake = branch_config.flake_dir
         select_args = [
             "--select",
             build_select_expr(branch_config, settings),
@@ -428,7 +461,7 @@ def build_full_command(
         cmd += build_systemd_scope_command(settings)
     if settings.sandbox:
         cmd += build_sandbox_command(worktree_path, settings)
-    cmd += build_eval_command(branch_config, settings)
+    cmd += build_eval_command(worktree_path, branch_config, settings)
     return cmd
 
 
