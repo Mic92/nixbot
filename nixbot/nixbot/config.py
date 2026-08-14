@@ -306,6 +306,7 @@ class Config(BaseModel):
     db_url: str | None = None
     db_url_file: Path | None = None
     build_systems: list[str]
+    eval_systems: list[str] = []
     url: str
 
     # Webhook URL may differ from the UI URL (e.g. split ingress).

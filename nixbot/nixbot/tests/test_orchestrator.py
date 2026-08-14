@@ -1011,6 +1011,7 @@ async def test_eval_settings_wired(
     sha = add_commit(upstream, "setw")
     eval_runner = FakeEvalRunner([mk_job("a")])
     orchestrator, _, project = await make_env(eval_runner, FakeExecutor(), "setw")
+    orchestrator.config.eval_systems = ["aarch64-linux"]
     netrc = tmp_path / "netrc"
     netrc.write_text("")
     await orchestrator.handle_change_event(
@@ -1026,6 +1027,7 @@ async def test_eval_settings_wired(
         orchestrator.config.eval_max_memory_size, 1234
     )
     assert settings.netrc_file == netrc
+    assert settings.eval_systems == ["aarch64-linux"]
 
 
 async def test_eval_netrc_withheld_from_pr_with_instance_wide_creds(

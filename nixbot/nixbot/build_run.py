@@ -187,6 +187,7 @@ def _eval_settings(
         # sandboxed evaluator needs to read it.
         extra_ro_paths=[o.repos.clone_path(event.repo.key)],
         hercules_args=hercules_args,
+        eval_systems=o.config.eval_systems,
     )
 
 

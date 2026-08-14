@@ -34,6 +34,7 @@ let
   serviceConfig = (pkgs.formats.json { }).generate "nixbot-config.json" (
     {
       build_systems = cfg.buildSystems;
+      eval_systems = cfg.evalSystems;
       url = baseUrl;
       webhook_base_url = cfg.webhookBaseUrl;
       state_dir = "/var/lib/nixbot";
@@ -248,6 +249,12 @@ in
       default = [ pkgs.stdenv.hostPlatform.system ];
       defaultText = lib.literalExpression "[ pkgs.stdenv.hostPlatform.system ]";
       description = "Systems to build (others come via nix remote builders).";
+    };
+
+    evalSystems = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      description = "Systems to evaluate; an empty list evaluates every system exposed by the flake.";
     };
 
     buildConcurrency = lib.mkOption {
