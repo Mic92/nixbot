@@ -7,7 +7,7 @@ cancel builds.
 Run it directly:
 
 ```console
-nix run github:nix-community/nixbot#nixbot-cli -- --help
+nix run github:Mic92/nixbot#nixbot-cli -- --help
 ```
 
 or add the `nixbot-cli` package to your profile or dev shell to get the `nbo`
