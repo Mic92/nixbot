@@ -145,7 +145,7 @@ async def test_prefetch_integration(tmp_path: Path) -> None:
         gc_roots_dir=tmp_path / "eval-gcroots", sandbox=False, systemd_scope=False
     )
     result = await EvalRunner().run(repo, BranchConfig(), settings)
-    assert [j.attr for j in result.jobs] == ["default.checks.x86_64-linux.ok"]
+    assert [j.attr for j in result.jobs] == ["checks.x86_64-linux.ok"]
 
 
 @needs_nix
