@@ -183,7 +183,7 @@ $ nbo effects run --secrets secrets.json default.deploy
 
 Inside the effect, secrets are available at `/run/secrets.json` (via
 `HERCULES_CI_SECRETS_JSON`). This follows the
-[hercules-ci secrets format](https://docs.hercules-ci.com/hercules-ci/effects/declaration/#secrets).
+[hercules-ci secrets format](https://docs.hercules-ci.com/hercules-ci-agent/secrets-json/).
 
 ## Pushable repository checkout
 
