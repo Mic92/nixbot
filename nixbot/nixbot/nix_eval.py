@@ -154,19 +154,12 @@ def build_eval_command(
 ) -> list[str]:
     """The plain nix-eval-jobs invocation (without sandbox wrapping)."""
     flake = build_flake_ref(worktree_path, branch_config)
-    if branch_config.legacy_eval:
-        # Deprecated buildbot-nix behaviour: no herculesCI traversal,
-        # no build modifiers, unprefixed attribute names.
-        logger.warning("legacy_eval is deprecated and will be removed")
-        flake = f"{flake}#{branch_config.attribute}"
-        select_args = []
-    else:
-        select_args = [
-            "--select",
-            build_select_expr(branch_config, settings),
-            "--apply",
-            APPLY_EXPR,
-        ]
+    select_args = [
+        "--select",
+        build_select_expr(branch_config, settings),
+        "--apply",
+        APPLY_EXPR,
+    ]
     return [
         "nix-eval-jobs",
         # The service drives nix entirely through flakes. On hosts where

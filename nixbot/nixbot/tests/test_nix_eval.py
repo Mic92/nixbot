@@ -96,28 +96,6 @@ def test_eval_command_pins_worktree_rev(tmp_path: Path) -> None:
         cmd[cmd.index("--flake") + 1] == f"git+file://{repo}?ref=HEAD&rev={rev}&dir=sub"
     )
 
-    cmd = build_eval_command(
-        repo, BranchConfig(attribute="hydraJobs", legacy_eval=True), settings
-    )
-    assert (
-        cmd[cmd.index("--flake") + 1]
-        == f"git+file://{repo}?ref=HEAD&rev={rev}#hydraJobs"
-    )
-
-
-def test_eval_command_legacy_eval(tmp_path: Path) -> None:
-    settings = EvalSettings(gc_roots_dir=tmp_path / "gcroots")
-    cmd = build_eval_command(
-        tmp_path,
-        BranchConfig(flake_dir="sub", attribute="hydraJobs", legacy_eval=True),
-        settings,
-    )
-    # Deprecated compat mode: evaluate the attribute directly like
-    # buildbot-nix did, without herculesCI traversal or --apply.
-    assert cmd[cmd.index("--flake") + 1] == "sub#hydraJobs"
-    assert "--select" not in cmd
-    assert "--apply" not in cmd
-
 
 def test_sandbox_command_mounts(tmp_path: Path) -> None:
     netrc = tmp_path / "netrc"
