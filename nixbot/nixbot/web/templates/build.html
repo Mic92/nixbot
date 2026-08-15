@@ -21,7 +21,7 @@
         hx-select="#main"
         hx-disinherit="hx-select hx-target hx-swap"
         hx-target="this"
-        hx-swap="morph:outerHTML"
+        hx-swap="morph:{morphStyle:'outerHTML',ignoreActiveValue:true}"
         hx-trigger="{{ trigger }}">
     <section class="content">
       <div class="build-header">
