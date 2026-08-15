@@ -89,15 +89,20 @@ def test_eval_command_pins_worktree_rev(tmp_path: Path) -> None:
     git(repo, "checkout", "-q", "--detach")
 
     cmd = build_eval_command(repo, BranchConfig(), settings)
-    assert cmd[cmd.index("--flake") + 1] == f"git+file://{repo}?rev={rev}"
+    assert cmd[cmd.index("--flake") + 1] == f"git+file://{repo}?ref=HEAD&rev={rev}"
 
     cmd = build_eval_command(repo, BranchConfig(flake_dir="sub"), settings)
-    assert cmd[cmd.index("--flake") + 1] == f"git+file://{repo}?rev={rev}&dir=sub"
+    assert (
+        cmd[cmd.index("--flake") + 1] == f"git+file://{repo}?ref=HEAD&rev={rev}&dir=sub"
+    )
 
     cmd = build_eval_command(
         repo, BranchConfig(attribute="hydraJobs", legacy_eval=True), settings
     )
-    assert cmd[cmd.index("--flake") + 1] == f"git+file://{repo}?rev={rev}#hydraJobs"
+    assert (
+        cmd[cmd.index("--flake") + 1]
+        == f"git+file://{repo}?ref=HEAD&rev={rev}#hydraJobs"
+    )
 
 
 def test_eval_command_legacy_eval(tmp_path: Path) -> None:
