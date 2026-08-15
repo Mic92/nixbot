@@ -198,11 +198,13 @@ def build_flake_ref(worktree_path: Path, branch_config: BranchConfig) -> str:
     uses nix's workdir export, whose narHash includes checked-out
     submodule contents, while the eval workers re-fetch the locked
     __final input by rev (submodules as empty dirs) and fail the
-    narHash check (nix >= 2.36)."""
+    narHash check (nix >= 2.36). ref=HEAD silences nix's "could not
+    read HEAD ref" warning on the detached worktree; the ref is never
+    resolved since rev is pinned."""
     rev = detached_head_rev(worktree_path)
     if rev is None:
         return branch_config.flake_dir
-    url = f"git+file://{worktree_path}?rev={rev}"
+    url = f"git+file://{worktree_path}?ref=HEAD&rev={rev}"
     if branch_config.flake_dir != ".":
         url += f"&dir={branch_config.flake_dir}"
     return url
