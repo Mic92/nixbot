@@ -26,7 +26,7 @@ import re
 import signal
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from .ansi import strip_ansi
 from .environ import passthrough_env
@@ -88,12 +88,11 @@ class EvalSettings:
     extra_ro_paths: list[Path] = field(default_factory=list)
     # Extra nix-eval-jobs arguments, e.g. --option overrides.
     extra_args: list[str] = field(default_factory=list)
-    # herculesCI arguments (primaryRepo, rev, branch, ...) passed to the
-    # flake's herculesCI output when it is a function.
-    hercules_args: dict[str, Any] = field(default_factory=dict)
-    # Instance systems are the fallback when the repository does not set
-    # herculesCI.ciSystems. Empty preserves evaluation of every flake system.
+    # Instance systems limit which per-system outputs are evaluated.
+    # Empty evaluates every system.
     eval_systems: list[str] = field(default_factory=list)
+    # See Config.legacy_attr_prefix.
+    legacy_attr_prefix: bool = False
 
 
 @dataclass
@@ -101,79 +100,19 @@ class EvalResult:
     jobs: list[NixEvalJob]
 
 
-# nix-eval-jobs --select function: the configured attribute (default
-# `checks`) is always built as `default.<attribute>.`; a `herculesCI`
-# output adds every onPush.<job>.outputs (minus `effects`) on top under
-# the attr prefix `<job>.`, following hercules-ci-agent traversal
-# (`recurseForDerivations = false` and `_type` stop recursion, ciSystems
-# filters per-system sets).
-SELECT_TEMPLATE = """
-flake:
-let
-  args = builtins.fromJSON {args_json};
-  # The configured attribute as a path, e.g. [ "hydraJobs" "ci" ].
-  attrPath = builtins.fromJSON {attr_path_json};
-  outputs = flake.outputs;
-  call = f: if builtins.isFunction f then f args else f;
-  hci = call (outputs.herculesCI or {{}});
-  knownSystems = [
-    "x86_64-linux" "aarch64-linux" "i686-linux" "armv7l-linux"
-    "riscv64-linux" "powerpc64le-linux" "x86_64-darwin" "aarch64-darwin"
-  ];
-  configuredSystems = builtins.fromJSON {eval_systems_json};
-  ciSystems = hci.ciSystems or configuredSystems;
-  keepName = name: ciSystems == null || !(builtins.elem name knownSystems)
-    || builtins.elem name ciSystems;
-  isDrv = v: (v.type or null) == "derivation";
-  # Lazy in the attr values so a throwing attribute is reported by
-  # nix-eval-jobs at its own path instead of failing the whole set.
-  # Excluded subtrees become {{}} (yield no jobs).
-  prune = builtins.mapAttrs (n: c:
-    if !keepName n then {{}}
-    else if !builtins.isAttrs c || isDrv c then c
-    else if c ? _type || !(c.recurseForDerivations or true) then {{}}
-    else prune c);
-  jobOutputs = j: builtins.removeAttrs (call (j.outputs or {{}})) [ "effects" ];
-  onPushJobs = builtins.mapAttrs (job: j: prune (jobOutputs j)) (hci.onPush or {{}});
-  getAt = set: path: builtins.foldl'
-    (s: n: if builtins.isAttrs s && s ? ${{n}} then s.${{n}} else {{}}) set path;
-  setAt = path: v: if path == [ ] then v
-    else {{ ${{builtins.head path}} = setAt (builtins.tail path) v; }};
-  configured = getAt outputs attrPath;
-  # onPush.default wins over the raw flake attribute on conflicts.
-  update = lhs: rhs: lhs // builtins.mapAttrs (n: v:
-    if lhs ? ${{n}} && builtins.isAttrs lhs.${{n}} && !isDrv lhs.${{n}}
-       && builtins.isAttrs v && !isDrv v
-    then update lhs.${{n}} v else v) rhs;
-  defaultJob = update
-    (setAt attrPath
-      (if builtins.isAttrs configured && !isDrv configured
-       then prune configured else configured))
-    (onPushJobs.default or {{}});
-in
-onPushJobs // {{ default = defaultJob; }}
-"""
-
-
-# nix-eval-jobs --apply function: hercules-ci build modifiers per
-# derivation, delivered as `extraValue` in the job JSON.
-APPLY_EXPR = """
-drv: {
-  buildDependenciesOnly = (drv.buildDependenciesOnly or false)
-    || (drv.phases or null) == [ "noBuildPhase" ];
-  ignoreFailure = drv.ignoreFailure or false;
-  requireFailure = drv.requireFailure or false;
-}
-"""
+_NIX_DIR = Path(__file__).parent / "nix"
+SELECT_FN = (_NIX_DIR / "select.nix").read_text()
+APPLY_EXPR = (_NIX_DIR / "apply.nix").read_text()
 
 
 def build_select_expr(branch_config: BranchConfig, settings: EvalSettings) -> str:
-    return SELECT_TEMPLATE.format(
-        args_json=json.dumps(json.dumps(settings.hercules_args)),
-        eval_systems_json=json.dumps(json.dumps(settings.eval_systems or None)),
+    params = {
+        "evalSystems": settings.eval_systems or None,
+        "jobPrefix": "default" if settings.legacy_attr_prefix else None,
         # The attribute may be a dotted path (e.g. "hydraJobs.ci").
-        attr_path_json=json.dumps(json.dumps(branch_config.attribute.split("."))),
-    )
+        "attrPath": branch_config.attribute.split("."),
+    }
+    return f"({SELECT_FN}) (builtins.fromJSON {json.dumps(json.dumps(params))})"
 
 
 def detached_head_rev(worktree_path: Path) -> str | None:
@@ -215,19 +154,12 @@ def build_eval_command(
 ) -> list[str]:
     """The plain nix-eval-jobs invocation (without sandbox wrapping)."""
     flake = build_flake_ref(worktree_path, branch_config)
-    if branch_config.legacy_eval:
-        # Deprecated buildbot-nix behaviour: no herculesCI traversal,
-        # no build modifiers, unprefixed attribute names.
-        logger.warning("legacy_eval is deprecated and will be removed")
-        flake = f"{flake}#{branch_config.attribute}"
-        select_args = []
-    else:
-        select_args = [
-            "--select",
-            build_select_expr(branch_config, settings),
-            "--apply",
-            APPLY_EXPR,
-        ]
+    select_args = [
+        "--select",
+        build_select_expr(branch_config, settings),
+        "--apply",
+        APPLY_EXPR,
+    ]
     return [
         "nix-eval-jobs",
         # The service drives nix entirely through flakes. On hosts where

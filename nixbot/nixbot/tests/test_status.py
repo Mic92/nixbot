@@ -169,6 +169,17 @@ def test_context_names_default() -> None:
         attr_status_context("github", "acme/widget", "x86_64-linux.foo")
         == "nixbot/nix-build github:acme/widget#checks.x86_64-linux.foo"
     )
+    # Attrs already carrying the configured attribute path are not
+    # doubled up.
+    assert (
+        attr_status_context("github", "acme/widget", "checks.x86_64-linux.foo")
+        == "nixbot/nix-build github:acme/widget#checks.x86_64-linux.foo"
+    )
+    # The legacy default. job prefix keeps its historic context names.
+    assert (
+        attr_status_context("github", "acme/widget", "default.checks.x86_64-linux.foo")
+        == "nixbot/nix-build github:acme/widget#checks.default.checks.x86_64-linux.foo"
+    )
 
 
 async def test_context_prefix_configurable() -> None:

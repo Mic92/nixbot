@@ -307,6 +307,9 @@ class Config(BaseModel):
     db_url_file: Path | None = None
     build_systems: list[str]
     eval_systems: list[str] = []
+    # Keep the historic "default." attribute prefix (and the status
+    # contexts derived from it) for deployments predating its removal.
+    legacy_attr_prefix: bool = False
     url: str
 
     # Webhook URL may differ from the UI URL (e.g. split ingress).

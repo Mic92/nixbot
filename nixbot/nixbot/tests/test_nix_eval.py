@@ -49,11 +49,10 @@ def test_eval_command(tmp_path: Path) -> None:
     assert cmd[cmd.index("--workers") + 1] == "4"
     assert cmd[cmd.index("--max-memory-size") + 1] == "1024"
     assert cmd[cmd.index("--flake") + 1] == "."
-    # The --select expression maps the flake's herculesCI onPush jobs (or
-    # the configured attribute as job "default") to the attrs to build.
+    # The --select expression maps the configured attribute to job
+    # "default".
     select = cmd[cmd.index("--select") + 1]
-    assert json.dumps(json.dumps(["checks"])) in select
-    assert "herculesCI" in select
+    assert '\\"attrPath\\": [\\"checks\\"]' in select
     # Build modifiers (buildDependenciesOnly, ...) are exported per drv.
     assert "requireFailure" in cmd[cmd.index("--apply") + 1]
     # Flakes and nix-command must be opted-in for hosts where the
@@ -70,12 +69,13 @@ def test_eval_command(tmp_path: Path) -> None:
     )
     assert "--show-trace" in cmd
     assert cmd[cmd.index("--flake") + 1] == "sub"
-    assert json.dumps(json.dumps(["hydraJobs"])) in cmd[cmd.index("--select") + 1]
+    assert '\\"attrPath\\": [\\"hydraJobs\\"]' in cmd[cmd.index("--select") + 1]
     assert cmd[cmd.index("--reference-lock-file") + 1] == "alt.lock"
 
     # A dotted attribute selects the nested path, like `--flake .#a.b` did.
     cmd = build_eval_command(tmp_path, BranchConfig(attribute="hydraJobs.ci"), settings)
-    assert json.dumps(json.dumps(["hydraJobs", "ci"])) in cmd[cmd.index("--select") + 1]
+    select = cmd[cmd.index("--select") + 1]
+    assert '\\"attrPath\\": [\\"hydraJobs\\", \\"ci\\"]' in select
 
 
 def test_eval_command_pins_worktree_rev(tmp_path: Path) -> None:
@@ -95,28 +95,6 @@ def test_eval_command_pins_worktree_rev(tmp_path: Path) -> None:
     assert (
         cmd[cmd.index("--flake") + 1] == f"git+file://{repo}?ref=HEAD&rev={rev}&dir=sub"
     )
-
-    cmd = build_eval_command(
-        repo, BranchConfig(attribute="hydraJobs", legacy_eval=True), settings
-    )
-    assert (
-        cmd[cmd.index("--flake") + 1]
-        == f"git+file://{repo}?ref=HEAD&rev={rev}#hydraJobs"
-    )
-
-
-def test_eval_command_legacy_eval(tmp_path: Path) -> None:
-    settings = EvalSettings(gc_roots_dir=tmp_path / "gcroots")
-    cmd = build_eval_command(
-        tmp_path,
-        BranchConfig(flake_dir="sub", attribute="hydraJobs", legacy_eval=True),
-        settings,
-    )
-    # Deprecated compat mode: evaluate the attribute directly like
-    # buildbot-nix did, without herculesCI traversal or --apply.
-    assert cmd[cmd.index("--flake") + 1] == "sub#hydraJobs"
-    assert "--select" not in cmd
-    assert "--apply" not in cmd
 
 
 def test_sandbox_command_mounts(tmp_path: Path) -> None:
@@ -253,24 +231,25 @@ async def test_eval_runner_integration(tmp_path: Path) -> None:
     )
     assert len(result.jobs) == 1
     job = result.jobs[0]
-    assert job.attr == "default.checks.x86_64-linux.ok"  # type: ignore[union-attr]
+    assert job.attr == "checks.x86_64-linux.ok"  # type: ignore[union-attr]
     assert any("eval warning here" in line for line in seen)
 
     # Dotted attribute config selects the nested path.
     result = await EvalRunner().run(
         flake, BranchConfig(attribute="hydraJobs.ci"), settings
     )
-    assert [j.attr for j in result.jobs] == ["default.hydraJobs.ci.x86_64-linux.nested"]
+    assert [j.attr for j in result.jobs] == ["hydraJobs.ci.x86_64-linux.nested"]
 
 
 @pytest.mark.skipif(
     shutil.which("nix-eval-jobs") is None or shutil.which("nix") is None,
     reason="nix-eval-jobs not available",
 )
-async def test_eval_runner_hercules_ci_jobs(tmp_path: Path) -> None:
-    """Every onPush job is built under its job prefix in addition to the
-    checks fallback; effects and opted-out attrsets are excluded and
-    per-system attrsets are filtered by ciSystems."""
+async def test_eval_runner_ignores_hercules_ci_outputs(tmp_path: Path) -> None:
+    """Only the configured attribute is built, filtered by
+    eval_systems. herculesCI outputs (onPush jobs, ciSystems) are not
+    evaluated here; effects discovery is nixbot_effects' job.
+    """
     flake = tmp_path / "repo"
     flake.mkdir()
     (flake / "flake.nix").write_text(
@@ -283,6 +262,12 @@ async def test_eval_runner_hercules_ci_jobs(tmp_path: Path) -> None:
               builder = "/bin/sh";
               args = [ "-c" "echo extra > $out" ];
             };
+            checks.aarch64-linux.kept = derivation {
+              name = "kept";
+              system = "aarch64-linux";
+              builder = "/bin/sh";
+              args = [ "-c" "echo no > $out" ];
+            };
             herculesCI = { primaryRepo, ... }: {
               ciSystems = [ "x86_64-linux" ];
               onPush.default.outputs = {
@@ -292,11 +277,11 @@ async def test_eval_runner_hercules_ci_jobs(tmp_path: Path) -> None:
                   builder = "/bin/sh";
                   args = [ "-c" "echo ok > $out" ];
                 };
-                checks.aarch64-linux.skipped-system = derivation {
-                  name = "skipped";
+                checks.aarch64-linux.unfiltered = derivation {
+                  name = "unfiltered";
                   system = "aarch64-linux";
                   builder = "/bin/sh";
-                  args = [ "-c" "echo no > $out" ];
+                  args = [ "-c" "echo yes > $out" ];
                 };
                 effects.deploy = { isEffect = true; };
                 ignored = { recurseForDerivations = false; hidden = self; };
@@ -316,19 +301,12 @@ async def test_eval_runner_hercules_ci_jobs(tmp_path: Path) -> None:
         gc_roots_dir=tmp_path / "gcroots",
         sandbox=False,
         systemd_scope=False,
-        hercules_args={
-            "primaryRepo": {"rev": "abcdef1234567", "shortRev": "abcdef1"},
-            "rev": "abcdef1234567",
-            "shortRev": "abcdef1",
-        },
         eval_systems=["aarch64-linux"],
     )
     result = await EvalRunner().run(flake, BranchConfig(), settings)
     attrs = {job.attr: job.name for job in result.jobs}  # type: ignore[union-attr]
     assert attrs == {
-        "default.checks.x86_64-linux.extra": "extra",
-        "default.checks.x86_64-linux.ok": "ok-abcdef1",
-        "docs.site": "site",
+        "checks.aarch64-linux.kept": "kept",
     }
 
 
@@ -342,11 +320,11 @@ async def test_eval_runner_hercules_ci_jobs(tmp_path: Path) -> None:
         (
             [],
             [
-                "default.checks.aarch64-linux.foreign",
-                "default.checks.x86_64-linux.native",
+                "checks.aarch64-linux.foreign",
+                "checks.x86_64-linux.native",
             ],
         ),
-        (["x86_64-linux"], ["default.checks.x86_64-linux.native"]),
+        (["x86_64-linux"], ["checks.x86_64-linux.native"]),
     ],
 )
 async def test_eval_runner_filters_configured_eval_systems(
@@ -384,6 +362,41 @@ async def test_eval_runner_filters_configured_eval_systems(
     result = await EvalRunner().run(flake, BranchConfig(), settings)
 
     assert [job.attr for job in result.jobs] == expected_attrs
+
+
+@pytest.mark.skipif(
+    shutil.which("nix-eval-jobs") is None or shutil.which("nix") is None,
+    reason="nix-eval-jobs not available",
+)
+async def test_eval_runner_legacy_attr_prefix(tmp_path: Path) -> None:
+    """legacy_attr_prefix keeps the historic default. job prefix so
+    existing deployments retain attribute names and status contexts."""
+    flake = tmp_path / "repo"
+    flake.mkdir()
+    (flake / "flake.nix").write_text(
+        """
+        {
+          outputs = { self }: {
+            checks.x86_64-linux.native = derivation {
+              name = "native";
+              system = "x86_64-linux";
+              builder = "/bin/sh";
+              args = [ "-c" "echo native > $out" ];
+            };
+          };
+        }
+        """
+    )
+    settings = EvalSettings(
+        gc_roots_dir=tmp_path / "gcroots",
+        sandbox=False,
+        systemd_scope=False,
+        legacy_attr_prefix=True,
+    )
+
+    result = await EvalRunner().run(flake, BranchConfig(), settings)
+
+    assert [job.attr for job in result.jobs] == ["default.checks.x86_64-linux.native"]
 
 
 async def test_stderr_noise_filtered_and_warnings_reach_callback(

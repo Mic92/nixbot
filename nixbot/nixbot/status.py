@@ -357,7 +357,12 @@ def attr_status_context(
     prefix: str = "checks",
     context_prefix: str = "nixbot",
 ) -> str:
-    return f"{context_prefix}/nix-build {forge}:{project_name}#{prefix}.{attr}"
+    # Attrs already contain the configured attribute path unless they
+    # carry the legacy "default." job prefix; avoid doubling it.
+    name = (
+        attr if attr == prefix or attr.startswith(f"{prefix}.") else f"{prefix}.{attr}"
+    )
+    return f"{context_prefix}/nix-build {forge}:{project_name}#{name}"
 
 
 def effect_status_context(

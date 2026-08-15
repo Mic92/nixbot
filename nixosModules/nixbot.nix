@@ -35,6 +35,7 @@ let
     {
       build_systems = cfg.buildSystems;
       eval_systems = cfg.evalSystems;
+      legacy_attr_prefix = cfg.legacyAttrPrefix;
       url = baseUrl;
       webhook_base_url = cfg.webhookBaseUrl;
       state_dir = "/var/lib/nixbot";
@@ -255,6 +256,16 @@ in
       type = lib.types.listOf lib.types.str;
       default = [ ];
       description = "Systems to evaluate; an empty list evaluates every system exposed by the flake.";
+    };
+
+    legacyAttrPrefix = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Keep the historic "default." attribute prefix and the commit-status
+        contexts derived from it. Enable on deployments that predate its
+        removal and rely on existing required checks or attribute links.
+      '';
     };
 
     buildConcurrency = lib.mkOption {

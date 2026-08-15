@@ -29,8 +29,3 @@
 # default-branch effects. Only enable this when you trust all contributors or
 # no secrets are configured.
 #effects_on_pull_requests = false
-
-# Deprecated: evaluate `flake_dir#attribute` directly like buildbot-nix did
-# (no herculesCI/onPush jobs, no build modifiers, unprefixed attribute names).
-# Eases migration of existing repos and will be removed in a future release.
-#legacy_eval = false
