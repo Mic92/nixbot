@@ -48,7 +48,7 @@
             hx-post="/admin/repos/{{ p.id }}/toggle"
             hx-select="#main"
             hx-target="#main"
-            hx-swap="morph:outerHTML">
+            hx-swap="morph:{morphStyle:'outerHTML',ignoreActiveValue:true}">
         <input type="hidden" name="q" value="{{ q }}">
         <button class="toggle-btn">{{ label }}</button>
       </form>
