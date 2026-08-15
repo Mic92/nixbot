@@ -100,6 +100,12 @@ default.push-image
     └── default.deploy-prod [lock: prod]
 ```
 
+## nixbot.toml Configuration
+
+Effects branch configuration and allowing effects to run in PRs is configured
+via nixbot.toml in the default branch and is documented in the
+[README.md](../README.md#per-repository-configuration).
+
 ## CLI usage
 
 The `nbo effects` commands (part of the [nbo CLI](CLI.md)) can list and run
