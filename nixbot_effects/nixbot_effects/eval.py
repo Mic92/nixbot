@@ -89,10 +89,12 @@ async def effects_args(opts: EffectsOptions) -> dict[str, Any]:
 
 def _flake_url(opts: EffectsOptions, rev: str) -> str:
     """The flake URL for builtins.getFlake: the locked URL of a resolved
-    remote flake ref, otherwise a git+file:// URL of the local path."""
+    remote flake ref, otherwise a git+file:// URL of the local path.
+    ref=HEAD silences nix's "could not read HEAD ref" warning on
+    detached worktrees."""
     if opts.locked_url:
         return opts.locked_url
-    return f"git+file://{opts.path}?rev={rev}#"
+    return f"git+file://{opts.path}?ref=HEAD&rev={rev}#"
 
 
 async def _effects_expr(opts: EffectsOptions, body: str) -> str:
