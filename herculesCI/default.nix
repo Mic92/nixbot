@@ -32,7 +32,7 @@ in
             effectScript = ''
               export STEPPATH=$PWD/.step
               step ca bootstrap --ca-url https://ca.r \
-                --fingerprint 4014ea0a6012bf63493b30c241bc595a85750cb3d3c4697331fe870adcd7b597
+                --fingerprint 759759ea7dc7d635d761ce19a07bc0b3ab02212318e05b49d2b194c60414b84a
 
               ssh-keygen -t ed25519 -N "" -q -f ./id_deploy
               step ssh certificate --sign --provisioner nixbot \
