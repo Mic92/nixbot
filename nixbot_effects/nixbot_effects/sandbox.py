@@ -5,6 +5,7 @@ is pure (no subprocesses)."""
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .errors import EffectError
@@ -17,8 +18,6 @@ from .secrets import (
 )
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from .options import EffectsOptions
 
 
@@ -105,6 +104,23 @@ def id_token_audiences(drv_env: dict[str, str]) -> list[str]:
 EFFECT_CHECKOUT_ATTR = "__nixbot_effect_checkout"
 # Where the clone is mounted inside the sandbox.
 EFFECT_CHECKOUT_PATH = "/build/checkout"
+
+
+def fsroot_mounts(drv_env: dict[str, str]) -> list[str]:
+    """bwrap arguments for __hci_effect_fsroot_copy, a store path whose
+    top-level entries (bin/sh, usr/bin/env) appear in the sandbox root."""
+    root = drv_env.get("__hci_effect_fsroot_copy")
+    if not root:
+        return []
+    path = Path(root)
+    if not path.is_relative_to("/nix/store"):
+        msg = f"__hci_effect_fsroot_copy must be a store path, got {root}"
+        raise EffectError(msg)
+    return [
+        arg
+        for entry in sorted(path.iterdir())
+        for arg in ("--ro-bind", str(entry), f"/{entry.name}")
+    ]
 
 
 def effect_checkout_mount(

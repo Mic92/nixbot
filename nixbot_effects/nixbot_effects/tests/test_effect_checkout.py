@@ -8,7 +8,7 @@ import pytest
 
 from nixbot_effects import EffectError
 from nixbot_effects.run import _bubblewrap_command
-from nixbot_effects.sandbox import effect_checkout_mount
+from nixbot_effects.sandbox import effect_checkout_mount, fsroot_mounts
 
 
 def test_undeclared_checkout_is_ignored() -> None:
@@ -54,6 +54,7 @@ def test_checkout_chdir_replaces_default() -> None:
         extra_sandbox_paths=[],
         bind_mounts=[],
         checkout_args=checkout_args,
+        fsroot_args=[],
     )
     assert cmd.count("--chdir") == 1
     assert cmd[cmd.index("--chdir") + 1] == "/build/checkout"
@@ -71,6 +72,13 @@ def test_default_chdir_without_checkout() -> None:
         extra_sandbox_paths=[],
         bind_mounts=[],
         checkout_args=[],
+        fsroot_args=[],
     )
     assert cmd.count("--chdir") == 1
     assert cmd[cmd.index("--chdir") + 1] == "/build"
+
+
+def test_fsroot_mounts() -> None:
+    assert fsroot_mounts({}) == []
+    with pytest.raises(EffectError, match="store path"):
+        fsroot_mounts({"__hci_effect_fsroot_copy": "/var/evil"})

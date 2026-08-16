@@ -4,6 +4,7 @@ sandbox and execute it with a private nix daemon."""
 from __future__ import annotations
 
 import json
+import os.path
 import shutil
 import tempfile
 from contextlib import AsyncExitStack
@@ -23,6 +24,7 @@ from .proc import stream_command
 from .sandbox import (
     effect_checkout_mount,
     env_args,
+    fsroot_mounts,
     id_token_audiences,
     pass_as_file_env,
     select_mounts,
@@ -56,6 +58,7 @@ def _bubblewrap_command(  # noqa: PLR0913
     extra_sandbox_paths: list[Path],
     bind_mounts: list[tuple[str, str, bool]],
     checkout_args: list[str],
+    fsroot_args: list[str],
 ) -> list[str]:
     # Mirrors hercules-ci implementation: https://github.com/hercules-ci/hercules-ci-agent/blob/57c564298bafde509bd23f4d5862574c94be01ba/hercules-ci-agent/src/Hercules/Effect.hs#L285
     return [
@@ -106,6 +109,7 @@ def _bubblewrap_command(  # noqa: PLR0913
             for dest, source, read_only in bind_mounts
             for arg in ("--ro-bind" if read_only else "--bind", source, dest)
         ],
+        *fsroot_args,
         *checkout_args,
         "--hostname",
         "hercules-ci",
@@ -115,11 +119,28 @@ def _bubblewrap_command(  # noqa: PLR0913
     ]
 
 
+async def _realize_fsroot(drv: dict[str, Any], opts: EffectsOptions) -> None:
+    """The fsroot mounts are computed before `nix develop` realizes the
+    effect's inputs, so build the fsroot derivation up front."""
+    root = drv.get("env", {}).get("__hci_effect_fsroot_copy")
+    if not root or os.path.exists(root):  # noqa: PTH110, ASYNC240
+        return
+    name = Path(root).name.partition("-")[2] + ".drv"
+    for input_drv in drv.get("inputDrvs", {}):
+        if Path(input_drv).name.partition("-")[2] == name:
+            await stream_command(
+                nix_command("build", "--no-link", f"{input_drv}^*"),
+                log=opts.log,
+                debug=opts.debug,
+            )
+
+
 async def _run_in_sandbox(
     drv_path: str, drv: dict[str, Any], opts: EffectsOptions
 ) -> None:
     """Execute one already-instantiated effect derivation in the sandbox."""
     drv_env = drv.get("env", {})
+    await _realize_fsroot(drv, opts)
     # Copy: the hercules-ci task token is added below and must not
     # leak into opts.secrets.
     secrets = dict(select_secrets(drv, opts.secrets or {}, opts))
@@ -170,6 +191,7 @@ async def _run_in_sandbox(
                     extra_sandbox_paths=opts.extra_sandbox_paths,
                     bind_mounts=bind_mounts,
                     checkout_args=checkout_args,
+                    fsroot_args=fsroot_mounts(drv_env),
                 ),
                 "--ro-bind",
                 str(secrets_file),

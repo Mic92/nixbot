@@ -44,6 +44,10 @@
     {
       lib = import ./nix/lib.nix;
 
+      # Run nixbot via flakelet (https://github.com/Mic92/flakelet): the units
+      # are evaluated and activated on the target machine at runtime.
+      flakelets.default = import ./nix/flakelet.nix;
+
       nixosModules =
         let
           # Old entry points import the service module (its rename and
