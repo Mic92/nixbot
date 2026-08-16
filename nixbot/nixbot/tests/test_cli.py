@@ -499,3 +499,8 @@ def test_build_watch_attr_waits_for_selected_attributes(
     assert "logs/raw/slow" in out
     assert "error: boom" in out
     assert "other" not in out
+
+
+def test_print_table_empty(capsys: pytest.CaptureFixture[str]) -> None:
+    cli.print_table([], ["id", "status"])
+    assert capsys.readouterr().out == ""

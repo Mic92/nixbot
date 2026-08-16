@@ -47,6 +47,8 @@ def print_table(rows: list[dict[str, Any]], columns: list[str]) -> None:
     ]
     if sys.stdout.isatty():
         cells.insert(0, [c.upper() for c in columns])
+    if not cells:
+        return
     widths = [max(len(r[i]) for r in cells) for i in range(len(columns))]
     for row in cells:
         print(
