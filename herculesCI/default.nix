@@ -43,7 +43,7 @@ in
                 -o CertificateFile=./id_deploy-cert.pub \
                 -o UserKnownHostsFile=$PWD/known_hosts \
                 -o StrictHostKeyChecking=accept-new \
-                nixbot-deploy@eve.i deploy
+                nixbot-deploy@eve.r deploy
             '';
           }
         );
