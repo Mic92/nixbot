@@ -69,7 +69,8 @@ class TestFlakeUrl:
     def test_local_path_fallback(self, locked_url: str | None) -> None:
         opts = EffectsOptions(path=Path("/home/user/my-repo"), locked_url=locked_url)
         assert (
-            _flake_url(opts, "abc1234") == "git+file:///home/user/my-repo?rev=abc1234#"
+            _flake_url(opts, "abc1234")
+            == "git+file:///home/user/my-repo?ref=HEAD&rev=abc1234#"
         )
 
     def test_locked_url_used(self) -> None:
