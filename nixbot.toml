@@ -1,0 +1,3 @@
+# until the flakelet branch merges
+build_branches = ["flakelet"]
+effects_branches = ["flakelet"]
