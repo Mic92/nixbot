@@ -23,6 +23,7 @@ from .proc import stream_command
 from .sandbox import (
     effect_checkout_mount,
     env_args,
+    fsroot_mounts,
     id_token_audiences,
     pass_as_file_env,
     select_mounts,
@@ -56,6 +57,7 @@ def _bubblewrap_command(  # noqa: PLR0913
     extra_sandbox_paths: list[Path],
     bind_mounts: list[tuple[str, str, bool]],
     checkout_args: list[str],
+    fsroot_args: list[str],
 ) -> list[str]:
     # Mirrors hercules-ci implementation: https://github.com/hercules-ci/hercules-ci-agent/blob/57c564298bafde509bd23f4d5862574c94be01ba/hercules-ci-agent/src/Hercules/Effect.hs#L285
     return [
@@ -106,6 +108,7 @@ def _bubblewrap_command(  # noqa: PLR0913
             for dest, source, read_only in bind_mounts
             for arg in ("--ro-bind" if read_only else "--bind", source, dest)
         ],
+        *fsroot_args,
         *checkout_args,
         "--hostname",
         "hercules-ci",
@@ -170,6 +173,7 @@ async def _run_in_sandbox(
                     extra_sandbox_paths=opts.extra_sandbox_paths,
                     bind_mounts=bind_mounts,
                     checkout_args=checkout_args,
+                    fsroot_args=fsroot_mounts(drv_env),
                 ),
                 "--ro-bind",
                 str(secrets_file),

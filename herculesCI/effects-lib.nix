@@ -1,7 +1,10 @@
 # Minimal subset of hercules-ci-effects sufficient for nixbot-effects.
 # Avoids pulling hercules-ci-effects (and its transitive flake-parts input)
 # into every consumer of this flake.
-{ pkgs }:
+{
+  pkgs,
+  lib ? pkgs.lib,
+}:
 let
   # Fetches a workload-identity ID token from nixbot inside the effect
   # sandbox, see docs/WORKLOAD_IDENTITY.md. --json prints the raw
@@ -42,6 +45,12 @@ in
       passthru = { inherit after lock; };
       isEffect = true;
       __nixbot_effect_checkout = checkout;
+      # like upstream hercules-ci-effects
+      __hci_effect_fsroot_copy = pkgs.runCommand "mkEffect-root" { } ''
+        mkdir -p $out/bin $out/usr/bin
+        ln -s ${lib.getExe pkgs.bash} $out/bin/sh
+        ln -s ${pkgs.coreutils}/bin/env $out/usr/bin/env
+      '';
       secretsMap = builtins.toJSON secretsMap;
       idTokenAudiences = builtins.toJSON idTokenAudiences;
       nativeBuildInputs = [
