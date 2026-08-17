@@ -79,6 +79,17 @@ def test_default_chdir_without_checkout() -> None:
 
 
 def test_fsroot_mounts() -> None:
-    assert fsroot_mounts({}) == []
+    assert fsroot_mounts({}) == ([], {})
     with pytest.raises(EffectError, match="store path"):
         fsroot_mounts({"__hci_effect_fsroot_copy": "/var/evil"})
+
+
+def test_fsroot_mounts_marks_copy_done(tmp_path: Path) -> None:
+    root = tmp_path / "store" / "aaa-mkEffect-root"
+    (root / "bin").mkdir(parents=True)
+    args, env = fsroot_mounts(
+        {"__hci_effect_fsroot_copy": str(root)},
+        store_prefix=root.parent,
+    )
+    assert args == ["--ro-bind", str(root / "bin"), "/bin"]
+    assert env == {"__hci_effect_fsroot_copied": "1"}
