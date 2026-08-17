@@ -165,6 +165,8 @@ async def _run_in_sandbox(
             drv_env, opts.effect_checkout, etc_dir
         )
         env.update(checkout_env)
+        fsroot_args, fsroot_env = fsroot_mounts(drv_env)
+        env.update(fsroot_env)
         # Private daemon socket: each connection gets its own untrusted
         # nix-daemon, so effects cannot use trusted-user privileges.
         daemon_socket = work_dir / "daemon-socket"
@@ -191,7 +193,7 @@ async def _run_in_sandbox(
                     extra_sandbox_paths=opts.extra_sandbox_paths,
                     bind_mounts=bind_mounts,
                     checkout_args=checkout_args,
-                    fsroot_args=fsroot_mounts(drv_env),
+                    fsroot_args=fsroot_args,
                 ),
                 "--ro-bind",
                 str(secrets_file),

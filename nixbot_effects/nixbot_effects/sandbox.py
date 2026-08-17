@@ -106,21 +106,27 @@ EFFECT_CHECKOUT_ATTR = "__nixbot_effect_checkout"
 EFFECT_CHECKOUT_PATH = "/build/checkout"
 
 
-def fsroot_mounts(drv_env: dict[str, str]) -> list[str]:
-    """bwrap arguments for __hci_effect_fsroot_copy, a store path whose
-    top-level entries (bin/sh, usr/bin/env) appear in the sandbox root."""
+def fsroot_mounts(
+    drv_env: dict[str, str], store_prefix: Path | str = "/nix/store"
+) -> tuple[list[str], dict[str, str]]:
+    """bwrap arguments and environment for __hci_effect_fsroot_copy, a
+    store path whose top-level entries (bin/sh, usr/bin/env) appear in
+    the sandbox root."""
     root = drv_env.get("__hci_effect_fsroot_copy")
     if not root:
-        return []
+        return [], {}
     path = Path(root)
-    if not path.is_relative_to("/nix/store"):
+    if not path.is_relative_to(store_prefix):
         msg = f"__hci_effect_fsroot_copy must be a store path, got {root}"
         raise EffectError(msg)
-    return [
+    args = [
         arg
         for entry in sorted(path.iterdir())
         for arg in ("--ro-bind", str(entry), f"/{entry.name}")
     ]
+    # Stops the hercules-ci-effects setup hook from cp'ing onto the
+    # read-only bind mounts.
+    return args, {"__hci_effect_fsroot_copied": "1"}
 
 
 def effect_checkout_mount(
