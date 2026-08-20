@@ -67,18 +67,31 @@ SELECT count(*) AS count FROM build_attributes
 WHERE build_id = $1 AND status IN ('pending', 'building');
 
 -- name: ResetEvalForReeval :exec
--- Stale rows (e.g. failed_eval with NULL drv_path) would wedge the
--- aggregate; the re-eval rewrites them. Finished rows with a drv_path
--- are kept: their results are valid and the re-eval skips
--- already-built attributes. One atomic statement: the
--- eval_completed flag must never be observable as set while the
--- partial row set already lost entries (a concurrent build of the
--- same tree would reuse the incomplete eval).
-WITH flag AS (
-    UPDATE builds SET eval_completed = FALSE WHERE id = sqlc.arg(build_id)
+-- Flag only: an interrupted re-eval must not lose rows.
+UPDATE builds SET eval_completed = FALSE WHERE id = sqlc.arg(build_id);
+
+-- name: CommitEvalResult :exec
+-- The only place the attribute set shrinks. Refreshes non-terminal
+-- rows, prunes rows the eval no longer produced, publishes via
+-- eval_completed, atomically.
+WITH new_rows AS (
+    INSERT INTO build_attributes (build_id, attr, system, drv_path, outputs, status)
+    SELECT sqlc.arg(build_id)::bigint, u.attr, u.system, u.drv_path, u.outputs, 'pending'
+    FROM (SELECT unnest(sqlc.arg(attrs)::text[]) AS attr,
+                 unnest(sqlc.arg(systems)::text[]) AS system,
+                 unnest(sqlc.arg(drv_paths)::text[]) AS drv_path,
+                 unnest(sqlc.arg(outputs)::jsonb[]) AS outputs) u
+    ON CONFLICT (build_id, attr) DO UPDATE SET
+        system = EXCLUDED.system,
+        drv_path = EXCLUDED.drv_path,
+        outputs = EXCLUDED.outputs
+    WHERE build_attributes.status IN ('pending', 'building')
+), pruned AS (
+    DELETE FROM build_attributes WHERE build_id = sqlc.arg(build_id)
+    AND attr != ALL(sqlc.arg(attrs)::text[])
+    AND (status IN ('pending', 'building') OR drv_path IS NULL)
 )
-DELETE FROM build_attributes WHERE build_id = sqlc.arg(build_id)
-AND (status IN ('pending', 'building') OR drv_path IS NULL);
+UPDATE builds SET eval_completed = TRUE WHERE builds.id = sqlc.arg(build_id);
 
 -- name: DeleteAttributesByName :exec
 DELETE FROM build_attributes WHERE build_id = $1

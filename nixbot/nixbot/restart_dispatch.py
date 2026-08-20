@@ -133,13 +133,8 @@ async def _reeval(
             event,
             worktree_path,
         ):
-            # Stale rows (e.g. failed_eval with NULL drv_path) would
-            # wedge the aggregate. The re-eval rewrites them. Finished
-            # rows with a drv_path are kept: their results are valid
-            # and the re-eval skips already-built attributes.
-            # The flag must drop before the rows: a concurrent build
-            # of the same tree must not reuse the partial set
-            # (run_build only clears it after this window).
+            # Flag only. Rows are rewritten when the re-eval commits,
+            # so an interrupted re-eval loses nothing.
             await q.reset_eval_for_reeval(s.pool, build_id=build.id)
             await s.orchestrator.run_build(event, build, worktree_path)
     finally:

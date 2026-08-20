@@ -30,7 +30,6 @@ __all__: collections.abc.Sequence[str] = (
     "lock_build_row",
     "mark_attribute_building",
     "mark_effects_started",
-    "mark_eval_completed",
     "record_attributes",
     "set_build_status",
     "set_eval_warnings",
@@ -239,10 +238,6 @@ UPDATE builds SET effects_started = TRUE,
 WHERE id = $4::bigint AND effects_started = FALSE RETURNING id
 """
 
-MARK_EVAL_COMPLETED: typing.Final[str] = """-- name: MarkEvalCompleted :exec
-UPDATE builds SET eval_completed = TRUE WHERE id = $1
-"""
-
 RECORD_ATTRIBUTES: typing.Final[str] = """-- name: RecordAttributes :exec
 INSERT INTO build_attributes (build_id, attr, system, drv_path, outputs, status)
 SELECT $1::bigint, u.attr, u.system, u.drv_path, u.outputs, 'pending'
@@ -250,7 +245,11 @@ FROM (SELECT unnest($2::text[]) AS attr,
              unnest($3::text[]) AS system,
              unnest($4::text[]) AS drv_path,
              unnest($5::jsonb[]) AS outputs) u
-ON CONFLICT (build_id, attr) DO NOTHING
+ON CONFLICT (build_id, attr) DO UPDATE SET
+    system = EXCLUDED.system,
+    drv_path = EXCLUDED.drv_path,
+    outputs = EXCLUDED.outputs
+WHERE build_attributes.status IN ('pending', 'building')
 """
 
 SET_BUILD_STATUS: typing.Final[str] = """-- name: SetBuildStatus :exec
@@ -484,10 +483,6 @@ async def mark_effects_started(conn: ConnectionLike, *, commit_sha: str, branch:
     if row is None:
         return None
     return row[0]
-
-
-async def mark_eval_completed(conn: ConnectionLike, *, id_: int) -> None:
-    await conn.execute(MARK_EVAL_COMPLETED, id_)
 
 
 async def record_attributes(conn: ConnectionLike, *, build_id: int, attrs: collections.abc.Sequence[str], systems: collections.abc.Sequence[str], drv_paths: collections.abc.Sequence[str], outputs: collections.abc.Sequence[str]) -> None:

@@ -205,6 +205,42 @@ async def test_get_or_create_build_concurrent_no_duplicates(postgres_dsn: str) -
         assert count == 1
 
 
+async def test_commit_eval_result_atomic(pool: asyncpg.Pool) -> None:
+    """Committing an eval result refreshes non-terminal rows, prunes
+    rows the eval no longer produced and sets eval_completed, all in
+    one statement. Finished rows keep their results."""
+    project_id = await insert_project(pool, forge_repo_id="commit-eval")
+    build_id = await insert_build(pool, project_id, eval_completed=False)
+    await pool.execute(
+        "INSERT INTO build_attributes (build_id, attr, system, status, drv_path) "
+        "VALUES ($1, 'done', 'x86_64-linux', 'succeeded', '/nix/store/done.drv'), "
+        "($1, 'restarted', 'x86_64-linux', 'pending', '/nix/store/old.drv'), "
+        "($1, 'vanished', 'x86_64-linux', 'pending', '/nix/store/gone.drv'), "
+        "($1, 'broken', 'x86_64-linux', 'failed_eval', NULL)",
+        build_id,
+    )
+
+    await build_run.commit_eval_result(
+        pool, build_id, [mk_job("done"), mk_job("restarted"), mk_job("new")]
+    )
+
+    rows = {
+        r["attr"]: (r["status"], r["drv_path"])
+        for r in await pool.fetch(
+            "SELECT attr, status, drv_path FROM build_attributes WHERE build_id = $1",
+            build_id,
+        )
+    }
+    assert rows == {
+        "done": ("succeeded", "/nix/store/done.drv"),
+        "restarted": ("pending", "/nix/store/restarted.drv"),
+        "new": ("pending", "/nix/store/new.drv"),
+    }
+    assert await pool.fetchval(
+        "SELECT eval_completed FROM builds WHERE id = $1", build_id
+    )
+
+
 async def test_cancelled_build_not_reused(pool: asyncpg.Pool) -> None:
     # A cancelled build carries no verdict. Re-pushing the same tree
     # must build again instead of re-reporting "cancelled".
