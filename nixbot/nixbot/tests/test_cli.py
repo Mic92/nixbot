@@ -341,9 +341,22 @@ def test_settings_multi_host_remotes(
         Settings.load()
     git("remote", "set-url", "origin", "git@github.com:acme/widget.git")
 
-    # An explicit git config setting beats the pattern match.
-    git("config", "nixbot.url", "https://ci.other.org")
+    # git config wins over the pattern match. A trailing slash is tolerated.
+    git("config", "nixbot.url", "https://ci.other.org/")
     assert Settings.load() == Settings("https://ci.other.org", "bnix_two")
+
+
+def test_settings_url_trailing_slash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """NIXBOT_URL with a trailing slash still finds the host's token."""
+    monkeypatch.setenv("NIXBOT_URL", "https://ci.example.org/")
+    monkeypatch.delenv("NIXBOT_TOKEN", raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    hosts = tmp_path / "nixbot" / "hosts.toml"
+    hosts.parent.mkdir(parents=True)
+    hosts.write_text('["https://ci.example.org"]\ntoken = "bnix_abc"\n')
+    assert Settings.load() == Settings("https://ci.example.org", "bnix_abc")
 
 
 def test_settings_token_command(

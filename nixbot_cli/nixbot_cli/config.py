@@ -44,9 +44,14 @@ class Settings:
             )
             msg = f"no server configured: {where}"
             raise ValueError(msg)
-        entry = hosts.get(url, {})
+        # A trailing slash must still find the host's token.
+        url = url.rstrip("/")
+        entry = next(
+            (e for u, e in hosts.items() if u.rstrip("/") == url),
+            {},
+        )
         token = token or entry.get("token") or _run_token_command(entry)
-        return cls(url.rstrip("/"), token)
+        return cls(url, token)
 
 
 def _git_config(key: str) -> str | None:
