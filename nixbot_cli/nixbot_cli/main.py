@@ -93,7 +93,12 @@ def resolve_repo(client: NixbotClient, spec: str | None) -> RepoRef:
             raise UsageError(msg)
         parts = remote.rstrip("/").removesuffix(".git").replace(":", "/").split("/")
         owner, name = parts[-2], parts[-1]
-    matches = [r for r in client.repos() if r["owner"] == owner and r["name"] == name]
+    # Forge names are case-insensitive.
+    matches = [
+        r
+        for r in client.repos()
+        if r["owner"].lower() == owner.lower() and r["name"].lower() == name.lower()
+    ]
     if not matches:
         server = str(client.http.base_url) or "the server"
         msg = (
@@ -101,7 +106,8 @@ def resolve_repo(client: NixbotClient, spec: str | None) -> RepoRef:
             f"(is it hosted on another nixbot instance? see nbo auth status)"
         )
         raise UsageError(msg)
-    return RepoRef(matches[0]["forge"], owner, name)
+    # Canonical spelling: the API paths are case-sensitive.
+    return RepoRef(matches[0]["forge"], matches[0]["owner"], matches[0]["name"])
 
 
 def resolve_build(client: NixbotClient, repo: RepoRef, number: int | None) -> int:
