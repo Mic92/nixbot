@@ -397,11 +397,20 @@ def cmd_build_restart(client: NixbotClient, args: argparse.Namespace) -> int:
 def cmd_build_cancel(client: NixbotClient, args: argparse.Namespace) -> int:
     repo = resolve_repo(client, args.repo)
     number = resolve_build(client, repo, args.number)
+    detail = client.build(repo, number)
     if args.attr:
+        attrs = {a["attr"]: a["status"] for a in detail["attributes"]}
         for attr in [resolve_attr(client, repo, number, a) for a in args.attr]:
+            if attrs.get(attr) not in RUNNING_STATUSES:
+                msg = f"{attr} of build #{number} already finished ({attrs.get(attr)})"
+                raise UsageError(msg)
             client.cancel_attr(repo, number, attr)
             print(f"cancelling {attr} of build #{number}")
     else:
+        status = detail["build"]["status"]
+        if status not in RUNNING_STATUSES:
+            msg = f"build #{number} already finished ({STATUS_LABELS.get(status, status)})"
+            raise UsageError(msg)
         client.cancel_build(repo, number)
         print(f"cancelling build #{number}")
     return EXIT_OK
