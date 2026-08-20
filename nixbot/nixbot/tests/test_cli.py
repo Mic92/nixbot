@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from typing import TYPE_CHECKING
 
 import httpx
@@ -291,6 +292,16 @@ def test_settings_load(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert Settings.load() == Settings("https://ci.example.org", "bnix_abc")
     monkeypatch.setenv("NIXBOT_TOKEN", "bnix_env")
     assert Settings.load().token == "bnix_env"
+
+
+@pytest.mark.skipif(
+    sys.version_info < (3, 14), reason="argparse suggestions need Python 3.14"
+)
+def test_command_typo_suggestion(capsys: pytest.CaptureFixture[str]) -> None:
+    """A mistyped subcommand suggests the closest real one."""
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(["build", "lst"])
+    assert "'list'" in capsys.readouterr().err
 
 
 def test_settings_multi_host_remotes(

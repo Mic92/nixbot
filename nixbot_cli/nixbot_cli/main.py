@@ -518,8 +518,18 @@ def _add_json_arg(parser: argparse.ArgumentParser) -> None:
     )
 
 
+class _Parser(argparse.ArgumentParser):
+    """Suggests the closest command on typos (Python 3.14+). Subcommand
+    parsers are created with type(parser) and inherit this."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        if sys.version_info >= (3, 14):
+            kwargs.setdefault("suggest_on_error", True)
+        super().__init__(*args, **kwargs)
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="nbo", description="nixbot CI client")
+    parser = _Parser(prog="nbo", description="nixbot CI client")
     sub = parser.add_subparsers(dest="command", required=True)
 
     repo = sub.add_parser("repo", help="manage repositories").add_subparsers(
