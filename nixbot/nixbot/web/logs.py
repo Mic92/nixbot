@@ -969,9 +969,18 @@ class _LogRoutes:
         project, build, path = await self._resolve(
             request, forge, owner, name, number, attr
         )
-        attr_status = await gen.attribute_status(
-            self.ctx.pool, build_id=build["id"], attr=attr
-        )
+        # Effect statuses live in build_effects, not attributes.
+        is_effect = attr.startswith("effect:")
+        if is_effect:
+            attr_status = await maint_gen.effect_status(
+                self.ctx.pool,
+                build_id=build["id"],
+                name=attr.removeprefix("effect:"),
+            )
+        else:
+            attr_status = await gen.attribute_status(
+                self.ctx.pool, build_id=build["id"], attr=attr
+            )
         # Live pages render no snapshot: the stream replays full
         # history on connect, the client would throw it away.
         writer = self.registry.get(build["id"], attr)
@@ -994,7 +1003,7 @@ class _LogRoutes:
                 content = await asyncio.to_thread(
                     render_log_lines, data.decode(errors="replace")
                 )
-            elif attr_status in ("pending", "building"):
+            elif attr_status in ("pending", "building", "running"):
                 # The build page links queued attributes before any
                 # log exists. Show a waiting page instead of a 404.
                 waiting = True
@@ -1019,6 +1028,7 @@ class _LogRoutes:
             project=project,
             build=build,
             attr_status=attr_status,
+            is_effect=is_effect,
             attr=attr,
             content=content,
             toc=toc,

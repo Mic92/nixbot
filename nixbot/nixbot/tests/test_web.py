@@ -1608,6 +1608,31 @@ def test_effect_log_raw_text(client: WebHarness, tmp_path: Path) -> None:
     assert "activating system" in response.text
 
 
+def test_effect_log_viewer_status_icon(client: WebHarness, tmp_path: Path) -> None:
+    """The effect log page shows the same status icon as the build page."""
+
+    async def seed_effect_log() -> None:
+        ctx = client.ctx
+        ctx.state_dir = tmp_path
+        build_id = await ctx.pool.fetchval("SELECT id FROM builds WHERE number = 2")
+        log_file = effect_log_path(tmp_path, build_id, "deploy3")
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        log_file.write_bytes(
+            zstandard.ZstdCompressor().compress(b"activating system...\n")
+        )
+        await ctx.pool.execute(
+            "INSERT INTO build_effects (build_id, name, status, log_size, "
+            "finished_at) VALUES ($1, 'deploy3', 'succeeded', 42, now())",
+            build_id,
+        )
+
+    client.loop.run_until_complete(seed_effect_log())
+    text = client.get("/repos/github/acme/widget/builds/2/logs/effect:deploy3").text
+    assert "status-icon succeeded" in text
+    # Controls must target the effect endpoints, not /attrs/effect:...
+    assert "attrs/effect" not in text
+
+
 def test_effect_changes_notify_build_events(client: WebHarness) -> None:
     """The page's SSE refresh rides on build_events. Without a trigger
     on build_effects the Effects section never updates live."""

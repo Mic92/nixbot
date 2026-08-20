@@ -24,7 +24,14 @@
           </small>
         </h2>
         <div class="controls">
-          {% if can_control and attr_status in ('pending', 'building') %}
+          {% if is_effect %}
+            {% if can_control and build.status == "succeeded" and attr_status not in ("pending", "running") %}
+              <form method="post"
+                    action="{{ build_path(project, build.number) }}/effects/restart?name={{ attr | replace('effect:', '', 1) | urlencode }}">
+                <button>restart</button>
+              </form>
+            {% endif %}
+          {% elif can_control and attr_status in ('pending', 'building') %}
             <form method="post"
                   action="{{ build_path(project, build.number) }}/attrs/{{ attr | urlencode }}/cancel">
               <button>cancel</button>
@@ -123,7 +130,7 @@
   {% endif %}
   <script>
     const LIVE = {{ live | tojson }};
-    const RUNNING = {{ (attr_status in ("pending", "building")) | tojson }};
+    const RUNNING = {{ (attr_status in ("pending", "building", "running")) | tojson }};
     const log = document.getElementById("log");
     /* Failures sit at the end. Start there unless a line is linked. */
     if (log && !location.hash) log.scrollTop = log.scrollHeight;
