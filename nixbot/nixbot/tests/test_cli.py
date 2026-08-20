@@ -204,6 +204,12 @@ def test_build_restart_cancel(
     assert "cancelling build #2" in capsys.readouterr().out
     assert len(BACKEND.cancelled) == 1
 
+    # Cancelling a finished build or attribute is an error, not a no-op.
+    with pytest.raises(cli.UsageError, match="finished"):
+        run_cli(api, "build", "cancel", "1", "-R", "acme/widget")
+    with pytest.raises(cli.UsageError, match="finished"):
+        run_cli(api, "build", "cancel", "1", "-R", "acme/widget", "--attr", "bad1")
+
 
 def test_log_summary_attr_and_drv(
     harness: WebHarness,

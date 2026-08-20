@@ -363,13 +363,6 @@ def watch_attrs(
     return EXIT_BUILD_FAILED if failed else EXIT_OK
 
 
-def resolve_attr(
-    client: NixbotClient, repo: RepoRef, number: int, selector: str
-) -> str:
-    """Full attribute name for a selector (exact, substring or drv path)."""
-    return _match_attr(client.build(repo, number)["attributes"], selector)["attr"]
-
-
 def cmd_build_restart(client: NixbotClient, args: argparse.Namespace) -> int:
     repo = resolve_repo(client, args.repo)
     number = resolve_build(client, repo, args.number)
@@ -395,11 +388,21 @@ def cmd_build_restart(client: NixbotClient, args: argparse.Namespace) -> int:
 def cmd_build_cancel(client: NixbotClient, args: argparse.Namespace) -> int:
     repo = resolve_repo(client, args.repo)
     number = resolve_build(client, repo, args.number)
+    detail = client.build(repo, number)
     if args.attr:
-        for attr in [resolve_attr(client, repo, number, a) for a in args.attr]:
+        for row in [_match_attr(detail["attributes"], a) for a in args.attr]:
+            attr, status = row["attr"], row["status"]
+            if status not in RUNNING_STATUSES:
+                label = STATUS_LABELS.get(status, status)
+                msg = f"{attr} of build #{number} already finished ({label})"
+                raise UsageError(msg)
             client.cancel_attr(repo, number, attr)
             print(f"cancelling {attr} of build #{number}")
     else:
+        status = detail["build"]["status"]
+        if status not in RUNNING_STATUSES:
+            msg = f"build #{number} already finished ({STATUS_LABELS.get(status, status)})"
+            raise UsageError(msg)
         client.cancel_build(repo, number)
         print(f"cancelling build #{number}")
     return EXIT_OK
