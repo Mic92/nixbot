@@ -95,7 +95,11 @@ def resolve_repo(client: NixbotClient, spec: str | None) -> RepoRef:
         owner, name = parts[-2], parts[-1]
     matches = [r for r in client.repos() if r["owner"] == owner and r["name"] == name]
     if not matches:
-        msg = f"repository {owner}/{name} is not known to the server"
+        server = str(client.http.base_url) or "the server"
+        msg = (
+            f"repository {owner}/{name} is not known to {server} "
+            f"(is it hosted on another nixbot instance? see nbo auth status)"
+        )
         raise UsageError(msg)
     return RepoRef(matches[0]["forge"], owner, name)
 
