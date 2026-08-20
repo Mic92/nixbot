@@ -1168,6 +1168,47 @@ async def test_rerun_effects_runs_effects_again(
     assert attrs_before == attrs_after
 
 
+async def test_rerun_effects_cancels_hung_effect(
+    pool: asyncpg.Pool,
+    run_effect_build: EffectBuildRunner,
+    upstream: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #139: a restart cancels a hung effect run instead of
+    starving forever behind its work-queue dedup key."""
+    add_commit(upstream, "hung")
+    build, orchestrator, project, _ran = await run_effect_build()
+    assert build is not None
+
+    async def hung_run(ctx: object, name: str, log_write: object = None) -> bool:
+        await asyncio.Event().wait()
+        return True
+
+    monkeypatch.setattr(effects_run_mod, "run_effect", hung_run)
+    await orchestrator.rerun_effects(project, build)
+    queue = WorkQueue(pool)
+    item = await queue.claim_next()
+    assert item is not None
+    assert item.kind == "effect"
+    hung_item = asyncio.create_task(
+        orchestrator.run_effect_item(project, build, item.payload["name"])
+    )
+    await asyncio.sleep(0)
+    assert (build.id, "deploy") in orchestrator.running_effects
+
+    ran2 = patch_effects(monkeypatch)
+    await asyncio.wait_for(orchestrator.rerun_effects(project, build), timeout=5)
+    await hung_item
+    await queue.finish(item.id)
+    await drain_effect_items(orchestrator, project, pool)
+    assert ran2 == ["deploy"]
+    status = await pool.fetchval(
+        "SELECT status FROM build_effects WHERE build_id = $1 AND name = 'deploy'",
+        build.id,
+    )
+    assert status == "succeeded"
+
+
 async def test_rerun_single_effect(
     pool: asyncpg.Pool,
     make_env: EnvFactory,

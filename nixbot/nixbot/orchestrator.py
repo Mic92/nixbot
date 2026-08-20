@@ -126,6 +126,9 @@ class Orchestrator:
     attr_cancel_events: dict[tuple[int, str], asyncio.Event] = field(
         default_factory=dict
     )
+    running_effects: dict[tuple[int, str], effects_run.RunningEffect] = field(
+        default_factory=dict
+    )
     # Injectable for tests. Defaults to the real implementations.
     register_gcroot: GcrootRegistrar = gcroots.register_gcroot
     write_output_path: OutputWriter = outputs.write_output_path

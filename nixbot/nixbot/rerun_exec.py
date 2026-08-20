@@ -159,6 +159,21 @@ async def _rerun_names(
     return sorted(names)
 
 
+async def _cancel_running_effects(
+    o: Orchestrator, build_id: int, names: list[str] | None
+) -> None:
+    """A hung effect run would hold its work-queue dedup key forever,
+    starving the re-enqueued item (issue #139)."""
+    running = [
+        r
+        for (bid, name), r in o.running_effects.items()
+        if bid == build_id and (names is None or name in names)
+    ]
+    for r in running:
+        r.cancel()
+    await asyncio.gather(*(r.settled.wait() for r in running))
+
+
 async def rerun_effects(
     o: Orchestrator,
     info: RepoInfo,
@@ -183,6 +198,7 @@ async def rerun_effects(
                     extra={"build_id": build.id, "effect": only},
                 )
                 return
+        await _cancel_running_effects(o, build.id, names)
         # Reset under the claim: resetting earlier (e.g. in the
         # service) could clobber a rerun already in flight. Drop the
         # previous run's logs here too, so pending rows show no stale

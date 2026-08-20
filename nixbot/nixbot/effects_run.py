@@ -8,9 +8,11 @@ keeps the module dependency graph acyclic.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 from functools import partial
 from typing import TYPE_CHECKING
 
@@ -43,6 +45,21 @@ if TYPE_CHECKING:
     from .orchestrator import Orchestrator
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class RunningEffect:
+    """Registered for the full lifetime of a claimed effect item, so an
+    effects restart can always free the item's dedup key. `settled` is
+    set once the item released its row."""
+
+    task: asyncio.Task[None]
+    settled: asyncio.Event = field(default_factory=asyncio.Event)
+    restart: bool = False
+
+    def cancel(self) -> None:
+        self.restart = True
+        self.task.cancel()
 
 
 async def maybe_run_effects(
@@ -214,6 +231,30 @@ async def run_effect_item(
 ) -> None:
     """Dispatcher entry for one queued effect: run it, or skip it when a
     dependency did not succeed."""
+    task = asyncio.current_task()
+    if task is None:
+        msg = "run_effect_item must run inside a task"
+        raise RuntimeError(msg)
+    running = RunningEffect(task=task)
+    o.running_effects[(build.id, name)] = running
+    try:
+        await _claimed_effect_item(o, info, build, name, credentials)
+    except asyncio.CancelledError:
+        # The restart resets the row and logs after `settled`.
+        if not running.restart:
+            raise
+    finally:
+        o.running_effects.pop((build.id, name), None)
+        running.settled.set()
+
+
+async def _claimed_effect_item(
+    o: Orchestrator,
+    info: RepoInfo,
+    build: BuildRecord,
+    name: str,
+    credentials: FetchCredentials | None,
+) -> None:
     row = await q.effect_status(o.pool, build_id=build.id, name=name)
     if row != "pending":
         # Swept after a crash mid-run, or already terminal. Started
