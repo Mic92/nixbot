@@ -285,6 +285,8 @@ def test_print_table_aligns_colored_cells(
 ) -> None:
     """ANSI color codes must not count towards the column width."""
     green_ok = "\x1b[32m\u2713 ok\x1b[0m"
+    linked = "\x1b]8;;https://ci.example.org/b/1\x1b\\240\x1b]8;;\x1b\\"
+    assert strip_ansi(linked) == "240"
     cli.print_table(
         [
             {"status": green_ok, "branch": "main"},
