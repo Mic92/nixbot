@@ -8,7 +8,11 @@ import pytest
 
 from nixbot_effects import EffectError
 from nixbot_effects.run import _bubblewrap_command
-from nixbot_effects.sandbox import effect_checkout_mount, fsroot_mounts
+from nixbot_effects.sandbox import (
+    effect_checkout_mount,
+    fsroot_input_drvs,
+    fsroot_mounts,
+)
 
 
 def test_undeclared_checkout_is_ignored() -> None:
@@ -93,3 +97,36 @@ def test_fsroot_mounts_marks_copy_done(tmp_path: Path) -> None:
     )
     assert args == ["--ro-bind", str(root / "bin"), "/bin"]
     assert env == {"__hci_effect_fsroot_copied": "1"}
+
+
+FSROOT = "/nix/store/1vl52m30m4fbdaghiln6dr9xnzhpsc4l-mkEffect-root"
+FSROOT_DRV = "c000000000000000000000000000000c-mkEffect-root.drv"
+
+
+def test_fsroot_input_drvs_legacy_format() -> None:
+    drv = {
+        "env": {"__hci_effect_fsroot_copy": FSROOT},
+        "inputDrvs": {
+            f"/nix/store/{FSROOT_DRV}": {"outputs": ["out"]},
+            "/nix/store/a000000000000000000000000000000a-bash-5.3.drv": {},
+        },
+    }
+    assert fsroot_input_drvs(drv) == [f"/nix/store/{FSROOT_DRV}"]
+
+
+def test_fsroot_input_drvs_v4_format() -> None:
+    drv = {
+        "env": {"__hci_effect_fsroot_copy": FSROOT},
+        "inputs": {
+            "drvs": {
+                FSROOT_DRV: {"outputs": ["out"]},
+                "a000000000000000000000000000000a-bash-5.3.drv": {},
+            },
+            "srcs": [],
+        },
+    }
+    assert fsroot_input_drvs(drv) == [f"/nix/store/{FSROOT_DRV}"]
+
+
+def test_fsroot_input_drvs_without_fsroot() -> None:
+    assert fsroot_input_drvs({"env": {}}) == []

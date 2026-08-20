@@ -24,6 +24,7 @@ from .proc import stream_command
 from .sandbox import (
     effect_checkout_mount,
     env_args,
+    fsroot_input_drvs,
     fsroot_mounts,
     id_token_audiences,
     pass_as_file_env,
@@ -125,14 +126,12 @@ async def _realize_fsroot(drv: dict[str, Any], opts: EffectsOptions) -> None:
     root = drv.get("env", {}).get("__hci_effect_fsroot_copy")
     if not root or os.path.exists(root):  # noqa: PTH110, ASYNC240
         return
-    name = Path(root).name.partition("-")[2] + ".drv"
-    for input_drv in drv.get("inputDrvs", {}):
-        if Path(input_drv).name.partition("-")[2] == name:
-            await stream_command(
-                nix_command("build", "--no-link", f"{input_drv}^*"),
-                log=opts.log,
-                debug=opts.debug,
-            )
+    for input_drv in fsroot_input_drvs(drv):
+        await stream_command(
+            nix_command("build", "--no-link", f"{input_drv}^*"),
+            log=opts.log,
+            debug=opts.debug,
+        )
 
 
 async def _run_in_sandbox(
