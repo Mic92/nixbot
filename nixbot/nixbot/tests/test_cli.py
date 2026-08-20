@@ -123,6 +123,9 @@ def test_build_list_and_view(
     assert "1" in out
     assert "✗ failed" in out
 
+    assert run_cli(api, "build", "list", "-R", "ACME/Widget") == 0
+    capsys.readouterr()
+
     assert (
         run_cli(
             api,
