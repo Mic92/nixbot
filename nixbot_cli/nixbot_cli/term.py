@@ -38,6 +38,29 @@ def _color(text: str, code: str) -> str:
     return f"\x1b[{code}m{text}\x1b[0m"
 
 
+def bold(text: str) -> str:
+    return _color(text, "1")
+
+
+def dim(text: str) -> str:
+    return _color(text, "2")
+
+
+def cyan(text: str) -> str:
+    return _color(text, "36")
+
+
+def green(text: str) -> str:
+    return _color(text, "32")
+
+
+_SGR_RE = re.compile(r"\x1b\[[0-9;:]*m")
+
+
+def strip_ansi(text: str) -> str:
+    return _SGR_RE.sub("", text)
+
+
 def status_str(status: str, *, cached: bool = False) -> str:
     label = STATUS_LABELS.get(status, status)
     if status == "succeeded" and cached:

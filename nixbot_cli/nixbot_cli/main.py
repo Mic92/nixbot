@@ -20,9 +20,14 @@ from .term import (
     FAILED_STATUSES,
     RUNNING_STATUSES,
     STATUS_LABELS,
+    bold,
+    cyan,
+    dim,
+    green,
     sanitize_block,
     sanitize_line,
     status_str,
+    strip_ansi,
 )
 from .watch_tty import TtyWatch
 
@@ -39,6 +44,11 @@ class UsageError(Exception):
     """Bad invocation: reported on stderr, exit 2."""
 
 
+def visible_len(text: str) -> int:
+    """Column width of a cell: ANSI color codes take no space."""
+    return len(strip_ansi(text))
+
+
 def print_table(rows: list[dict[str, Any]], columns: list[str]) -> None:
     """Aligned columns like gh. The header row only appears on a TTY."""
     cells = [
@@ -46,14 +56,15 @@ def print_table(rows: list[dict[str, Any]], columns: list[str]) -> None:
         for row in rows
     ]
     if sys.stdout.isatty():
-        cells.insert(0, [c.upper() for c in columns])
+        cells.insert(0, [bold(c.upper()) for c in columns])
     if not cells:
         return
-    widths = [max(len(r[i]) for r in cells) for i in range(len(columns))]
+    widths = [max(visible_len(r[i]) for r in cells) for i in range(len(columns))]
     for row in cells:
         print(
             "  ".join(
-                cell.ljust(w) for cell, w in zip(row, widths, strict=True)
+                cell + " " * (w - visible_len(cell))
+                for cell, w in zip(row, widths, strict=True)
             ).rstrip()
         )
 
@@ -149,7 +160,8 @@ def cmd_repo_list(client: NixbotClient, args: argparse.Namespace) -> int:
         {
             **r,
             "repo": f"{r['forge']}/{r['owner']}/{r['name']}",
-            "enabled": "enabled" if r["enabled"] else "disabled",
+            "enabled": green("enabled") if r["enabled"] else dim("disabled"),
+            "url": dim(r["url"]),
         }
         for r in repos
     ]
@@ -181,7 +193,9 @@ def cmd_build_list(client: NixbotClient, args: argparse.Namespace) -> int:
         {
             **b,
             "status": status_str(b["status"]),
-            "commit": b["commit_sha"][:12],
+            "branch": cyan(b["branch"]),
+            "commit": dim(b["commit_sha"][:12]),
+            "created_at": dim(b["created_at"]),
             "pr": b["pr_number"],
         }
         for b in page["items"]
@@ -201,7 +215,10 @@ def cmd_build_view(client: NixbotClient, args: argparse.Namespace) -> int:
         print_json(detail, args.json)
         return EXIT_OK
     build, attrs = detail["build"], detail["attributes"]
-    print(f"build #{number} {repo} {build['branch']} @ {build['commit_sha'][:12]}")
+    print(
+        f"{bold(f'build #{number}')} {repo} {cyan(build['branch'])} "
+        f"@ {dim(build['commit_sha'][:12])}"
+    )
     print(f"status: {status_str(build['status'])}")
     if build.get("error"):
         print(f"error: {build['error']}")
