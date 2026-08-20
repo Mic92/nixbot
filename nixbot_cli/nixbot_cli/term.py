@@ -54,11 +54,19 @@ def green(text: str) -> str:
     return _color(text, "32")
 
 
-_SGR_RE = re.compile(r"\x1b\[[0-9;:]*m")
+def link(text: str, url: str) -> str:
+    """OSC 8 terminal hyperlink. Plain text when piped."""
+    if not sys.stdout.isatty():
+        return text
+    return f"\x1b]8;;{url}\x1b\\{text}\x1b]8;;\x1b\\"
+
+
+# SGR colors and OSC 8 hyperlink wrappers take no column space.
+_INVISIBLE_RE = re.compile(r"\x1b\[[0-9;:]*m|\x1b\]8;;[^\x07\x1b]*(?:\x07|\x1b\\)")
 
 
 def strip_ansi(text: str) -> str:
-    return _SGR_RE.sub("", text)
+    return _INVISIBLE_RE.sub("", text)
 
 
 def status_str(status: str, *, cached: bool = False) -> str:

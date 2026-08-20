@@ -24,6 +24,7 @@ from .term import (
     cyan,
     dim,
     green,
+    link,
     sanitize_block,
     sanitize_line,
     status_str,
@@ -159,7 +160,10 @@ def cmd_repo_list(client: NixbotClient, args: argparse.Namespace) -> int:
     rows = [
         {
             **r,
-            "repo": f"{r['forge']}/{r['owner']}/{r['name']}",
+            "repo": link(
+                f"{r['forge']}/{r['owner']}/{r['name']}",
+                f"{client.http.base_url}/repos/{r['forge']}/{r['owner']}/{r['name']}",
+            ),
             "enabled": green("enabled") if r["enabled"] else dim("disabled"),
             "url": dim(r["url"]),
         }
@@ -192,6 +196,7 @@ def cmd_build_list(client: NixbotClient, args: argparse.Namespace) -> int:
     rows = [
         {
             **b,
+            "number": link(str(b["number"]), client.build_url(repo, b["number"])),
             "status": status_str(b["status"]),
             "branch": cyan(b["branch"]),
             "commit": dim(b["commit_sha"][:12]),
@@ -208,7 +213,7 @@ def cmd_build_view(client: NixbotClient, args: argparse.Namespace) -> int:
     repo = resolve_repo(client, args.repo)
     number = resolve_build(client, repo, args.number)
     if args.web:
-        webbrowser.open(f"{client.http.base_url}/repos/{repo}/builds/{number}")
+        webbrowser.open(client.build_url(repo, number))
         return EXIT_OK
     detail = client.build(repo, number)
     if args.json is not None:
@@ -216,7 +221,8 @@ def cmd_build_view(client: NixbotClient, args: argparse.Namespace) -> int:
         return EXIT_OK
     build, attrs = detail["build"], detail["attributes"]
     print(
-        f"{bold(f'build #{number}')} {repo} {cyan(build['branch'])} "
+        f"{link(bold(f'build #{number}'), client.build_url(repo, number))} "
+        f"{repo} {cyan(build['branch'])} "
         f"@ {dim(build['commit_sha'][:12])}"
     )
     print(f"status: {status_str(build['status'])}")
@@ -231,7 +237,8 @@ def cmd_build_view(client: NixbotClient, args: argparse.Namespace) -> int:
     print(f"attributes: {len(attrs)}" + (f" ({summary})" if attrs else ""))
     failed = [a for a in attrs if a["status"] in FAILED_STATUSES]
     for a in failed:
-        print(f"  {status_str(a['status'])}  {a['attr']}")
+        log_url = client.log_url(repo, number, a["attr"], raw=False)
+        print(f"  {status_str(a['status'])}  {link(a['attr'], log_url)}")
     if failed:
         print(f"logs: nbo log {number} <attr> [-R {repo}]")
     return EXIT_OK

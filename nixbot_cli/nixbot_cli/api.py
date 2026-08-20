@@ -132,6 +132,10 @@ class NixbotClient:
         """Build detail: {build, attributes}."""
         return self._json("GET", f"/api/repos/{repo}/builds/{number}")
 
+    def build_url(self, repo: RepoRef, number: int) -> str:
+        base = str(self.http.base_url).rstrip("/")
+        return f"{base}/repos/{repo}/builds/{number}"
+
     def log_url(
         self, repo: RepoRef, number: int, attr: str, *, raw: bool = False
     ) -> str:
