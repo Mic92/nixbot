@@ -14,7 +14,7 @@ import zstandard
 from nixbot_cli import main as cli
 from nixbot_cli.api import NixbotClient, RepoRef
 from nixbot_cli.config import Settings
-from nixbot_cli.term import sanitize_line
+from nixbot_cli.term import sanitize_line, strip_ansi
 
 from nixbot.api_tokens import ApiTokenStore
 from nixbot.auth import AuthzConfig, User
@@ -278,6 +278,23 @@ def test_auth_status(
     assert "server: http://test" in out
     assert "bnix_sec" in out
     assert "server is reachable" in out
+
+
+def test_print_table_aligns_colored_cells(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """ANSI color codes must not count towards the column width."""
+    green_ok = "\x1b[32m\u2713 ok\x1b[0m"
+    cli.print_table(
+        [
+            {"status": green_ok, "branch": "main"},
+            {"status": "\u2717 failed", "branch": "dev"},
+        ],
+        ["status", "branch"],
+    )
+    lines = capsys.readouterr().out.splitlines()
+    stripped = [strip_ansi(line) for line in lines]
+    assert stripped[0].index("main") == stripped[1].index("dev")
 
 
 def test_settings_load(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
