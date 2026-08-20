@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from typing import TYPE_CHECKING
 
 import httpx
@@ -290,6 +291,15 @@ def test_settings_load(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert Settings.load().token == "bnix_env"
 
 
+@pytest.mark.skipif(
+    sys.version_info < (3, 14), reason="argparse suggestions need Python 3.14"
+)
+def test_command_typo_suggestion(capsys: pytest.CaptureFixture[str]) -> None:
+    """A mistyped subcommand suggests the closest real one."""
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(["build", "lst"])
+    assert "'list'" in capsys.readouterr().err
+
 
 def test_settings_multi_host_remotes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -334,6 +344,7 @@ def test_settings_multi_host_remotes(
     # An explicit git config setting beats the pattern match.
     git("config", "nixbot.url", "https://ci.other.org")
     assert Settings.load() == Settings("https://ci.other.org", "bnix_two")
+
 
 def test_settings_token_command(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
