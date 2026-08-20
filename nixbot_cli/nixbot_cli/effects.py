@@ -87,6 +87,7 @@ async def list_command(args: argparse.Namespace) -> None:
         fp=sys.stdout,
         indent=2,
     )
+    print()
 
 
 async def graph_command(args: argparse.Namespace) -> None:
@@ -103,6 +104,7 @@ async def list_schedules_command(args: argparse.Namespace) -> None:
     if args.flake_ref:
         options = await options_from_flake_ref(args.flake_ref, options)
     json.dump(await list_scheduled_effects(options), fp=sys.stdout, indent=2)
+    print()
 
 
 async def run_command(args: argparse.Namespace) -> None:
