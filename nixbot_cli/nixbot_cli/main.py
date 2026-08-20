@@ -385,9 +385,9 @@ def cmd_build_restart(client: NixbotClient, args: argparse.Namespace) -> int:
             client.restart_effects(repo, number, effect)
             print(f"restarting effect {effect} of build #{number}")
     elif args.attr:
-        attr = resolve_attr(client, repo, number, args.attr)
-        client.restart_attr(repo, number, attr)
-        print(f"restarting {attr} of build #{number}")
+        for attr in [resolve_attr(client, repo, number, a) for a in args.attr]:
+            client.restart_attr(repo, number, attr)
+            print(f"restarting {attr} of build #{number}")
     else:
         client.restart_build(repo, number)
         print(f"restarting build #{number}")
@@ -398,9 +398,9 @@ def cmd_build_cancel(client: NixbotClient, args: argparse.Namespace) -> int:
     repo = resolve_repo(client, args.repo)
     number = resolve_build(client, repo, args.number)
     if args.attr:
-        attr = resolve_attr(client, repo, number, args.attr)
-        client.cancel_attr(repo, number, attr)
-        print(f"cancelling {attr} of build #{number}")
+        for attr in [resolve_attr(client, repo, number, a) for a in args.attr]:
+            client.cancel_attr(repo, number, attr)
+            print(f"cancelling {attr} of build #{number}")
     else:
         client.cancel_build(repo, number)
         print(f"cancelling build #{number}")
@@ -567,7 +567,12 @@ def build_parser() -> argparse.ArgumentParser:
     repo_list.set_defaults(func=cmd_repo_list)
     for action in ("enable", "disable"):
         p = repo.add_parser(action, help=f"{action} CI for a repository")
-        p.add_argument("repository", metavar="[FORGE/]OWNER/NAME")
+        p.add_argument(
+            "repository",
+            nargs="?",
+            metavar="[FORGE/]OWNER/NAME",
+            help="repository (default: inferred from the git remote)",
+        )
         p.set_defaults(func=cmd_repo_set_enabled, action=action)
 
     build = sub.add_parser("build", help="inspect and control builds").add_subparsers(
@@ -625,7 +630,12 @@ running ones. Piped or in CI it prints one line per finished attribute.""",
     )
     b_restart.add_argument("number", type=int, nargs="?")
     _add_repo_arg(b_restart)
-    b_restart.add_argument("--attr", help="restart only this attribute")
+    b_restart.add_argument(
+        "--attr",
+        action="append",
+        metavar="ATTR|DRV-PATH",
+        help="restart only this attribute (repeatable)",
+    )
     b_restart.add_argument("--effects", action="store_true", help="restart the effects")
     b_restart.add_argument(
         "--effect",
@@ -637,7 +647,12 @@ running ones. Piped or in CI it prints one line per finished attribute.""",
     b_cancel = build.add_parser("cancel", help="cancel a build or attribute")
     b_cancel.add_argument("number", type=int, nargs="?")
     _add_repo_arg(b_cancel)
-    b_cancel.add_argument("--attr", help="cancel only this attribute")
+    b_cancel.add_argument(
+        "--attr",
+        action="append",
+        metavar="ATTR|DRV-PATH",
+        help="cancel only this attribute (repeatable)",
+    )
     b_cancel.set_defaults(func=cmd_build_cancel)
 
     log = sub.add_parser(

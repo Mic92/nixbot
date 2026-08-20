@@ -111,6 +111,10 @@ def test_repo_list_and_toggle(
 
     assert run_cli(api, "repo", "disable", "acme/widget") == 0
     assert "disabled" in capsys.readouterr().out
+    # Without an argument the repository comes from the CWD's git remote,
+    # like every other command.
+    with pytest.raises(cli.UsageError):
+        run_cli(api, "repo", "enable")
     assert run_cli(api, "repo", "enable", "github/acme/widget") == 0
     assert api.repo(REPO)["enabled"] is True
     capsys.readouterr()
@@ -159,6 +163,24 @@ def test_build_restart_cancel(
         == 0
     )
     assert [a for _, a in BACKEND.attr_restarts] == ["bad1"]
+    # --attr is repeatable, like watch --attr and restart --effect.
+    BACKEND.attr_restarts.clear()
+    assert (
+        run_cli(
+            api,
+            "build",
+            "restart",
+            "1",
+            "-R",
+            "acme/widget",
+            "--attr",
+            "bad1",
+            "--attr",
+            "good",
+        )
+        == 0
+    )
+    assert [a for _, a in BACKEND.attr_restarts] == ["bad1", "good"]
     assert run_cli(api, "build", "restart", "1", "-R", "acme/widget", "--effects") == 0
     BACKEND.effect_restarts.clear()
     assert (
