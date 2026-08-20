@@ -56,15 +56,19 @@ FROM n
 RETURNING *;
 
 -- name: RecordAttributes :exec
--- Batch insert of one eval's attribute rows; arrays are zipped
--- positionally by unnest.
+-- Streaming inserts while the eval runs. Rows only grow or refresh
+-- here, they shrink solely in CommitEvalResult.
 INSERT INTO build_attributes (build_id, attr, system, drv_path, outputs, status)
 SELECT sqlc.arg(build_id)::bigint, u.attr, u.system, u.drv_path, u.outputs, 'pending'
 FROM (SELECT unnest(sqlc.arg(attrs)::text[]) AS attr,
              unnest(sqlc.arg(systems)::text[]) AS system,
              unnest(sqlc.arg(drv_paths)::text[]) AS drv_path,
              unnest(sqlc.arg(outputs)::jsonb[]) AS outputs) u
-ON CONFLICT (build_id, attr) DO NOTHING;
+ON CONFLICT (build_id, attr) DO UPDATE SET
+    system = EXCLUDED.system,
+    drv_path = EXCLUDED.drv_path,
+    outputs = EXCLUDED.outputs
+WHERE build_attributes.status IN ('pending', 'building');
 
 -- name: SetEvalWarnings :exec
 UPDATE builds SET eval_warnings = sqlc.arg(warnings)::jsonb WHERE id = $1;
@@ -106,9 +110,6 @@ SET status = sqlc.arg(status),
         ELSE NULL
     END
 WHERE builds.id = sqlc.arg(id)::bigint;
-
--- name: MarkEvalCompleted :exec
-UPDATE builds SET eval_completed = TRUE WHERE id = $1;
 
 -- name: FindCompletedEval :one
 SELECT id FROM builds WHERE project_id = $1 AND tree_hash = $2

@@ -25,6 +25,7 @@ from .build_scheduler import (
 )
 from .db import BuildStatus
 from .db_gen import builds as q
+from .db_gen import maintenance as mq
 from .events import BuildResult, EvalReport
 from .executor import failure_excerpt
 from .flake_prefetch import PrefetchError, prefetch_flake_inputs
@@ -53,22 +54,49 @@ logger = logging.getLogger(__name__)
 LIVE_WARNINGS_FLUSH_INTERVAL = 2.0
 
 
+def _job_columns(
+    jobs: Sequence[NixEvalJob],
+) -> tuple[list[str], list[str], list[str], list[str]]:
+    successes = [job for job in jobs if isinstance(job, NixEvalJobSuccess)]
+    return (
+        [job.attr for job in successes],
+        [job.system for job in successes],
+        [job.drv_path for job in successes],
+        [json.dumps(job.outputs) for job in successes],
+    )
+
+
 async def record_attributes(
     pool: asyncpg.Pool, build_id: int, jobs: Sequence[NixEvalJob]
 ) -> None:
-    """Persist eval results as pending rows (with statically-known
-    outputs) so crash recovery can resume without a re-eval. Eval
-    failures are settled by the scheduler."""
-    successes = [job for job in jobs if isinstance(job, NixEvalJobSuccess)]
-    if not successes:
+    """Persist eval results as pending rows so crash recovery can
+    resume without a re-eval."""
+    attrs, systems, drv_paths, outputs = _job_columns(jobs)
+    if not attrs:
         return
     await q.record_attributes(
         pool,
         build_id=build_id,
-        attrs=[job.attr for job in successes],
-        systems=[job.system for job in successes],
-        drv_paths=[job.drv_path for job in successes],
-        outputs=[json.dumps(job.outputs) for job in successes],
+        attrs=attrs,
+        systems=systems,
+        drv_paths=drv_paths,
+        outputs=outputs,
+    )
+
+
+async def commit_eval_result(
+    pool: asyncpg.Pool, build_id: int, jobs: Sequence[NixEvalJob]
+) -> None:
+    """Publish a completed eval: the only operation that may shrink
+    the attribute set."""
+    attrs, systems, drv_paths, outputs = _job_columns(jobs)
+    await mq.commit_eval_result(
+        pool,
+        build_id=build_id,
+        attrs=attrs,
+        systems=systems,
+        drv_paths=drv_paths,
+        outputs=outputs,
     )
 
 
@@ -215,19 +243,14 @@ async def _record_eval_success(
     live_warnings: LiveWarningAggregator,
 ) -> None:
     """Persist a completed evaluation and report it to the forge."""
-    # Idempotent backstop for the streaming inserts during eval;
-    # pending rows are what crash recovery resumes from. The
-    # scheduler drops unsupported systems. Their pending rows
-    # would never turn terminal, so don't record them.
+    # The scheduler drops unsupported systems, their rows would stay
+    # pending forever.
     buildable = [
         job
         for job in jobs
         if isinstance(job, NixEvalJobSuccess) and job.system in o.config.build_systems
     ]
-    await record_attributes(o.pool, build.id, buildable)
-    # The full eval result is recorded in build_attributes. A later
-    # build of the same tree may reuse it instead of re-evaluating.
-    await q.mark_eval_completed(o.pool, id_=build.id)
+    await commit_eval_result(o.pool, build.id, buildable)
     await o.reporter.eval_finished(
         event,
         build,
@@ -426,8 +449,7 @@ async def _try_reuse_eval(
     reused = await _reusable_eval_jobs(o, build)
     if reused is None:
         return False
-    await record_attributes(o.pool, build.id, reused)
-    await q.mark_eval_completed(o.pool, id_=build.id)
+    await commit_eval_result(o.pool, build.id, reused)
     await db.set_build_status(o.pool, build.id, BuildStatus.BUILDING)
     await o.reporter.eval_finished(event, build, EvalReport(success=True, jobs=reused))
     # cache_failures=False: see _ReadOnlyFailedBuildCache.

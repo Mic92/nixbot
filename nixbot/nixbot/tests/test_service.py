@@ -431,13 +431,53 @@ async def test_restart_failed_eval_attribute_reevaluates(
     await asyncio.gather(*service._tasks)  # noqa: SLF001
 
     assert reevals == [build_id]
-    # Stale NULL-drv rows are cleared so the re-eval result is
-    # authoritative.
+    # The stale row survives until a successful eval commits its
+    # result. Interrupted re-evals must never lose rows.
     count = await pool.fetchval(
         "SELECT count(*) FROM build_attributes WHERE build_id = $1",
         build_id,
     )
-    assert count == 0
+    assert count == 1
+
+
+async def test_interrupted_reeval_keeps_attribute_rows(
+    service: CIService, git_repo: tuple[Path, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An attribute restart falls back to re-evaluation when the stored
+    derivations were garbage-collected. A re-eval that never completes
+    (cancel, crash) must not lose any attribute rows."""
+    repo, sha = git_repo
+
+    async def all_gcd(paths: list[str]) -> set[str]:
+        return set()
+
+    monkeypatch.setattr("nixbot.restart_dispatch.check_store_paths", all_gcd)
+
+    pool = service.pool
+    project_id = await seed_project(pool, str(repo))
+    build_id = await insert_build(
+        pool, project_id, commit_sha=sha, status="failed", eval_completed=True
+    )
+    await pool.execute(
+        "INSERT INTO build_attributes (build_id, attr, system, status, drv_path) "
+        "VALUES ($1, 'ok', 'x86_64-linux', 'succeeded', '/nix/store/aaa.drv'), "
+        "($1, 'bad', 'x86_64-linux', 'failed', '/nix/store/bbb.drv')",
+        build_id,
+    )
+
+    capture_run_build(service)  # the re-eval never records a result
+    await service.restart_attribute(build_id, "bad")
+    await service.drain_work()
+    await asyncio.gather(*service._tasks)  # noqa: SLF001
+
+    attrs = {
+        r["attr"]: r["status"]
+        for r in await pool.fetch(
+            "SELECT attr, status FROM build_attributes WHERE build_id = $1", build_id
+        )
+    }
+    assert set(attrs) == {"ok", "bad"}
+    assert attrs["ok"] == "succeeded"
 
 
 async def test_restart_cancelled_build_reschedules_attributes(

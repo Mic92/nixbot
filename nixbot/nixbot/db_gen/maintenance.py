@@ -17,6 +17,7 @@ __all__: collections.abc.Sequence[str] = (
     "cancel_build",
     "cleanup_old_rows",
     "commit_built",
+    "commit_eval_result",
     "count_unfinished_attributes",
     "delete_attributes_by_name",
     "delete_effects_by_name",
@@ -148,6 +149,27 @@ COMMIT_BUILT: typing.Final[str] = """-- name: CommitBuilt :one
 SELECT 1 AS one FROM builds WHERE project_id = $1 AND commit_sha = $2 LIMIT 1
 """
 
+COMMIT_EVAL_RESULT: typing.Final[str] = """-- name: CommitEvalResult :exec
+WITH new_rows AS (
+    INSERT INTO build_attributes (build_id, attr, system, drv_path, outputs, status)
+    SELECT $1::bigint, u.attr, u.system, u.drv_path, u.outputs, 'pending'
+    FROM (SELECT unnest($2::text[]) AS attr,
+                 unnest($3::text[]) AS system,
+                 unnest($4::text[]) AS drv_path,
+                 unnest($5::jsonb[]) AS outputs) u
+    ON CONFLICT (build_id, attr) DO UPDATE SET
+        system = EXCLUDED.system,
+        drv_path = EXCLUDED.drv_path,
+        outputs = EXCLUDED.outputs
+    WHERE build_attributes.status IN ('pending', 'building')
+), pruned AS (
+    DELETE FROM build_attributes WHERE build_id = $1
+    AND attr != ALL($2::text[])
+    AND (status IN ('pending', 'building') OR drv_path IS NULL)
+)
+UPDATE builds SET eval_completed = TRUE WHERE builds.id = $1
+"""
+
 COUNT_UNFINISHED_ATTRIBUTES: typing.Final[str] = """-- name: CountUnfinishedAttributes :one
 SELECT count(*) AS count FROM build_attributes
 WHERE build_id = $1 AND status IN ('pending', 'building')
@@ -236,11 +258,7 @@ WHERE build_id = $1
 """
 
 RESET_EVAL_FOR_REEVAL: typing.Final[str] = """-- name: ResetEvalForReeval :exec
-WITH flag AS (
-    UPDATE builds SET eval_completed = FALSE WHERE id = $1
-)
-DELETE FROM build_attributes WHERE build_id = $1
-AND (status IN ('pending', 'building') OR drv_path IS NULL)
+UPDATE builds SET eval_completed = FALSE WHERE id = $1
 """
 
 RUNNING_BUILD_IDS: typing.Final[str] = """-- name: RunningBuildIds :many
@@ -345,6 +363,10 @@ async def commit_built(conn: ConnectionLike, *, project_id: int, commit_sha: str
     if row is None:
         return None
     return row[0]
+
+
+async def commit_eval_result(conn: ConnectionLike, *, build_id: int, attrs: collections.abc.Sequence[str], systems: collections.abc.Sequence[str], drv_paths: collections.abc.Sequence[str], outputs: collections.abc.Sequence[str]) -> None:
+    await conn.execute(COMMIT_EVAL_RESULT, build_id, attrs, systems, drv_paths, outputs)
 
 
 async def count_unfinished_attributes(conn: ConnectionLike, *, build_id: int) -> int | None:
