@@ -30,6 +30,38 @@ token = "bnix_..."
 
 Read-only commands work without a token on public instances.
 
+If you use more than one nixbot server, tell `nbo` which repositories belong to
+which server. Add a `remotes` list to each server entry. When you run `nbo`
+inside a checkout, it looks at the URL of the `origin` remote and picks the
+first server whose pattern matches:
+
+```toml
+["https://ci.example.org"]
+token = "bnix_..."
+remotes = ["github.com/acme/*"]
+
+["https://ci.other.org"]
+remotes = ["git.other.org/*"]
+```
+
+Patterns are shell-style wildcards matched against the remote URL in the form
+`host/owner/repo`, so both `git@github.com:acme/widget.git` and
+`https://github.com/acme/widget` match `github.com/acme/*`.
+
+You can also assign a single checkout to a server directly, which takes
+precedence over the patterns:
+
+```console
+git config nixbot.url https://ci.example.org
+```
+
+When several settings are present, `nbo` uses the first of:
+
+1. the `NIXBOT_URL` environment variable
+2. `git config nixbot.url`
+3. a `remotes` pattern match
+4. the only server in `hosts.toml`, if there is just one
+
 ### API tokens
 
 Restarting or cancelling builds and enabling repositories require an API token.

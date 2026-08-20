@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import fnmatch
 import os
+import re
 import shlex
 import subprocess
 from dataclasses import dataclass
@@ -23,22 +25,65 @@ class Settings:
 
     @classmethod
     def load(cls) -> Settings:
-        """NIXBOT_URL/NIXBOT_TOKEN override hosts.toml. Without a URL the
-        config's single host is used."""
+        """Server: NIXBOT_URL, `git config nixbot.url`, the hosts.toml
+        entry whose `remotes` match the origin URL, or the only entry.
+        NIXBOT_TOKEN overrides the token from hosts.toml."""
         url = os.environ.get("NIXBOT_URL")
         token = os.environ.get("NIXBOT_TOKEN")
         hosts: dict[str, dict] = {}
         path = config_path()
         if path.exists():
             hosts = tomllib.loads(path.read_text())
+        url = url or _select_host(hosts)
         if not url:
-            if len(hosts) != 1:
-                msg = f"no server configured: set NIXBOT_URL or add one host to {path}"
-                raise ValueError(msg)
-            url = next(iter(hosts))
+            remote = _origin_remote()
+            where = (
+                f"no host in {path} has a remotes pattern matching {remote!r}"
+                if remote and hosts
+                else f"set NIXBOT_URL, git config nixbot.url, or a host in {path}"
+            )
+            msg = f"no server configured: {where}"
+            raise ValueError(msg)
         entry = hosts.get(url, {})
         token = token or entry.get("token") or _run_token_command(entry)
         return cls(url.rstrip("/"), token)
+
+
+def _git_config(key: str) -> str | None:
+    try:
+        out = subprocess.run(
+            ["git", "config", "--get", key], capture_output=True, text=True, check=False
+        )
+    except OSError:
+        return None
+    return out.stdout.strip() or None
+
+
+def _origin_remote() -> str | None:
+    """The origin URL reduced to "host/owner/repo", so one pattern
+    covers SSH and HTTPS remotes."""
+    remote = _git_config("remote.origin.url")
+    if not remote:
+        return None
+    remote = re.sub(r"^\w+://|^\w+@", "", remote)
+    return remote.replace(":", "/").removesuffix(".git")
+
+
+def _select_host(hosts: dict[str, dict]) -> str | None:
+    if url := _git_config("nixbot.url"):
+        return url
+    if len(hosts) == 1:
+        return next(iter(hosts))
+    remote = _origin_remote()
+    if not remote:
+        return None
+    for url, entry in hosts.items():
+        if any(
+            fnmatch.fnmatch(remote.lower(), pat.lower())
+            for pat in entry.get("remotes", [])
+        ):
+            return url
+    return None
 
 
 def _run_token_command(entry: dict) -> str | None:

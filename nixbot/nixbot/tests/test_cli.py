@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from typing import TYPE_CHECKING
 
 import httpx
@@ -288,6 +289,50 @@ def test_settings_load(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("NIXBOT_TOKEN", "bnix_env")
     assert Settings.load().token == "bnix_env"
 
+
+def test_settings_multi_host_remotes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With several servers in hosts.toml, the one whose `remotes`
+    pattern matches the checkout's origin URL is used. A `git config
+    nixbot.url` setting in the checkout takes precedence."""
+    monkeypatch.delenv("NIXBOT_URL", raising=False)
+    monkeypatch.delenv("NIXBOT_TOKEN", raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    hosts = tmp_path / "nixbot" / "hosts.toml"
+    hosts.parent.mkdir(parents=True)
+    hosts.write_text(
+        '["https://ci.example.org"]\ntoken = "bnix_one"\n'
+        'remotes = ["github.com/acme/*"]\n'
+        '["https://ci.other.org"]\ntoken = "bnix_two"\n'
+    )
+
+    def git(*args: str) -> None:
+        subprocess.run(["git", "-C", str(tmp_path), *args], check=True)  # noqa: S603
+
+    git("init", "-q")
+    monkeypatch.chdir(tmp_path)
+
+    # No remote to match against.
+    with pytest.raises(ValueError, match="no server configured"):
+        Settings.load()
+
+    git("remote", "add", "origin", "git@github.com:acme/widget.git")
+    assert Settings.load() == Settings("https://ci.example.org", "bnix_one")
+
+    # Forge names are case-insensitive.
+    git("remote", "set-url", "origin", "https://github.com/Acme/Widget")
+    assert Settings.load() == Settings("https://ci.example.org", "bnix_one")
+
+    # The error names the unmatched remote.
+    git("remote", "set-url", "origin", "https://example.com/nobody/nothing")
+    with pytest.raises(ValueError, match=r"example\.com/nobody/nothing"):
+        Settings.load()
+    git("remote", "set-url", "origin", "git@github.com:acme/widget.git")
+
+    # An explicit git config setting beats the pattern match.
+    git("config", "nixbot.url", "https://ci.other.org")
+    assert Settings.load() == Settings("https://ci.other.org", "bnix_two")
 
 def test_settings_token_command(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
