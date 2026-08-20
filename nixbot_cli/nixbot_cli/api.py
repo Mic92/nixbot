@@ -20,8 +20,9 @@ if TYPE_CHECKING:
 class ApiError(Exception):
     """Non-2xx response from the nixbot API."""
 
-    def __init__(self, status: int, detail: str) -> None:
-        super().__init__(f"HTTP {status}: {detail}")
+    def __init__(self, status: int, detail: str, request: str = "") -> None:
+        suffix = f" ({request})" if request else ""
+        super().__init__(f"HTTP {status}: {detail}{suffix}")
         self.status = status
         self.detail = detail
 
@@ -82,7 +83,7 @@ class NixbotClient:
                 detail = response.json().get("detail", response.text)
             except ValueError:
                 detail = response.text
-            raise ApiError(response.status_code, str(detail))
+            raise ApiError(response.status_code, str(detail), f"{method} {path}")
         return response
 
     def _json(
