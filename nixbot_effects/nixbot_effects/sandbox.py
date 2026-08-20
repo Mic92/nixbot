@@ -106,6 +106,21 @@ EFFECT_CHECKOUT_ATTR = "__nixbot_effect_checkout"
 EFFECT_CHECKOUT_PATH = "/build/checkout"
 
 
+def fsroot_input_drvs(drv: dict) -> list[str]:
+    """Input drvs producing __hci_effect_fsroot_copy; handles both the
+    legacy inputDrvs map and Nix >= 2.33 inputs.drvs (basename keys)."""
+    root = drv.get("env", {}).get("__hci_effect_fsroot_copy")
+    if not root:
+        return []
+    name = Path(root).name.partition("-")[2] + ".drv"
+    inputs = drv.get("inputDrvs") or drv.get("inputs", {}).get("drvs", {})
+    return [
+        drv_path if drv_path.startswith("/") else f"/nix/store/{drv_path}"
+        for drv_path in inputs
+        if Path(drv_path).name.partition("-")[2] == name
+    ]
+
+
 def fsroot_mounts(
     drv_env: dict[str, str], store_prefix: Path | str = "/nix/store"
 ) -> tuple[list[str], dict[str, str]]:
