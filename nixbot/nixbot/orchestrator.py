@@ -98,13 +98,14 @@ class EvalRunnerLike(Protocol):
 class AttributeExecutor(Protocol):
     """What the orchestrator needs from executor.NixBuildExecutor."""
 
-    async def build_attribute(
+    async def build_attribute(  # noqa: PLR0913
         self,
         build_key: object,
         job: NixEvalJobSuccess,
         log_writer: LogWriter,
         cwd: Path,
         cancel_event: asyncio.Event | None = None,
+        on_start: Callable[[], Awaitable[bool]] | None = None,
     ) -> BuildOutcome: ...
 
 

@@ -43,7 +43,7 @@ from .gcroots import safe_attr_filename
 from .logstore import LogContainerWriter
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable
+    from collections.abc import AsyncIterator, Awaitable, Callable
     from pathlib import Path
 
     from .models import NixEvalJobSuccess
@@ -789,16 +789,20 @@ class NixBuildExecutor:
         self.queue = queue
         self.settings = settings
 
-    async def build_attribute(
+    async def build_attribute(  # noqa: PLR0913
         self,
         build_key: object,
         job: NixEvalJobSuccess,
         log_writer: LogWriter,
         cwd: Path,
         cancel_event: asyncio.Event | None = None,
+        on_start: Callable[[], Awaitable[bool]] | None = None,
     ) -> BuildOutcome:
         """Run `nix build` for one attribute, with one automatic retry
-        on transient errors (suppressed when cancellation is requested)."""
+        on transient errors (suppressed when cancellation is requested).
+
+        on_start fires once a slot is acquired, right before nix runs;
+        a False return (row already terminal) skips the build."""
         cancel_event = cancel_event or asyncio.Event()
         if cancel_event.is_set():
             return BuildOutcome.cancelled
@@ -833,6 +837,8 @@ class NixBuildExecutor:
             return BuildOutcome.cancelled
         await acquire_task
         try:
+            if on_start is not None and not await on_start():
+                return BuildOutcome.cancelled
             outcome, transient = await self._run_once(
                 job, log_writer, cwd, cancel_event
             )

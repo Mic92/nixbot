@@ -319,6 +319,46 @@ async def test_executor_timeout(tmp_path: Path, fake_nix: Path) -> None:
     assert b"timed out" in log
 
 
+async def test_executor_on_start_fires_after_slot_acquired(
+    tmp_path: Path, fake_nix: Path
+) -> None:
+    """on_start must not fire while the job is queued for a slot, so
+    the DB started_at stamp (and the user-visible duration) excludes
+    queue wait."""
+    fake_nix.write_text("hang")
+    executor = NixBuildExecutor(FairScheduler(1), BuildSettings(log_dir=tmp_path))
+    first_writer = LogWriter(path=tmp_path / "first.zst")
+    first_cancel = asyncio.Event()
+    first = asyncio.create_task(
+        executor.build_attribute("a", mk_job(), first_writer, tmp_path, first_cancel)
+    )
+    await asyncio.sleep(0.2)
+
+    started = asyncio.Event()
+
+    async def on_start() -> bool:
+        fake_nix.write_text("ok")
+        started.set()
+        return True
+
+    second_writer = LogWriter(path=tmp_path / "second.zst")
+    second = asyncio.create_task(
+        executor.build_attribute(
+            "b", mk_job(), second_writer, tmp_path, on_start=on_start
+        )
+    )
+    await asyncio.sleep(0.2)
+    assert not started.is_set()
+
+    first_cancel.set()
+    outcome = await asyncio.wait_for(second, timeout=5)
+    assert started.is_set()
+    assert outcome == BuildOutcome.success
+    assert await asyncio.wait_for(first, timeout=5) == BuildOutcome.cancelled
+    await first_writer.close()
+    await second_writer.close()
+
+
 async def test_executor_cancel(tmp_path: Path, fake_nix: Path) -> None:
     fake_nix.write_text("hang")
 
