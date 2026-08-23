@@ -23,6 +23,21 @@ let
     else
       pkgs.boost;
 
+  # nix 2.35 eval perf regression: srcToStore cache not populated on
+  # fetcher cache hits (NixOS/nix#16190, fixed after 2.35.2). Applied
+  # only for nix < 2.36; patch fails if already included upstream.
+  srcToStoreCachePatch = pkgs.fetchpatch {
+    url = "https://github.com/NixOS/nix/commit/30820a54b112f4842bdb7df28b61b2a607e54033.patch";
+    hash = "sha256-Yvn9a059LvW9FkSGH20LRPlBIhmVqQxGMBXke+hxkgs=";
+  };
+
+  patchIfNeeded =
+    components:
+    if pkgs.lib.versionOlder components.version "2.36" then
+      components.appendPatches [ srcToStoreCachePatch ]
+    else
+      components;
+
   # polyfill for nixpkgs without nix 2.35 (e.g. stable release branches)
   nixComponents_2_35 =
     pkgs.nixVersions.nixComponents_2_35 or (
@@ -42,16 +57,16 @@ let
 in
 (pkgs.nix-eval-jobs.override {
   # nix-eval-jobs 2.35.x requires Nix >= 2.35 (tryEnterPrivateMountNamespace)
-  nixComponents = nixComponents_2_35;
+  nixComponents = patchIfNeeded nixComponents_2_35;
 }).overrideAttrs
   (
     finalAttrs: _prevAttrs: {
-      version = "2.35.1";
+      version = "2.35.2";
       src = fetchFromGitHub {
         owner = "NixOS";
         repo = "nix-eval-jobs";
         tag = "v${finalAttrs.version}";
-        hash = "sha256-EFJnN35L7UieL8zV8qPrpqfdfzztWksY8JYuXF+mr9o=";
+        hash = "sha256-qHxk1wVKqz/UMtVC14ugkhySbqYcRQbwobyeO/fhAf0=";
       };
     }
   )
