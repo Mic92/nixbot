@@ -607,20 +607,18 @@ class _OrchestratorExecutor:
             return BuildOutcome.failure_no_cache
 
     async def _build_inner(self, job: NixEvalJobSuccess) -> BuildOutcome:
-        # Flip to 'building' and stamp started_at so the web UI can
-        # distinguish running attributes from queued ones. Returns no
-        # row when the attribute is already terminal.
-        marked = await q.mark_attribute_building(
-            self.o.pool,
-            build_id=self.build_record.id,
-            attr=job.attr,
-            system=job.system,
-            drv_path=job.drv_path,
-        )
-        if marked is None:
-            # Cancelled externally while waiting on dependencies: do
-            # not resurrect the row by building it anyway.
-            return BuildOutcome.cancelled
+        # Runs after slot acquisition so started_at (and the shown
+        # duration) excludes queue wait. False: row already terminal.
+        async def mark_building() -> bool:
+            marked = await q.mark_attribute_building(
+                self.o.pool,
+                build_id=self.build_record.id,
+                attr=job.attr,
+                system=job.system,
+                drv_path=job.drv_path,
+            )
+            return marked is not None
+
         # Per-attribute cancellation: the executor watches one event, so
         # mirror the build-level cancel into the attribute's own event.
         attr_cancel = asyncio.Event()
@@ -639,6 +637,7 @@ class _OrchestratorExecutor:
                     writer,
                     self.worktree_path,
                     attr_cancel,
+                    on_start=mark_building,
                 )
                 if outcome == BuildOutcome.success and self.o.config.post_build_steps:
                     props = build_props(self.event, job)

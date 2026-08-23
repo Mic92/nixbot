@@ -106,14 +106,17 @@ class FakeExecutor:
     gate: asyncio.Event | None = None
     started: asyncio.Event = field(default_factory=asyncio.Event)
 
-    async def build_attribute(
+    async def build_attribute(  # noqa: PLR0913
         self,
         build_key: object,
         job: NixEvalJobSuccess,
         log_writer: LogWriter,
         cwd: Path,
         cancel_event: asyncio.Event | None = None,
+        on_start: Callable[[], Awaitable[bool]] | None = None,
     ) -> BuildOutcome:
+        if on_start is not None and not await on_start():
+            return BuildOutcome.cancelled
         self.built.append(job.attr)
         self.started.set()
         if self.gate is not None:
