@@ -262,21 +262,22 @@ WITH failed_effects AS (
 )
 UPDATE builds
 SET status = $1,
-    error = COALESCE($2, error),
-    -- A fresh eval must not show the previous attempt's streamed
-    -- warnings.
-    eval_warnings = CASE
-        WHEN $1 = 'evaluating' THEN NULL
-        ELSE eval_warnings
+    -- Every run starts at pending. Drop the previous attempt's
+    -- error, warnings, job set and duration.
+    error = CASE
+        WHEN $1 = 'pending' THEN NULL
+        ELSE COALESCE($2, error)
     END,
-    -- A fresh eval invalidates the recorded job set until it
-    -- completes again.
+    eval_warnings = CASE
+        WHEN $1 = 'pending' THEN NULL ELSE eval_warnings
+    END,
     eval_completed = CASE
-        WHEN $1 = 'evaluating' THEN FALSE
-        ELSE eval_completed
+        WHEN $1 = 'pending' THEN FALSE ELSE eval_completed
     END,
     started_at = CASE
-        WHEN started_at IS NULL AND $1 <> 'pending' THEN now()
+        WHEN $1 = 'pending' THEN NULL
+        WHEN started_at IS NULL
+            AND $1 IN ('evaluating', 'building') THEN now()
         ELSE started_at
     END,
     -- Invariant: non-terminal states never carry finished_at, else

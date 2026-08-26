@@ -218,3 +218,23 @@ class WebQueries:
         computed before any visibility filter so every viewer sees the
         same position, and NULL for already-running builds."""
         return _dicts(await gen.web_queue(self.pool, project_ids=project_ids))
+
+    async def attach_eval_queue(
+        self, builds: list[dict[str, Any]], project_ids: list[int] | None = None
+    ) -> None:
+        """Set build["eval_queue"]. Pending builds get their queue
+        position and the builds holding eval slots (visibility
+        filtered). Other builds get None."""
+        for b in builds:
+            b["eval_queue"] = None
+        pending = [b for b in builds if b["status"] == "pending"]
+        if not pending:
+            return
+        queue = await self.queue(project_ids)
+        positions = {q["id"]: q["queue_position"] for q in queue}
+        blocked_by = [q for q in queue if q["status"] == "evaluating"]
+        for b in pending:
+            b["eval_queue"] = {
+                "position": positions.get(b["id"]),
+                "blocked_by": blocked_by,
+            }

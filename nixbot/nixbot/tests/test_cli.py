@@ -56,6 +56,8 @@ async def postgres_dsn(postgres_dsn: str) -> str:
         await insert_build(
             pool, project_id, number=2, status="building", branch="pr", started=True
         )
+        await insert_build(pool, project_id, number=3, status="evaluating", branch="q")
+        await insert_build(pool, project_id, number=4, status="pending", branch="q")
         await pool.execute(
             """
             INSERT INTO build_attributes (build_id, attr, system, status, error, drv_path)
@@ -152,6 +154,11 @@ def test_build_list_and_view(
     assert "build #1" in out
     assert "1 failed" in out
     assert "bad1" in out
+
+    for argv in (("view", "4"), ("list", "--status", "pending")):
+        assert run_cli(api, "build", *argv, "-R", "acme/widget") == 0
+        out = capsys.readouterr().out
+        assert "pending · queued for eval (pos 1) behind acme/widget#3" in out
 
 
 def test_build_restart_cancel(

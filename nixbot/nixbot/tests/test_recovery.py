@@ -267,7 +267,7 @@ async def test_failed_rebuild_settles_pending_effects(pool: asyncpg.Pool) -> Non
     assert "did not succeed" in row["error"]
 
 
-async def test_eval_start_clears_stale_eval_warnings(pool: asyncpg.Pool) -> None:
+async def test_rerun_clears_stale_eval_warnings(pool: asyncpg.Pool) -> None:
     """A re-run build must not show the previous attempt's warnings."""
 
     build_id = await make_build(pool, "lw-rerun")
@@ -280,7 +280,7 @@ async def test_eval_start_clears_stale_eval_warnings(pool: asyncpg.Pool) -> None
     assert await pool.fetchval(
         "SELECT eval_warnings FROM builds WHERE id = $1", build_id
     )
-    await db.set_build_status(pool, build_id, "evaluating")
+    await db.set_build_status(pool, build_id, "pending")
     assert (
         await pool.fetchval("SELECT eval_warnings FROM builds WHERE id = $1", build_id)
         is None

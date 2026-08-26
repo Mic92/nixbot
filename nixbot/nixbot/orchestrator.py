@@ -144,6 +144,11 @@ class Orchestrator:
     task_tokens: TaskTokens = field(default_factory=TaskTokens)
     # Second contexts attached to an in-flight build, for status fan-out.
     linked_events: dict[int, list[ChangeEvent]] = field(default_factory=dict)
+    # Caps concurrent evaluations to bound memory use.
+    eval_slots: asyncio.Semaphore = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.eval_slots = asyncio.Semaphore(self.config.eval_concurrency)
 
     def _log_dir(self, build_id: int) -> Path:
         return build_log_dir(self.config.state_dir, build_id)

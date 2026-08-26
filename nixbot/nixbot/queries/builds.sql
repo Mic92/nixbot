@@ -86,21 +86,22 @@ WITH failed_effects AS (
 )
 UPDATE builds
 SET status = sqlc.arg(status),
-    error = COALESCE(sqlc.narg(error), error),
-    -- A fresh eval must not show the previous attempt's streamed
-    -- warnings.
-    eval_warnings = CASE
-        WHEN sqlc.arg(status) = 'evaluating' THEN NULL
-        ELSE eval_warnings
+    -- Every run starts at pending. Drop the previous attempt's
+    -- error, warnings, job set and duration.
+    error = CASE
+        WHEN sqlc.arg(status) = 'pending' THEN NULL
+        ELSE COALESCE(sqlc.narg(error), error)
     END,
-    -- A fresh eval invalidates the recorded job set until it
-    -- completes again.
+    eval_warnings = CASE
+        WHEN sqlc.arg(status) = 'pending' THEN NULL ELSE eval_warnings
+    END,
     eval_completed = CASE
-        WHEN sqlc.arg(status) = 'evaluating' THEN FALSE
-        ELSE eval_completed
+        WHEN sqlc.arg(status) = 'pending' THEN FALSE ELSE eval_completed
     END,
     started_at = CASE
-        WHEN started_at IS NULL AND sqlc.arg(status) <> 'pending' THEN now()
+        WHEN sqlc.arg(status) = 'pending' THEN NULL
+        WHEN started_at IS NULL
+            AND sqlc.arg(status) IN ('evaluating', 'building') THEN now()
         ELSE started_at
     END,
     -- Invariant: non-terminal states never carry finished_at, else

@@ -25,6 +25,7 @@ from .term import (
     dim,
     green,
     link,
+    queue_note,
     sanitize_block,
     sanitize_line,
     status_str,
@@ -197,7 +198,7 @@ def cmd_build_list(client: NixbotClient, args: argparse.Namespace) -> int:
         {
             **b,
             "number": link(str(b["number"]), client.build_url(repo, b["number"])),
-            "status": status_str(b["status"]),
+            "status": status_str(b["status"]) + queue_note(b),
             "branch": cyan(b["branch"]),
             "commit": dim(b["commit_sha"][:12]),
             "created_at": dim(b["created_at"]),
@@ -225,7 +226,7 @@ def cmd_build_view(client: NixbotClient, args: argparse.Namespace) -> int:
         f"{repo} {cyan(build['branch'])} "
         f"@ {dim(build['commit_sha'][:12])}"
     )
-    print(f"status: {status_str(build['status'])}")
+    print(f"status: {status_str(build['status'])}{queue_note(build)}")
     if build.get("error"):
         print(f"error: {build['error']}")
     counts: dict[str, int] = {}
@@ -284,6 +285,7 @@ def watch_build(client: NixbotClient, repo: RepoRef, number: int) -> int:
     cursor: tuple[str, int] | None = None
     finished = 0
     events: Iterator[dict] | None = None
+    last_note = None
     while True:
         delta = client.finished_attrs(
             repo,
@@ -300,6 +302,10 @@ def watch_build(client: NixbotClient, repo: RepoRef, number: int) -> int:
             finished += len(attrs)
         if build["status"] not in RUNNING_STATUSES:
             break
+        note = queue_note(build)
+        if note and note != last_note:
+            print(f"{build['status']}{note}", flush=True)
+            last_note = note
         if events is None:
             events = client.events(build=build["id"])
         # Any change hint or keepalive triggers a refetch. A closed
@@ -318,6 +324,19 @@ def watch_attrs(
     attribute, and on failure its log tail plus a log URL. Exit 1 when
     any of them failed."""
     detail = client.build(repo, number)
+    events: Iterator[dict] | None = None
+    last_note = None
+    # Attributes only exist once evaluation has started.
+    while detail["build"]["status"] == "pending":
+        note = queue_note(detail["build"])
+        if note != last_note:
+            print(f"pending{note}", flush=True)
+            last_note = note
+        if events is None:
+            events = client.events(build=detail["build"]["id"])
+        if next(events, None) is None:
+            events = None
+        detail = client.build(repo, number)
     watched = {
         a["attr"]: a for s in selectors for a in [_match_attr(detail["attributes"], s)]
     }
@@ -342,7 +361,6 @@ def watch_attrs(
             pending[name] = attr
         else:
             report(attr)
-    events: Iterator[dict] | None = None
     while pending:
         if events is None:
             events = client.events(build=detail["build"]["id"])

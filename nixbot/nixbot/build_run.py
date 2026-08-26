@@ -32,7 +32,7 @@ from .flake_prefetch import PrefetchError, prefetch_flake_inputs
 from .live_warnings import LiveWarningAggregator
 from .memory import calculate_eval_workers
 from .models import CacheStatus, NixEvalJobSuccess
-from .nix_eval import EvalError, EvalSettings
+from .nix_eval import EvalError, EvalResult, EvalSettings
 from .post_build import build_props, run_post_build_steps
 from .repo_config import BranchConfig
 
@@ -298,27 +298,17 @@ async def _reap(*tasks: asyncio.Future[Any]) -> None:
             await task
 
 
-async def _run_build_inner(
+async def _evaluate(  # noqa: PLR0913
     o: Orchestrator,
     event: ChangeEvent,
     build: BuildRecord,
     worktree_path: Path,
     credentials: FetchCredentials | None,
-) -> None:
-    await o.reporter.build_started(event, build)
-    await db.set_build_status(o.pool, build.id, BuildStatus.EVALUATING)
-
-    if await _try_reuse_eval(o, event, build, worktree_path, credentials):
-        return
-
-    branch_config = BranchConfig.load(worktree_path)
-    await _prefetch_inputs(o, build, worktree_path, branch_config, credentials)
-    eval_settings = _eval_settings(o, event, build, credentials)
-    # Race the evaluation against the cancel event: a superseded
-    # build must not hold the eval slot to completion.
-    cancel_event = o.cancel_events.setdefault(build.id, asyncio.Event())
-
-    jobs_queue: asyncio.Queue[list[NixEvalJob] | None] = asyncio.Queue()
+    jobs_queue: asyncio.Queue[list[NixEvalJob] | None],
+    live_warnings: LiveWarningAggregator,
+) -> EvalResult:
+    """Wait for an eval slot, then prefetch and evaluate, streaming
+    jobs into jobs_queue and warnings into live_warnings."""
 
     async def record_job_batch(jobs: list[NixEvalJob]) -> None:
         # Pending rows appear in the UI while the eval is running.
@@ -334,10 +324,8 @@ async def _run_build_inner(
         )
         await jobs_queue.put(jobs)
 
-    # Deduplicated warnings appear on the build page while the eval
-    # runs; DB writes are throttled since retry storms emit one
-    # line per narinfo.
-    live_warnings = LiveWarningAggregator()
+    # DB writes are throttled since retry storms emit one line per
+    # narinfo.
     last_flush = 0.0
 
     async def record_stderr_line(line: str) -> None:
@@ -351,13 +339,41 @@ async def _run_build_inner(
                 o.pool, id_=build.id, warnings=json.dumps(live_warnings.snapshot())
             )
 
-    eval_task = asyncio.ensure_future(
-        o.eval_runner.run(
+    branch_config = BranchConfig.load(worktree_path)
+    async with o.eval_slots:
+        await db.set_build_status(o.pool, build.id, BuildStatus.EVALUATING)
+        await _prefetch_inputs(o, build, worktree_path, branch_config, credentials)
+        return await o.eval_runner.run(
             worktree_path,
             branch_config,
-            eval_settings,
+            _eval_settings(o, event, build, credentials),
             on_jobs=record_job_batch,
             on_stderr_line=record_stderr_line,
+        )
+
+
+async def _run_build_inner(
+    o: Orchestrator,
+    event: ChangeEvent,
+    build: BuildRecord,
+    worktree_path: Path,
+    credentials: FetchCredentials | None,
+) -> None:
+    await o.reporter.build_started(event, build)
+    # Reruns enter with a terminal row. Stay pending until a slot is held.
+    await db.set_build_status(o.pool, build.id, BuildStatus.PENDING)
+
+    if await _try_reuse_eval(o, event, build, worktree_path, credentials):
+        return
+
+    jobs_queue: asyncio.Queue[list[NixEvalJob] | None] = asyncio.Queue()
+    live_warnings = LiveWarningAggregator()
+    # Race slot wait and evaluation against the cancel event. A
+    # superseded build must not hold or wait for the slot to completion.
+    cancel_event = o.cancel_events.setdefault(build.id, asyncio.Event())
+    eval_task = asyncio.ensure_future(
+        _evaluate(
+            o, event, build, worktree_path, credentials, jobs_queue, live_warnings
         )
     )
     # Builds start as soon as the first eval batch arrives.

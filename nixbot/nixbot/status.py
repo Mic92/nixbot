@@ -476,7 +476,7 @@ class ForgeStatusReporter:
             build,
             f"{self.context_prefix}/nix-eval",
             StatusState.pending,
-            "evaluating flake",
+            "waiting for evaluation",
         )
 
     async def eval_finished(

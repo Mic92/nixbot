@@ -147,7 +147,8 @@ WHERE b.project_id = $1 AND a.attr = $2;
 -- name: WebQueue :many
 -- queue_position numbers the GLOBAL queue of pending builds: computed
 -- before any visibility filter so every viewer sees the same
--- position, and NULL for already-running builds.
+-- position, and NULL for already-running builds. Ordered by id, so a
+-- restarted old build sorts first although it queued last.
 SELECT b.*, p.owner, p.name AS project_name, p.forge, p.url,
        q.queue_position
 FROM builds b

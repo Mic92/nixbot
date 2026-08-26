@@ -531,31 +531,16 @@ def _kill_process_tree(proc: asyncio.subprocess.Process) -> None:
 
 
 class EvalRunner:
-    """Runs nix-eval-jobs with a global concurrency cap."""
+    """Runs nix-eval-jobs. Concurrency is capped by the caller
+    (Orchestrator.eval_slots)."""
 
-    def __init__(
-        self, concurrency: int = 1, limiter: CgroupLimiter | None = None
-    ) -> None:
-        self._semaphore = asyncio.Semaphore(concurrency)
+    def __init__(self, limiter: CgroupLimiter | None = None) -> None:
         self.limiter = limiter
         # Probed on first use. System users without a session can't
         # create transient scopes.
         self._systemd_scope_ok: bool | None = None
 
     async def run(
-        self,
-        worktree_path: Path,
-        branch_config: BranchConfig,
-        settings: EvalSettings,
-        on_jobs: JobBatchCallback | None = None,
-        on_stderr_line: StderrLineCallback | None = None,
-    ) -> EvalResult:
-        async with self._semaphore:
-            return await self._run(
-                worktree_path, branch_config, settings, on_jobs, on_stderr_line
-            )
-
-    async def _run(
         self,
         worktree_path: Path,
         branch_config: BranchConfig,
