@@ -133,9 +133,6 @@ async def _reeval(
             event,
             worktree_path,
         ):
-            # Flag only. Rows are rewritten when the re-eval commits,
-            # so an interrupted re-eval loses nothing.
-            await q.reset_eval_for_reeval(s.pool, build_id=build.id)
             await s.orchestrator.run_build(event, build, worktree_path)
     finally:
         s.orchestrator.cancel_events.pop(build.id, None)

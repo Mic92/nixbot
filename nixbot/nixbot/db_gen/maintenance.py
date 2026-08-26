@@ -29,7 +29,6 @@ __all__: collections.abc.Sequence[str] = (
     "project_has_builds",
     "reset_build_for_restart",
     "reset_effects_state",
-    "reset_eval_for_reeval",
     "running_build_ids",
     "succeeded_attribute_outputs",
     "supersede_pending_changes",
@@ -257,10 +256,6 @@ WHERE build_id = $1
   AND ($2::text[] IS NULL OR name = ANY($2::text[]))
 """
 
-RESET_EVAL_FOR_REEVAL: typing.Final[str] = """-- name: ResetEvalForReeval :exec
-UPDATE builds SET eval_completed = FALSE WHERE id = $1
-"""
-
 RUNNING_BUILD_IDS: typing.Final[str] = """-- name: RunningBuildIds :many
 SELECT id FROM builds WHERE status IN ('pending', 'evaluating', 'building')
 """
@@ -424,10 +419,6 @@ async def reset_build_for_restart(conn: ConnectionLike, *, attr: str | None, bui
 
 async def reset_effects_state(conn: ConnectionLike, *, build_id: int, names: collections.abc.Sequence[str] | None) -> None:
     await conn.execute(RESET_EFFECTS_STATE, build_id, names)
-
-
-async def reset_eval_for_reeval(conn: ConnectionLike, *, build_id: int) -> None:
-    await conn.execute(RESET_EVAL_FOR_REEVAL, build_id)
 
 
 def running_build_ids(conn: ConnectionLike) -> QueryResults[int]:

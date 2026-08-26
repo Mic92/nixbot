@@ -25,6 +25,7 @@ from .term import (
     FAILED_STATUSES,
     RUNNING_STATUSES,
     fmt_duration,
+    queue_note,
     sanitize_line,
     status_str,
 )
@@ -217,6 +218,7 @@ class TtyWatch:
         self.finished = 0
         self.failed = 0
         self.build_status = "pending"
+        self.queue_note = ""
         self.started_at = time.time()  # replaced by the build's start time
         self.spin = 0
 
@@ -270,6 +272,7 @@ class TtyWatch:
             build, attrs = delta["build"], delta["items"]
             with self.lock:
                 self.build_status = build["status"]
+                self.queue_note = queue_note(build)
             self._record_finished(attrs)
             if attrs:
                 cursor = (attrs[-1]["finished_at"], attrs[-1]["id"])
@@ -303,7 +306,7 @@ class TtyWatch:
         with self.lock:
             running = sorted(self.running.items(), key=lambda kv: kv[1])
             finished, failed = self.finished, self.failed
-            status = self.build_status
+            status = self.build_status + self.queue_note
             gist = dict(self.gist)
         elapsed = fmt_duration(time.time() - self.started_at)
         _, term_rows = self.display.size()

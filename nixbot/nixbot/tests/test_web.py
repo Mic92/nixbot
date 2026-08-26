@@ -326,6 +326,31 @@ def test_overview_pass_rate_ignores_pr_branches(client: WebHarness) -> None:
         )
 
 
+def test_pending_build_shows_eval_blocker(client: WebHarness) -> None:
+    pool = client.ctx.queries.pool
+
+    async def setup() -> int:
+        project_id = await insert_project(pool, name="slotq", forge_repo_id="slotq")
+        await insert_build(pool, project_id, number=1, status="evaluating")
+        await insert_build(pool, project_id, number=2, status="pending")
+        return project_id
+
+    project_id = client.run(setup())
+    try:
+        pending = client.get("/repos/github/acme/slotq/builds/2").text
+        assert "waiting for eval slot" in pending
+        assert 'href="/repos/github/acme/slotq/builds/1"' in pending
+        evaluating = client.get("/repos/github/acme/slotq/builds/1").text
+        assert "waiting for eval slot" not in evaluating
+        api = client.get("/api/repos/github/acme/slotq/builds/2").json()["build"]
+        assert api["eval_queue"]["position"] >= 1
+        assert [b["number"] for b in api["eval_queue"]["blocked_by"]] == [1]
+        api = client.get("/api/repos/github/acme/slotq/builds/1").json()["build"]
+        assert api["eval_queue"] is None
+    finally:
+        client.run(pool.execute("DELETE FROM projects WHERE id = $1", project_id))
+
+
 def test_project_filter_escapes_like_wildcards(client: WebHarness) -> None:
     # `%` and `_` must match literally, not as ILIKE wildcards.
     assert "acme/widget" in client.get("/?q=widg").text

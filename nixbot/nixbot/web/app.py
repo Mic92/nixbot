@@ -450,6 +450,9 @@ class _PageRoutes:
         )
         group_counts, inline = await self._grouped_attributes(build["id"], None)
         total = sum(group_counts.values())
+        await ctx.queries.attach_eval_queue(
+            [build], await ctx.visible_repo_ids(request)
+        )
         return await ctx.render(
             "build.html",
             request=request,

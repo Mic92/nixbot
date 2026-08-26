@@ -72,6 +72,16 @@
         </div>
       </div>
       {% if build.error %}<pre class="error">{{ build.error | excerpt(2000) | ansi }}</pre>{% endif %}
+      {% if build.eval_queue %}
+        <p class="build-meta">
+          waiting for eval slot
+          {% if build.eval_queue.position %}· position {{ build.eval_queue.position }}{% endif %}
+          {% for b in build.eval_queue.blocked_by %}
+            {% if loop.first %}· currently evaluating:{% endif %}
+            <a href="{{ build_path(b, b.number) }}">{{ repo_name(b.owner, b.project_name) }} #{{ b.number }}</a>{{ "," if not loop.last }}
+          {% endfor %}
+        </p>
+      {% endif %}
       {% if build.status in RUNNING_STATUSES and attrs_total %}
         <div class="build-progress"
              role="progressbar"

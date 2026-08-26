@@ -50,6 +50,20 @@ class EvalWarningGroup(BaseModel):
     count: int
 
 
+class BuildRef(BaseModel):
+    owner: str
+    project_name: str
+    forge: str
+    number: int
+
+
+class EvalQueue(BaseModel):
+    """Why a pending build is not evaluating yet."""
+
+    position: int | None
+    blocked_by: list[BuildRef]  # builds holding an eval slot
+
+
 class Build(BaseModel):
     """One CI run of a commit."""
 
@@ -67,6 +81,7 @@ class Build(BaseModel):
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
+    eval_queue: EvalQueue | None = None  # only while pending
 
 
 class BuildPage(BaseModel):
@@ -172,10 +187,12 @@ def clean_row(row: dict[str, Any]) -> dict[str, Any]:
 async def _build_or_404(  # noqa: PLR0913
     ctx: WebContext, request: Request, forge: str, owner: str, name: str, number: int
 ) -> dict[str, Any]:
+    """Build row with eval_queue attached."""
     project = await ctx.repo_or_404(forge, owner, name, request)
     build = await ctx.queries.build_by_number(project["id"], number)
     if build is None:
         raise HTTPException(status_code=404)
+    await ctx.queries.attach_eval_queue([build], await ctx.visible_repo_ids(request))
     return build
 
 
@@ -220,6 +237,9 @@ def create_api_router(ctx: WebContext) -> APIRouter:
             filters=BuildFilters(
                 status=status, branch=branch, pr_number=pr_number, commit=commit
             ),
+        )
+        await ctx.queries.attach_eval_queue(
+            builds.items, await ctx.visible_repo_ids(request)
         )
         return {
             "items": [clean_row(b) for b in builds.items],

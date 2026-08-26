@@ -81,6 +81,21 @@ def status_str(status: str, *, cached: bool = False) -> str:
     return _color(f"{glyph} {label}", "33")
 
 
+def queue_note(build: dict) -> str:
+    """' · queued for eval (pos N) behind owner/repo#N', or ''."""
+    q = build.get("eval_queue")
+    if not q:
+        return ""
+    behind = ", ".join(
+        f"{b['owner']}/{b['project_name']}#{b['number']}" for b in q["blocked_by"]
+    )
+    return (
+        " · queued for eval"
+        + (f" (pos {q['position']})" if q["position"] else "")
+        + (f" behind {behind}" if behind else "")
+    )
+
+
 def fmt_duration(seconds: float) -> str:
     if seconds < MINUTE:
         return f"{seconds:.0f}s"

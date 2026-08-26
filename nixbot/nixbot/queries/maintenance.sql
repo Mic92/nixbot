@@ -66,10 +66,6 @@ AND name = ANY(sqlc.arg(names)::text[]);
 SELECT count(*) AS count FROM build_attributes
 WHERE build_id = $1 AND status IN ('pending', 'building');
 
--- name: ResetEvalForReeval :exec
--- Flag only: an interrupted re-eval must not lose rows.
-UPDATE builds SET eval_completed = FALSE WHERE id = sqlc.arg(build_id);
-
 -- name: CommitEvalResult :exec
 -- The only place the attribute set shrinks. Refreshes non-terminal
 -- rows, prunes rows the eval no longer produced, publishes via

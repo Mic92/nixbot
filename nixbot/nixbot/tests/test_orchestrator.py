@@ -128,9 +128,11 @@ class FakeExecutor:
 @dataclass
 class RecordingReporter:
     events: list[tuple] = field(default_factory=list)
+    started: asyncio.Event = field(default_factory=asyncio.Event)
 
     async def build_started(self, event: ChangeEvent, build: BuildRecord) -> None:
         self.events.append(("started", build.id))
+        self.started.set()
 
     async def eval_finished(
         self, event: ChangeEvent, build: BuildRecord, report: EvalReport
@@ -728,6 +730,56 @@ async def test_cancel_interrupts_evaluation(
     assert executor.built == []
     # The pending nix-eval status must resolve (merge queues).
     assert ("eval-cancelled", build.id) in reporter.events
+
+
+async def test_build_waiting_for_eval_slot_stays_pending(
+    pool: asyncpg.Pool, tmp_path: Path, upstream: Path
+) -> None:
+    """A build waiting on eval_concurrency is pending, not evaluating (#151)."""
+    sha = add_commit(upstream, "slot")
+    block = asyncio.Event()
+    eval_runner = FakeEvalRunner([mk_job("a")], block=block)
+    orchestrator, reporter = make_orchestrator(
+        pool, tmp_path, eval_runner, FakeExecutor()
+    )
+    projects = [
+        replace(await make_project(pool, name=n), clone_url=str(upstream))
+        for n in ("first", "second")
+    ]
+
+    async def rows() -> list[asyncpg.Record]:
+        return await pool.fetch(
+            "SELECT id, status, started_at FROM builds"
+            " WHERE project_id = ANY($1) ORDER BY id",
+            [p.id for p in projects],
+        )
+
+    def start(p: RepoInfo) -> asyncio.Task[BuildRecord | None]:
+        return asyncio.create_task(
+            orchestrator.handle_change_event(
+                ChangeEvent(repo=p, branch="main", commit_sha=sha)
+            )
+        )
+
+    tasks = [start(projects[0])]
+    await asyncio.wait_for(eval_runner.started.wait(), timeout=10)
+    reporter.started.clear()
+    tasks.append(start(projects[1]))
+    await asyncio.wait_for(reporter.started.wait(), timeout=10)
+    await asyncio.sleep(0.05)
+    r1, r2 = await rows()
+    assert eval_runner.calls == 1
+    assert r1["status"] == BuildStatus.EVALUATING
+    assert (r2["status"], r2["started_at"]) == (BuildStatus.PENDING, None)
+
+    orchestrator.cancel_events[r2["id"]].set()
+    await asyncio.wait_for(tasks[1], timeout=10)
+    _, r2 = await rows()
+    assert (r2["status"], r2["started_at"]) == (BuildStatus.CANCELLED, None)
+
+    block.set()
+    await asyncio.wait_for(tasks[0], timeout=10)
+    assert eval_runner.calls == 1
 
 
 async def test_pending_attribute_rows_recorded_for_crash_recovery(
