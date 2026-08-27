@@ -4,7 +4,6 @@
   coreutils,
   git,
   lib,
-  nix,
   nix-eval-jobs,
   openssh,
   postgresql,
@@ -139,7 +138,7 @@ writeShellApplication {
     nix-eval-jobs
     git
     openssh
-    nix
+    nix-eval-jobs.nix
     coreutils
   ]
   # The service wraps effects in a bwrap sandbox on Linux.

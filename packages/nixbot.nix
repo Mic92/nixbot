@@ -2,7 +2,6 @@
   buildPythonPackage,
   git,
   hatchling,
-  nix,
   nix-eval-jobs,
   pydantic,
   pytestCheckHook,
@@ -51,7 +50,7 @@ buildPythonPackage (finalAttrs: {
     nixbot-effects
   ];
 
-  buildInputs = [ nix ];
+  buildInputs = [ nix-eval-jobs.nix ];
 
   # Tests run in passthru.tests.pytest to keep the test closure
   # (playwright browsers, postgresql) out of the package build.
@@ -66,7 +65,7 @@ buildPythonPackage (finalAttrs: {
     git
     # For the eval/prefetch integration tests: nix works daemon-less
     # against a scratch store set up in preCheck.
-    nix
+    nix-eval-jobs.nix
     nix-eval-jobs
     pytestCheckHook
     pytest-asyncio
