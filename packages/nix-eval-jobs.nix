@@ -1,11 +1,20 @@
 # TODO: drop when nixpkgs ships nix-eval-jobs >= 2.35.1
 { pkgs, fetchFromGitHub }:
 let
-  # boost.context fixes needed by nix 2.35 coroutines (NixOS/nix#16174)
+  # boost.context fixes needed by nix 2.35 coroutines (NixOS/nix#16174).
+  # Newer nixpkgs already carry them (detected via the second commit).
+  boostHasContextFix = builtins.any (
+    p: pkgs.lib.hasInfix "5883212311535a0046031d74d1568ae173c1e35b" (toString p)
+  ) (pkgs.boost.patches or [ ]);
   boostPatched =
     if
-      pkgs.lib.versionAtLeast pkgs.boost.version "1.88" && pkgs.lib.versionOlder pkgs.boost.version "1.93"
+      boostHasContextFix
+      || !(
+        pkgs.lib.versionAtLeast pkgs.boost.version "1.88" && pkgs.lib.versionOlder pkgs.boost.version "1.93"
+      )
     then
+      pkgs.boost
+    else
       pkgs.boost.overrideAttrs (prevAttrs: {
         patches = (prevAttrs.patches or [ ]) ++ [
           (pkgs.fetchpatch {
@@ -19,9 +28,7 @@ let
             hash = "sha256-CytNLi2d0wjI/lY5lDv98mwwQaEt7qeIs4UkE6QgCBU=";
           })
         ];
-      })
-    else
-      pkgs.boost;
+      });
 
   # nix 2.35 eval perf regression: srcToStore cache not populated on
   # fetcher cache hits (NixOS/nix#16190, fixed after 2.35.2). Applied
