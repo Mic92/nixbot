@@ -38,12 +38,21 @@ let
     hash = "sha256-Yvn9a059LvW9FkSGH20LRPlBIhmVqQxGMBXke+hxkgs=";
   };
 
+  # `nix flake prefetch-inputs` randomly skipped inputs, so the eval
+  # sandbox then lacked them (#153, NixOS/nix#16373).
+  prefetchInputsDedupPatch = pkgs.fetchpatch {
+    url = "https://github.com/Mic92/nix-1/commit/e9bc07a77ddb16de5d47738e6f4b9e0188d7ed7a.patch";
+    hash = "sha256-3QBE/cmolXVFcak1T49fC2vftb9CJyUsoJ4Z7WDqVJ4=";
+  };
+
   patchIfNeeded =
     components:
-    if pkgs.lib.versionOlder components.version "2.36" then
-      components.appendPatches [ srcToStoreCachePatch ]
-    else
-      components;
+    components.appendPatches (
+      pkgs.lib.optional (pkgs.lib.versionOlder components.version "2.36") srcToStoreCachePatch
+      ++ [ prefetchInputsDedupPatch ]
+    );
+
+  nixComponents = patchIfNeeded nixComponents_2_35;
 
   # polyfill for nixpkgs without nix 2.35 (e.g. stable release branches)
   nixComponents_2_35 =
@@ -64,11 +73,16 @@ let
 in
 (pkgs.nix-eval-jobs.override {
   # nix-eval-jobs 2.35.x requires Nix >= 2.35 (tryEnterPrivateMountNamespace)
-  nixComponents = patchIfNeeded nixComponents_2_35;
+  inherit nixComponents;
 }).overrideAttrs
   (
-    finalAttrs: _prevAttrs: {
+    finalAttrs: prevAttrs: {
       version = "2.35.2";
+      # The nix CLI nixbot runs (flake prefetch-inputs/archive) must carry
+      # the same patches, so expose it alongside nix-eval-jobs.
+      passthru = (prevAttrs.passthru or { }) // {
+        nix = nixComponents.nix-cli;
+      };
       src = fetchFromGitHub {
         owner = "NixOS";
         repo = "nix-eval-jobs";

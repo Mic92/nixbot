@@ -967,6 +967,9 @@ in
         pkgs.coreutils
         pkgs.bubblewrap
         packages.nix-eval-jobs
+        # Patched nix CLI (see packages/nix-eval-jobs.nix). Listed before
+        # the system nix so flake prefetch-inputs/archive use it.
+        packages.nix-eval-jobs.nix
         config.nix.package
       ];
 
