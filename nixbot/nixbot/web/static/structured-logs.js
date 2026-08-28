@@ -7,7 +7,7 @@
 "use strict";
 
 /**
- * @typedef {{idx:number,name:string,status:string,n:number,t0?:number|null,t1?:number|null,html?:string,card?:string}} Drv
+ * @typedef {{idx:number,name:string,status:string,html?:string,card?:string}} Drv
  * @typedef {{t:string,idx:number,name?:string,status?:string,from?:number,html?:string,card?:string}} Delta
  */
 
@@ -197,19 +197,38 @@
       return el;
     }
 
-    /** Append server-rendered rows (ANSI already applied).
-     * @param {number} idx @param {number} n @param {string} html */
-    function addLines(idx, n, html) {
-      const d = byIdx.get(idx);
-      if (!d || !html) return;
-      const el = ensureCard(d);
-      const vp = pick(el, ".log-lines");
-      // Follow the tail only when already at the bottom, so scrolling up
-      // to read pauses following and scrolling back resumes it.
-      const atBottom = vp.scrollHeight - vp.scrollTop - vp.clientHeight < 40;
-      vp.insertAdjacentHTML("beforeend", html);
-      d.n = n;
-      if (el.open && atBottom) vp.scrollTop = vp.scrollHeight;
+    // Flushed once per frame: a per-line insert + scrollHeight read is a
+    // forced layout per line (Mic92/nixbot#98).
+    /** @type {Map<number, string[]>} */
+    const pendingRows = new Map();
+    let flushScheduled = false;
+
+    function flush() {
+      flushScheduled = false;
+      for (const [idx, chunks] of pendingRows) {
+        const d = byIdx.get(idx);
+        if (!d) continue;
+        const el = ensureCard(d);
+        const vp = pick(el, ".log-lines");
+        // Follow the tail only when already at the bottom, so scrolling up
+        // to read pauses following and scrolling back resumes it.
+        const atBottom = vp.scrollHeight - vp.scrollTop - vp.clientHeight < 40;
+        vp.insertAdjacentHTML("beforeend", chunks.join(""));
+        if (el.open && atBottom) vp.scrollTop = vp.scrollHeight;
+      }
+      pendingRows.clear();
+    }
+
+    /** @param {number} idx @param {string} html */
+    function addRows(idx, html) {
+      if (!html || !byIdx.has(idx)) return;
+      const chunks = pendingRows.get(idx);
+      if (chunks) chunks.push(html);
+      else pendingRows.set(idx, [html]);
+      if (!flushScheduled) {
+        flushScheduled = true;
+        requestAnimationFrame(flush);
+      }
     }
 
     /** @param {Delta} delta */
@@ -220,20 +239,14 @@
           idx: delta.idx,
           name: delta.name ?? "",
           status: "running",
-          n: 0,
           card: delta.card,
         };
         byIdx.set(nd.idx, nd);
         setMeta(nd);
-      } else if (delta.t === "line") {
-        addLines(delta.idx, delta.from ?? 1, delta.html ?? "");
-      } else if (delta.t === "phase" && d) {
-        // The divider is a normal row appended before the phase's output.
-        pick(ensureCard(d), ".log-lines").insertAdjacentHTML(
-          "beforeend",
-          delta.html ?? "",
-        );
+      } else if (delta.t === "line" || delta.t === "phase") {
+        addRows(delta.idx, delta.html ?? "");
       } else if (delta.t === "status" && d) {
+        flush();
         d.status = delta.status ?? d.status;
         const el = setMeta(d);
         if (delta.status === "failed") el.open = true;
@@ -246,18 +259,18 @@
       for (const el of list.querySelectorAll(".log-card")) el.remove();
       byIdx.clear();
       cardOf.clear();
+      pendingRows.clear();
       updateGroups();
       for (const e of state) {
         const d = {
           idx: e.idx,
           name: e.name,
           status: e.status,
-          n: e.n,
           card: e.card,
         };
         byIdx.set(d.idx, d);
         setMeta(d);
-        addLines(d.idx, e.n, e.html || "");
+        addRows(d.idx, e.html || "");
       }
     }
 
