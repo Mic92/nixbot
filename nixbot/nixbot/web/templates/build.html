@@ -140,8 +140,8 @@
             {{ status_icon(effects_status, labelled=false) }}Effects
             <span id="effects-status" class="status {{ effects_status }}">
               {{- "not run for pull requests" if effects_status == "skipped" and build.pr_number
-              else "not run on this branch" if effects_status == "skipped"
-              else effects_status -}}
+                else "not run on this branch" if effects_status == "skipped"
+                else effects_status -}}
             </span>
           </h2>
           {% if can_control and build.status == "succeeded" and effects_status != "skipped" %}
