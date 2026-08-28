@@ -423,9 +423,11 @@ class Orchestrator:
         build: BuildRecord,
         worktree_path: Path,
         credentials: FetchCredentials | None = None,
+        *,
+        only: list[str] | None = None,
     ) -> None:
         await effects_run.maybe_run_effects(
-            self, event, build, worktree_path, credentials
+            self, event, build, worktree_path, credentials, only=only
         )
 
     async def run_effect_item(

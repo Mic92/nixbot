@@ -13,7 +13,7 @@ import logging
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
-from . import build_run, db, effects_run
+from . import build_run, db
 from .canceller import branch_key
 from .db import BuildStatus
 from .db_gen import builds as builds_q
@@ -141,8 +141,8 @@ async def rerun_pending_attributes(
 async def _rerun_names(
     o: Orchestrator, build: BuildRecord, only: str
 ) -> list[str] | None:
-    """The effect plus its transitively skipped dependents. A skipped
-    row must not stay skipped after a green rerun. Returns None when
+    """The effect plus its transitive dependency_failed dependents. They
+    must not stay failed after a green rerun. Returns None when
     `only` is not a row of this build."""
     rows = await builds_q.effects_for_build(o.pool, build_id=build.id)
     if all(r.name != only for r in rows):
@@ -153,7 +153,7 @@ async def _rerun_names(
         changed = False
         for r in rows:
             deps = set(json.loads(r.deps)) if r.deps else set()
-            if r.status == "skipped" and r.name not in names and deps & names:
+            if r.status == "dependency_failed" and r.name not in names and deps & names:
                 names.add(r.name)
                 changed = True
     return sorted(names)
@@ -183,7 +183,7 @@ async def rerun_effects(
 ) -> None:
     """Effects-only restart: fresh worktree at the recorded commit,
     attributes untouched. `only` narrows the rerun to one effect and
-    its skipped dependents."""
+    its dependency_failed dependents."""
     if build.id in o.cancel_events:
         # A concurrent rerun (or double click) would deploy twice.
         return
@@ -209,25 +209,9 @@ async def rerun_effects(
             event,
             worktree_path,
         ):
-            if names is None:
-                await o.maybe_run_effects(event, build, worktree_path, credentials)
-            else:
-                effects = await effects_run.discover_effects(
-                    o, event, build, worktree_path, credentials
-                )
-                if effects is not None:
-                    # Selected effects that discovery no longer found
-                    # would stay pending forever.
-                    if missing := sorted(set(names) - effects.keys()):
-                        await q.delete_effects_by_name(
-                            o.pool, build_id=build.id, names=missing
-                        )
-                    await effects_run.enqueue_effects(
-                        o,
-                        event,
-                        build,
-                        {n: m for n, m in effects.items() if n in names},
-                    )
+            await o.maybe_run_effects(
+                event, build, worktree_path, credentials, only=names
+            )
             await o.refresh_schedules(event)
         # The enqueued effect items share this build's key and only
         # become claimable once this item finishes.

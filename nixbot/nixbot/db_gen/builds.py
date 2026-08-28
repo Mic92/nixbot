@@ -31,6 +31,7 @@ __all__: collections.abc.Sequence[str] = (
     "mark_attribute_building",
     "mark_effects_started",
     "record_attributes",
+    "record_skipped_effects",
     "set_build_status",
     "set_eval_warnings",
     "settle_unfinished_attributes",
@@ -250,6 +251,13 @@ ON CONFLICT (build_id, attr) DO UPDATE SET
     drv_path = EXCLUDED.drv_path,
     outputs = EXCLUDED.outputs
 WHERE build_attributes.status IN ('pending', 'building')
+"""
+
+RECORD_SKIPPED_EFFECTS: typing.Final[str] = """-- name: RecordSkippedEffects :exec
+INSERT INTO build_effects (build_id, name, status, finished_at)
+SELECT $1::bigint, u.name, 'skipped', now()
+FROM unnest($2::text[]) AS u(name)
+ON CONFLICT (build_id, name) DO NOTHING
 """
 
 SET_BUILD_STATUS: typing.Final[str] = """-- name: SetBuildStatus :exec
@@ -488,6 +496,10 @@ async def mark_effects_started(conn: ConnectionLike, *, commit_sha: str, branch:
 
 async def record_attributes(conn: ConnectionLike, *, build_id: int, attrs: collections.abc.Sequence[str], systems: collections.abc.Sequence[str], drv_paths: collections.abc.Sequence[str], outputs: collections.abc.Sequence[str]) -> None:
     await conn.execute(RECORD_ATTRIBUTES, build_id, attrs, systems, drv_paths, outputs)
+
+
+async def record_skipped_effects(conn: ConnectionLike, *, build_id: int, names: collections.abc.Sequence[str]) -> None:
+    await conn.execute(RECORD_SKIPPED_EFFECTS, build_id, names)
 
 
 async def set_build_status(conn: ConnectionLike, *, status: str, error: str | None, terminal: collections.abc.Sequence[str], id_: int) -> None:

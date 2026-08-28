@@ -124,7 +124,6 @@ th {
 .failed,
 .failed_eval,
 .dependency_failed,
-.skipped,
 .cached_failure {
 	--status-color: var(--bad);
 }
@@ -133,13 +132,15 @@ th {
 	--status-color: var(--queued);
 }
 .evaluating,
-.building {
+.building,
+.running {
 	--status-color: var(--run);
 }
 .pending {
 	--status-color: var(--queued);
 }
 .cancelled,
+.skipped,
 .skipped_local {
 	--status-color: var(--muted);
 }
@@ -286,7 +287,6 @@ h2 .status-icon {
 .status-icon.failed::before,
 .status-icon.failed_eval::before,
 .status-icon.dependency_failed::before,
-.status-icon.skipped::before,
 .status-icon.cached_failure::before,
 .status-icon.ignored::before,
 .status-icon.ignored_failure::before,
@@ -305,11 +305,13 @@ h2 .status-icon {
 }
 @media (prefers-reduced-motion: reduce) {
 	.status-icon.building,
-	.status-icon.evaluating {
+	.status-icon.evaluating,
+	.status-icon.running {
 		animation: none;
 	}
 }
 .status-icon.cancelled,
+.status-icon.skipped,
 .status-icon.skipped_local {
 	border-style: dashed;
 	opacity: 0.6;
@@ -641,6 +643,10 @@ h2.section {
 	text-transform: uppercase;
 	letter-spacing: 0.08em;
 	margin: 1.5rem 0 0.5rem;
+}
+h2.section .status {
+	text-transform: none;
+	letter-spacing: normal;
 }
 .section-row {
 	display: flex;

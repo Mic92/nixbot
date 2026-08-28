@@ -197,6 +197,13 @@ ON CONFLICT (build_id, name) DO UPDATE SET
     log_truncated = FALSE, started_at = now(), finished_at = NULL,
     deps = EXCLUDED.deps;
 
+-- name: RecordSkippedEffects :exec
+-- DO NOTHING: rows from a real run (build reused by a gated ref) stay.
+INSERT INTO build_effects (build_id, name, status, finished_at)
+SELECT sqlc.arg(build_id)::bigint, u.name, 'skipped', now()
+FROM unnest(sqlc.arg(names)::text[]) AS u(name)
+ON CONFLICT (build_id, name) DO NOTHING;
+
 -- name: EffectDepStatuses :many
 -- Statuses of the effects this effect declared in `after`.
 SELECT d.name, d.status FROM build_effects e

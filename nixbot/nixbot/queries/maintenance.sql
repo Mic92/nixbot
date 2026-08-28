@@ -56,12 +56,6 @@ UPDATE build_effects SET status = 'pending', error = NULL,
 WHERE build_id = sqlc.arg(build_id)
   AND (sqlc.narg(names)::text[] IS NULL OR name = ANY(sqlc.narg(names)::text[]));
 
--- name: DeleteEffectsByName :exec
--- Removes rows of effects that a rerun selected but discovery no
--- longer found in the flake. They would stay pending forever.
-DELETE FROM build_effects WHERE build_id = $1
-AND name = ANY(sqlc.arg(names)::text[]);
-
 -- name: CountUnfinishedAttributes :one
 SELECT count(*) AS count FROM build_attributes
 WHERE build_id = $1 AND status IN ('pending', 'building');
