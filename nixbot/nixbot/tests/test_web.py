@@ -1603,10 +1603,17 @@ def test_build_page_shows_effects(client: WebHarness) -> None:
             """,
             build_id,
         )
+        pr_build_id = await ctx.pool.fetchval("SELECT id FROM builds WHERE number = 3")
+        await ctx.pool.execute(
+            "INSERT INTO build_effects (build_id, name, status, finished_at) "
+            "VALUES ($1, 'deploy', 'skipped', now())",
+            pr_build_id,
+        )
 
     client.loop.run_until_complete(seed_effects())
     text = client.get("/repos/github/acme/widget/builds/2").text
     assert "Effects" in text
+    assert 'id="effects-status" class="status running"' in text
     assert "deploy" in text
     assert "ssh: connection refused" in text
     # Both finished-with-log and running effects link to the viewer.
@@ -1614,6 +1621,10 @@ def test_build_page_shows_effects(client: WebHarness) -> None:
     assert "logs/effect:notify" in text
     # Builds without effects don't render the section.
     assert "Effects" not in client.get("/repos/github/acme/widget/builds/1").text
+    pr_text = client.get("/repos/github/acme/widget/builds/3").text
+    assert 'id="effects-status" class="status skipped"' in pr_text
+    assert "not run for pull requests" in pr_text
+    assert "effects/restart" not in pr_text
 
 
 def test_effect_log_raw_text(client: WebHarness, tmp_path: Path) -> None:

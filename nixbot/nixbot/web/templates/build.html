@@ -136,8 +136,15 @@
       <div id="attributes">{% include "_attributes.html" %}</div>
       {% if effects %}
         <div class="section-row">
-          <h2 class="section">Effects</h2>
-          {% if can_control and build.status == "succeeded" %}
+          <h2 class="section">
+            {{ status_icon(effects_status, labelled=false) }}Effects
+            <span id="effects-status" class="status {{ effects_status }}">
+              {{- "not run for pull requests" if effects_status == "skipped" and build.pr_number
+                else "not run on this branch" if effects_status == "skipped"
+                else effects_status -}}
+            </span>
+          </h2>
+          {% if can_control and build.status == "succeeded" and effects_status != "skipped" %}
             <form method="post"
                   action="{{ build_path(project, build.number) }}/effects/restart">
               <button>restart effects</button>
@@ -164,9 +171,9 @@
                   <code>{{ e.name }}</code>
                 {% endif %}
               </td>
-              <td class="attr-duration">{{ e | duration }}</td>
+              <td class="attr-duration">{{ e | duration if e.status != "skipped" }}</td>
               <td class="attr-restart">
-                {% if can_control and build.status == "succeeded" and e.status not in ("pending", "running") %}
+                {% if can_control and build.status == "succeeded" and e.status not in ("pending", "running", "skipped") %}
                   <form method="post"
                         action="{{ build_path(project, build.number) }}/effects/restart?name={{ e.name | urlencode }}">
                     <button class="icon-button"

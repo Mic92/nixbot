@@ -336,6 +336,13 @@ def run_effect_build(
     return run
 
 
+async def effect_statuses(pool: asyncpg.Pool, build_id: int) -> dict[str, str]:
+    rows = await pool.fetch(
+        "SELECT name, status FROM build_effects WHERE build_id = $1", build_id
+    )
+    return {r["name"]: r["status"] for r in rows}
+
+
 async def drain_effect_items(
     orchestrator: Orchestrator, info: RepoInfo, pool: asyncpg.Pool
 ) -> None:
@@ -1162,7 +1169,7 @@ async def test_pr_worktree_config_cannot_grant_effects(
     base = git(upstream, "rev-parse", "HEAD")
 
     ran = patch_effects(monkeypatch)
-    orchestrator, _, project = await make_env(
+    orchestrator, reporter, project = await make_env(
         FakeEvalRunner([mk_job("a")]),
         FakeExecutor(),
         name="pr-grant",
@@ -1182,6 +1189,9 @@ async def test_pr_worktree_config_cannot_grant_effects(
     assert not await pool.fetchval(
         "SELECT effects_started FROM builds WHERE id = $1", build.id
     )
+    # Listed for visibility (Mic92/nixbot#106), never queued or reported.
+    assert await effect_statuses(pool, build.id) == {"deploy": "skipped"}
+    assert not [e for e in reporter.events if e[0].startswith("effect")]
 
 
 async def test_rerun_effects_runs_effects_again(
@@ -1308,7 +1318,7 @@ async def test_rerun_single_effect(
     }
     assert statuses == {
         "deploy": "failed",
-        "notify": "skipped",
+        "notify": "dependency_failed",
         "other": "succeeded",
     }
     other_finished = await pool.fetchval(
@@ -1671,7 +1681,7 @@ async def test_effect_item_not_claimable_until_dep_settles(
         "SELECT status FROM build_effects WHERE build_id = $1 AND name = 'deploy'",
         build.id,
     )
-    assert row["status"] == "skipped"
+    assert row["status"] == "dependency_failed"
 
 
 async def test_effect_dep_failure_skips_dependent(
@@ -1680,8 +1690,8 @@ async def test_effect_dep_failure_skips_dependent(
     upstream: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An effect whose dependency failed is marked skipped and never
-    runs; skipped counts as a failure in the summary."""
+    """An effect whose dependency failed is marked dependency_failed and
+    never runs. It counts as a failure in the summary."""
 
     async def failing_run(ctx: object, name: str, log_write: object = None) -> bool:
         return False
@@ -1705,7 +1715,7 @@ async def test_effect_dep_failure_skips_dependent(
         )
     }
     assert rows["build-image"][0] == "failed"
-    assert rows["deploy"][0] == "skipped"
+    assert rows["deploy"][0] == "dependency_failed"
     assert "build-image" in rows["deploy"][1]
 
 
@@ -1991,6 +2001,7 @@ async def test_reuse_for_default_branch_push_runs_effects(
     assert pr_build is not None
     await drain_effect_items(orchestrator, project, pool)
     assert ran == []
+    assert await effect_statuses(pool, pr_build.id) == {"deploy": "skipped"}
 
     # Squash-merge: an identical tree under a new SHA reuses the build.
     git(upstream, "commit", "--allow-empty", "-m", "reuse-deploy-merge")
@@ -2004,6 +2015,7 @@ async def test_reuse_for_default_branch_push_runs_effects(
     assert main_build.id == pr_build.id
     await drain_effect_items(orchestrator, project, pool)
     assert ran == ["deploy"]
+    assert await effect_statuses(pool, pr_build.id) == {"deploy": "succeeded"}
     # Effects ran for the main merge, so their statuses belong on the
     # main commit -- not the build's stored PR-head commit (pr_sha).
     sha_events = ("effect-started", "effects-started", "effects-finished")

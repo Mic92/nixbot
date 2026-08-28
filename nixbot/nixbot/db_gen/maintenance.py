@@ -20,7 +20,6 @@ __all__: collections.abc.Sequence[str] = (
     "commit_eval_result",
     "count_unfinished_attributes",
     "delete_attributes_by_name",
-    "delete_effects_by_name",
     "drop_removed_effects",
     "effect_status",
     "fail_interrupted_effects",
@@ -177,11 +176,6 @@ WHERE build_id = $1 AND status IN ('pending', 'building')
 DELETE_ATTRIBUTES_BY_NAME: typing.Final[str] = """-- name: DeleteAttributesByName :exec
 DELETE FROM build_attributes WHERE build_id = $1
 AND attr = ANY($2::text[])
-"""
-
-DELETE_EFFECTS_BY_NAME: typing.Final[str] = """-- name: DeleteEffectsByName :exec
-DELETE FROM build_effects WHERE build_id = $1
-AND name = ANY($2::text[])
 """
 
 DROP_REMOVED_EFFECTS: typing.Final[str] = """-- name: DropRemovedEffects :exec
@@ -373,10 +367,6 @@ async def count_unfinished_attributes(conn: ConnectionLike, *, build_id: int) ->
 
 async def delete_attributes_by_name(conn: ConnectionLike, *, build_id: int, attrs: collections.abc.Sequence[str]) -> None:
     await conn.execute(DELETE_ATTRIBUTES_BY_NAME, build_id, attrs)
-
-
-async def delete_effects_by_name(conn: ConnectionLike, *, build_id: int, names: collections.abc.Sequence[str]) -> None:
-    await conn.execute(DELETE_EFFECTS_BY_NAME, build_id, names)
 
 
 async def drop_removed_effects(conn: ConnectionLike, *, build_id: int, names: collections.abc.Sequence[str]) -> None:

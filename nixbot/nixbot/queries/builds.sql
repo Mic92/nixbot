@@ -197,6 +197,13 @@ ON CONFLICT (build_id, name) DO UPDATE SET
     log_truncated = FALSE, started_at = now(), finished_at = NULL,
     deps = EXCLUDED.deps;
 
+-- name: RecordSkippedEffects :exec
+-- DO NOTHING: rows from a real run (build reused by a gated ref) stay.
+INSERT INTO build_effects (build_id, name, status, finished_at)
+SELECT sqlc.arg(build_id)::bigint, u.name, 'skipped', now()
+FROM unnest(sqlc.arg(names)::text[]) AS u(name)
+ON CONFLICT (build_id, name) DO NOTHING;
+
 -- name: EffectDepStatuses :many
 -- Statuses of the effects this effect declared in `after`.
 SELECT d.name, d.status FROM build_effects e
@@ -209,6 +216,24 @@ UPDATE build_effects SET
     status = $3, error = sqlc.narg(error),
     log_size = $4, log_truncated = $5, finished_at = now()
 WHERE build_id = $1 AND name = $2;
+
+-- name: EffectsSummary :one
+-- status: running while anything is in flight, else the worst outcome.
+-- No row for a build without effects.
+SELECT
+    count(*) FILTER (WHERE status IN ('failed', 'dependency_failed'))::bigint AS failed,
+    count(*) FILTER (WHERE status = 'succeeded')::bigint AS succeeded,
+    CASE
+        WHEN bool_or(status = 'running')
+          OR (bool_or(status = 'pending') AND NOT bool_and(status = 'pending'))
+          THEN 'running'
+        WHEN bool_or(status IN ('failed', 'dependency_failed')) THEN 'failed'
+        WHEN bool_or(status = 'pending') THEN 'pending'
+        WHEN bool_or(status = 'succeeded') THEN 'succeeded'
+        ELSE 'skipped'
+    END::text AS status
+FROM build_effects WHERE build_id = $1
+HAVING count(*) > 0;
 
 -- name: EffectsForBuild :many
 SELECT * FROM build_effects WHERE build_id = $1 ORDER BY name;

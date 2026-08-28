@@ -1,4 +1,4 @@
-"""Effects execution: gated discovery after a successful build,
+"""Effects execution: discovery after a successful build, gating,
 per-effect queue items, and running one queued effect with its own
 row and log.
 
@@ -20,7 +20,6 @@ from nixbot_effects import EffectError
 
 from .db_gen import builds as builds_q
 from .db_gen import maintenance as q
-from .db_gen import web as web_q
 from .db_gen import work_queue as wq
 from .effects import (
     EffectMeta,
@@ -62,50 +61,22 @@ class RunningEffect:
         self.task.cancel()
 
 
-async def maybe_run_effects(
+async def maybe_run_effects(  # noqa: PLR0913
     o: Orchestrator,
     event: ChangeEvent,
     build: BuildRecord,
     worktree_path: Path,
     credentials: FetchCredentials | None = None,
+    *,
+    only: list[str] | None = None,
 ) -> None:
-    effects = await discover_effects(o, event, build, worktree_path, credentials)
-    if effects is None:
-        return
-    # Effects removed from the flake since the last run would
-    # otherwise linger as stale pending rows.
-    await q.drop_removed_effects(o.pool, build_id=build.id, names=list(effects))
-    await enqueue_effects(o, event, build, effects)
-
-
-async def discover_effects(
-    o: Orchestrator,
-    event: ChangeEvent,
-    build: BuildRecord,
-    worktree_path: Path,
-    credentials: FetchCredentials | None = None,
-) -> dict[str, EffectMeta] | None:
-    """Gating, the started-flag, and effect discovery. Returns None
-    when effects must not or cannot run."""
-    repo = event.repo
-    # Gating config comes from the default branch of the central
-    # clone: the worktree is PR-controlled, so its nixbot.toml
-    # could grant the PR effects (and deploy secrets).
-    default_branch_config = await o.default_branch_repo_config(
-        repo, credentials=credentials
-    )
-    if not should_run_effects(
-        default_branch_config,
-        repo.default_branch,
-        event.branch,
-        is_pull_request=event.pr_number is not None,
-    ):
-        return None
+    """`only` narrows a rerun to the named effects."""
+    allowed = await _effects_allowed(o, event, credentials)
     # The started-flag guards against auto-re-running effects on crash
     # recovery (deploys are not idempotent). Record the triggering ref:
     # effect items carry only build_id and must report on this commit,
     # not the build's stored commit_sha (a reused PR head).
-    if (
+    if allowed and (
         await builds_q.mark_effects_started(
             o.pool,
             id_=build.id,
@@ -115,29 +86,67 @@ async def discover_effects(
         )
         is None
     ):
-        return None
-    task_token = o.task_tokens.issue(build.project_id)
+        return
+    effects = await discover_effects(o, event, build, worktree_path)
+    if effects is None:
+        return
+    # Also drops rows a rerun selected that the flake no longer has.
+    await q.drop_removed_effects(o.pool, build_id=build.id, names=list(effects))
+    if only is not None:
+        effects = {n: m for n, m in effects.items() if n in only}
+    if allowed:
+        await enqueue_effects(o, event, build, effects)
+    elif effects:
+        # Gated refs (PRs) still list what a merge would run.
+        await builds_q.record_skipped_effects(
+            o.pool, build_id=build.id, names=list(effects)
+        )
+
+
+async def _effects_allowed(
+    o: Orchestrator, event: ChangeEvent, credentials: FetchCredentials | None
+) -> bool:
+    repo = event.repo
+    # Gating config comes from the default branch of the central
+    # clone: the worktree is PR-controlled, so its nixbot.toml
+    # could grant the PR effects (and deploy secrets).
+    default_branch_config = await o.default_branch_repo_config(
+        repo, credentials=credentials
+    )
+    return should_run_effects(
+        default_branch_config,
+        repo.default_branch,
+        event.branch,
+        is_pull_request=event.pr_number is not None,
+    )
+
+
+async def discover_effects(
+    o: Orchestrator,
+    event: ChangeEvent,
+    build: BuildRecord,
+    worktree_path: Path,
+) -> dict[str, EffectMeta] | None:
+    """The flake's effects, or None when discovery failed. A pure eval of
+    a tree the build already evaluated, so it needs no tokens."""
     ctx = effects_context(
         o.config,
-        repo,
+        event.repo,
         worktree_path=worktree_path,
         rev=event.commit_sha,
         branch=event.branch,
-        git_token=credentials.token if credentials is not None else None,
-        task_token=task_token,
+        git_token=None,
+        task_token=None,
     )
     try:
         # A bad effect DAG (cycle, unknown dependency) fails discovery
         # here and its reason ends up in the log.
-        effects = await list_effects(ctx)
+        return await list_effects(ctx)
     except (EffectError, OSError):
         # OSError: nix/git missing from PATH. Effects are best-effort
         # and must not fail the (already reported) build.
         logger.exception("effects discovery failed", extra={"build_id": build.id})
         return None
-    finally:
-        o.task_tokens.revoke(task_token)
-    return effects
 
 
 def _dedup_key(build: BuildRecord, name: str, meta: EffectMeta) -> str:
@@ -178,16 +187,18 @@ async def enqueue_effects(
 async def _skip_effect(
     o: Orchestrator, event: ChangeEvent, build: BuildRecord, name: str, failed_dep: str
 ) -> None:
-    """Terminal 'skipped' row: the effect never ran because a dependency
-    did not succeed. Counts as failed on the forge (a deploy that never
-    ran must not look green)."""
-    error = f"skipped: dependency '{failed_dep}' did not succeed"
-    await builds_q.start_effect(o.pool, build_id=build.id, name=name, status="skipped")
+    """Terminal row for an effect whose dependency did not succeed.
+    Counts as failed on the forge (a deploy that never ran must not
+    look green)."""
+    error = f"dependency '{failed_dep}' did not succeed"
+    await builds_q.start_effect(
+        o.pool, build_id=build.id, name=name, status="dependency_failed"
+    )
     await builds_q.finish_effect(
         o.pool,
         build_id=build.id,
         name=name,
-        status="skipped",
+        status="dependency_failed",
         error=error,
         log_size=0,
         log_truncated=False,
@@ -318,14 +329,11 @@ async def post_effects_summary(
 ) -> None:
     """Post the aggregate status once all effects settle. The items run
     independently, so the last to finish reports it."""
-    statuses = [e.status for e in await web_q.web_effects(o.pool, build_id=build.id)]
-    if any(s in ("pending", "running") for s in statuses):
+    summary = await builds_q.effects_summary(o.pool, build_id=build.id)
+    if summary is None or summary.status in ("pending", "running"):
         return
     await o.reporter.effects_finished(
-        event,
-        build,
-        failed=sum(1 for s in statuses if s != "succeeded"),
-        succeeded=sum(1 for s in statuses if s == "succeeded"),
+        event, build, failed=summary.failed, succeeded=summary.succeeded
     )
 
 

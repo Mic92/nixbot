@@ -463,6 +463,7 @@ class _PageRoutes:
             group_counts=group_counts,
             inline=inline,
             effects=await ctx.queries.effects(build["id"]),
+            effects_status=await ctx.queries.effects_status(build["id"]),
             prev_number=prev_number,
             next_number=next_number,
             can_control=await ctx.can_control(request, build),

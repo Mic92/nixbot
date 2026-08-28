@@ -7,6 +7,7 @@ from __future__ import annotations
 __all__: collections.abc.Sequence[str] = (
     "AttributeStatusesRow",
     "EffectDepStatusesRow",
+    "EffectsSummaryRow",
     "EvalJobRowsRow",
     "LockBuildRowRow",
     "QueryResults",
@@ -21,6 +22,7 @@ __all__: collections.abc.Sequence[str] = (
     "detach_build_from_pr",
     "effect_dep_statuses",
     "effects_for_build",
+    "effects_summary",
     "eval_job_rows",
     "find_completed_eval",
     "find_reusable_build",
@@ -31,6 +33,7 @@ __all__: collections.abc.Sequence[str] = (
     "mark_attribute_building",
     "mark_effects_started",
     "record_attributes",
+    "record_skipped_effects",
     "set_build_status",
     "set_eval_warnings",
     "settle_unfinished_attributes",
@@ -64,6 +67,13 @@ class AttributeStatusesRow:
 @dataclasses.dataclass()
 class EffectDepStatusesRow:
     name: str
+    status: str
+
+
+@dataclasses.dataclass()
+class EffectsSummaryRow:
+    failed: int
+    succeeded: int
     status: str
 
 
@@ -182,6 +192,23 @@ EFFECTS_FOR_BUILD: typing.Final[str] = """-- name: EffectsForBuild :many
 SELECT id, build_id, name, status, error, log_size, log_truncated, started_at, finished_at, deps FROM build_effects WHERE build_id = $1 ORDER BY name
 """
 
+EFFECTS_SUMMARY: typing.Final[str] = """-- name: EffectsSummary :one
+SELECT
+    count(*) FILTER (WHERE status IN ('failed', 'dependency_failed'))::bigint AS failed,
+    count(*) FILTER (WHERE status = 'succeeded')::bigint AS succeeded,
+    CASE
+        WHEN bool_or(status = 'running')
+          OR (bool_or(status = 'pending') AND NOT bool_and(status = 'pending'))
+          THEN 'running'
+        WHEN bool_or(status IN ('failed', 'dependency_failed')) THEN 'failed'
+        WHEN bool_or(status = 'pending') THEN 'pending'
+        WHEN bool_or(status = 'succeeded') THEN 'succeeded'
+        ELSE 'skipped'
+    END::text AS status
+FROM build_effects WHERE build_id = $1
+HAVING count(*) > 0
+"""
+
 EVAL_JOB_ROWS: typing.Final[str] = """-- name: EvalJobRows :many
 SELECT attr, system, drv_path, outputs FROM build_attributes
 WHERE build_id = $1
@@ -250,6 +277,13 @@ ON CONFLICT (build_id, attr) DO UPDATE SET
     drv_path = EXCLUDED.drv_path,
     outputs = EXCLUDED.outputs
 WHERE build_attributes.status IN ('pending', 'building')
+"""
+
+RECORD_SKIPPED_EFFECTS: typing.Final[str] = """-- name: RecordSkippedEffects :exec
+INSERT INTO build_effects (build_id, name, status, finished_at)
+SELECT $1::bigint, u.name, 'skipped', now()
+FROM unnest($2::text[]) AS u(name)
+ON CONFLICT (build_id, name) DO NOTHING
 """
 
 SET_BUILD_STATUS: typing.Final[str] = """-- name: SetBuildStatus :exec
@@ -430,6 +464,13 @@ def effects_for_build(conn: ConnectionLike, *, build_id: int) -> QueryResults[mo
     return QueryResults[models.BuildEffect](conn, EFFECTS_FOR_BUILD, _decode_hook, build_id)
 
 
+async def effects_summary(conn: ConnectionLike, *, build_id: int) -> EffectsSummaryRow | None:
+    row = await conn.fetchrow(EFFECTS_SUMMARY, build_id)
+    if row is None:
+        return None
+    return EffectsSummaryRow(failed=row[0], succeeded=row[1], status=row[2])
+
+
 def eval_job_rows(conn: ConnectionLike, *, build_id: int) -> QueryResults[EvalJobRowsRow]:
     def _decode_hook(row: asyncpg.Record) -> EvalJobRowsRow:
         return EvalJobRowsRow(attr=row[0], system=row[1], drv_path=row[2], outputs=row[3])
@@ -488,6 +529,10 @@ async def mark_effects_started(conn: ConnectionLike, *, commit_sha: str, branch:
 
 async def record_attributes(conn: ConnectionLike, *, build_id: int, attrs: collections.abc.Sequence[str], systems: collections.abc.Sequence[str], drv_paths: collections.abc.Sequence[str], outputs: collections.abc.Sequence[str]) -> None:
     await conn.execute(RECORD_ATTRIBUTES, build_id, attrs, systems, drv_paths, outputs)
+
+
+async def record_skipped_effects(conn: ConnectionLike, *, build_id: int, names: collections.abc.Sequence[str]) -> None:
+    await conn.execute(RECORD_SKIPPED_EFFECTS, build_id, names)
 
 
 async def set_build_status(conn: ConnectionLike, *, status: str, error: str | None, terminal: collections.abc.Sequence[str], id_: int) -> None:

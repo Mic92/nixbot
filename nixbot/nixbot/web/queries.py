@@ -8,6 +8,7 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from ..db_gen import builds as builds_gen  # noqa: TID252
 from ..db_gen import web as gen  # noqa: TID252
 
 if TYPE_CHECKING:
@@ -163,6 +164,10 @@ class WebQueries:
 
     async def effects(self, build_id: int) -> list[dict[str, Any]]:
         return _dicts(await gen.web_effects(self.pool, build_id=build_id))
+
+    async def effects_status(self, build_id: int) -> str | None:
+        row = await builds_gen.effects_summary(self.pool, build_id=build_id)
+        return row.status if row else None
 
     async def attribute_counts(
         self, build_id: int, q: str | None = None
