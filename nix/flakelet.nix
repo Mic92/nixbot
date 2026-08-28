@@ -6,13 +6,12 @@
       description = "nixbot configuration, written as nixbot-config.json.";
     };
     listen = {
-      type = types.option (
-        types.union [
-          types.string
-          types.number
-        ]
-      );
-      description = "Unix socket path or TCP port; defaults to /run/<name>/web.sock.";
+      type = types.union [
+        types.string
+        types.number
+      ];
+      defaultFunc = { inputs, ... }: "/run/${inputs.flakelet.name}/web.sock";
+      description = "Unix socket path or TCP port.";
     };
     user = {
       type = types.string;
@@ -38,19 +37,14 @@
   };
 
   impl =
-    {
-      options,
-      pkgs,
-      name,
-      contracts,
-      ...
-    }:
+    { options, inputs }:
     let
-      inherit (pkgs) lib;
+      inherit (inputs.nixpkgs) pkgs lib;
+      inherit (inputs.flakelet) name contracts;
       nix-eval-jobs = pkgs.callPackage ../packages/nix-eval-jobs.nix { };
       nixbot = pkgs.python3.pkgs.callPackage ../packages/nixbot.nix { inherit nix-eval-jobs; };
       configFile = (pkgs.formats.json { }).generate "nixbot-config.json" options.config;
-      listen = if options.listen == null then "/run/${name}/web.sock" else options.listen;
+      inherit (options) listen;
       overUnixSocket = !lib.isInt listen;
       user = options.user;
       gcrootsDir = options.config.gcroots_dir or "/nix/var/nix/gcroots/per-user/${user}";
