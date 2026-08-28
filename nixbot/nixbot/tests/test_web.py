@@ -105,7 +105,9 @@ def test_homepage(client: WebHarness) -> None:
     response = client.get("/")
     assert response.status_code == 200
     assert "acme/widget" in response.text  # sidebar
-    assert "#3" in response.text  # recent feed
+    # Card shows the latest default-branch build, not PR build #3.
+    assert "#2" in response.text
+    assert "#3" not in response.text
 
 
 def test_project_page_with_filters(client: WebHarness) -> None:
@@ -277,9 +279,9 @@ def test_attribute_history(client: WebHarness) -> None:
         assert f"/builds/{number}" in response.text
 
 
-def test_overview_pass_rate_ignores_pr_branches(client: WebHarness) -> None:
-    """Failing PR branches must not drag down the homepage pass rate or
-    history sparkline: only the default branch counts."""
+def test_overview_ignores_pr_branches(client: WebHarness) -> None:
+    """Failing PR branches must not drag down the homepage pass rate,
+    history sparkline or card status: only the default branch counts."""
 
     async def setup() -> int:
         pool = client.ctx.queries.pool
@@ -316,6 +318,9 @@ def test_overview_pass_rate_ignores_pr_branches(client: WebHarness) -> None:
         assert row["pass_rate"] == 1.0
         # Sparkline history excludes PR builds.
         assert [h["number"] for h in row["history"]] == [1]
+        # Card status/number reflect the default branch, not the newest PR.
+        assert row["last_number"] == 1
+        assert row["last_status"] == "succeeded"
     finally:
         # Shared module DB: drop the project so global build counts in
         # the activity-page tests stay correct.

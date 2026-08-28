@@ -365,6 +365,7 @@ SELECT p.id, p.forge, p.forge_repo_id, p.owner, p.name, p.default_branch, p.url,
 FROM projects p
 LEFT JOIN LATERAL (
     SELECT id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number FROM builds b WHERE b.project_id = p.id
+      AND b.pr_number IS NULL AND b.branch = p.default_branch
     ORDER BY b.number DESC LIMIT 1
 ) lb ON true
 LEFT JOIN LATERAL (
