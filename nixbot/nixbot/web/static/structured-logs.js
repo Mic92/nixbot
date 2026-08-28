@@ -197,6 +197,8 @@
     /** @type {Map<Card, string[]>} */
     const pendingRows = new Map();
     let flushScheduled = false;
+    // The finished page has the full log. Live only needs the tail.
+    const MAX_LIVE_ROWS = 5000;
 
     function flush() {
       flushScheduled = false;
@@ -206,6 +208,13 @@
         const atBottom =
           c.vp.scrollHeight - c.vp.scrollTop - c.vp.clientHeight < 40;
         c.vp.insertAdjacentHTML("beforeend", chunks.join(""));
+        const excess = c.vp.childElementCount - MAX_LIVE_ROWS;
+        if (excess > 0) {
+          const range = document.createRange();
+          range.setStartBefore(/** @type {Node} */ (c.vp.firstChild));
+          range.setEndAfter(/** @type {Node} */ (c.vp.children[excess - 1]));
+          range.deleteContents();
+        }
         if (c.el.open && atBottom) c.vp.scrollTop = c.vp.scrollHeight;
       }
       pendingRows.clear();
@@ -228,7 +237,7 @@
       const c = cards.get(delta.idx);
       if (delta.t === "drv") {
         addCard(delta.idx, "running", delta.card ?? "");
-      } else if (delta.t === "line" || delta.t === "phase") {
+      } else if (delta.t === "line") {
         addRows(c, delta.html);
       } else if (delta.t === "status" && c && delta.status) {
         flush();

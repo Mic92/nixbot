@@ -114,7 +114,8 @@ def test_log_page_keeps_up_with_a_line_burst(page: Page, server: TestServer) -> 
     cap = StructuredCapture()
     writer.capture = cap
     server.registry.register(build_id, ATTR, writer)
-    lines = 5000
+    lines = 8000
+    max_live_rows = 5000  # structured-logs.js MAX_LIVE_ROWS
     # Unbatched: one forced layout per line. Batched: one per frame.
     max_layouts = lines // 20
     cdp = page.context.new_cdp_session(page)
@@ -144,7 +145,9 @@ def test_log_page_keeps_up_with_a_line_burst(page: Page, server: TestServer) -> 
         server.run(burst())
         page.locator(".logline", has_text="burst done").wait_for(timeout=60_000)
         assert layout_count() - before < max_layouts
-        assert page.locator(".log-card .logline").count() == lines + 1
+        rows = page.locator(".log-card .log-lines > *")
+        assert rows.count() == max_live_rows
+        assert "burst done" in rows.last.inner_text()
     finally:
         cdp.detach()
         cap.close()

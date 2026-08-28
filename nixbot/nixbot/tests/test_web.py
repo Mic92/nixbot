@@ -1254,9 +1254,10 @@ def test_structured_live_stream(client: WebHarness, tmp_path: Path) -> None:
     # Rows are rendered server-side (ANSI applied), not shipped as raw text.
     assert "d1-L1" in stream
     assert '"text"' not in stream
-    assert "event: delta" in stream
-    assert '"t":"phase"' in stream  # live delta after subscribe
-    assert '"t":"line"' in stream  # rendered delta
+    # The phase divider and the line queued behind it coalesce into one
+    # rendered delta.
+    assert stream.count("event: delta") == 1
+    assert "phase-sep" in stream
     assert "ansi-red" in stream
     assert "event: done" in stream
 
