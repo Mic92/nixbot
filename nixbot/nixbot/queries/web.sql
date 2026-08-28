@@ -24,6 +24,7 @@ SELECT p.*,
 FROM projects p
 LEFT JOIN LATERAL (
     SELECT * FROM builds b WHERE b.project_id = p.id
+      AND b.pr_number IS NULL AND b.branch = p.default_branch
     ORDER BY b.number DESC LIMIT 1
 ) lb ON true
 LEFT JOIN LATERAL (
