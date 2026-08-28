@@ -593,7 +593,7 @@ class StructuredCapture:
 
     def log_line(self, act_id: int, text: str) -> None:
         drv = self._act.get(act_id, self.SETUP)
-        if strip_ansi(text).startswith(_PHASE_ECHO):
+        if _PHASE_ECHO in text and strip_ansi(text).startswith(_PHASE_ECHO):
             # RES_SET_PHASE already records this. Drop stdenv's echo.
             return
         self._w.line(drv, text, ts=self._ts())

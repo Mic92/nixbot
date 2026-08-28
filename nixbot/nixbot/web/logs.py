@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import functools
 import html
 import json
 from typing import TYPE_CHECKING, Any, NamedTuple
@@ -131,25 +132,33 @@ def _apply_osc(payload: str, style: _Style) -> _Style:
     return style._replace(href=uri or None)
 
 
+@functools.lru_cache(maxsize=256)
+def _wrap(style: _Style) -> tuple[str, str]:
+    pre = post = ""
+    classes = " ".join(c for c in (style.fg, "ansi-bold" if style.bold else None) if c)
+    if classes:
+        pre, post = f'<span class="{classes}">', "</span>"
+    if style.href:
+        pre = f'<a href="{html.escape(style.href, quote=True)}" rel="nofollow">{pre}'
+        post += "</a>"
+    return pre, post
+
+
 def _render_segment(segment: str, style: _Style) -> str:
     if not segment:
         return ""
     # Stripping C0 before tokenizing would eat OSC's BEL terminator.
     out = html.escape(CTRL_RE.sub("", segment))
-    classes = " ".join(c for c in (style.fg, "ansi-bold" if style.bold else None) if c)
-    if classes:
-        out = f'<span class="{classes}">{out}</span>'
-    if style.href:
-        out = (
-            f'<a href="{html.escape(style.href, quote=True)}" rel="nofollow">{out}</a>'
-        )
-    return out
+    pre, post = _wrap(style)
+    return f"{pre}{out}{post}"
 
 
 def _ansi_convert(text: str, style: _Style) -> tuple[str, _Style]:
     """Convert SGR colors to spans and OSC 8 to links. Strip every
     other sequence. `style` carries in from the previous chunk/line;
     the style left open at the end is returned for the next one."""
+    if "\x1b" not in text:
+        return _render_segment(text, style), style
     out: list[str] = []
     pos = 0
     for match in ANSI_TOKEN_RE.finditer(text):
