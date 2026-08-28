@@ -6,6 +6,7 @@ browser. The httpx web tests can only assert the markers exist.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import TYPE_CHECKING
 
@@ -103,4 +104,51 @@ def test_log_page_streams_live_output(page: Page, server: TestServer) -> None:
         card = page.locator(".log-card", has_text="hello-2.12")
         assert "hello from the build" in card.inner_text()
     finally:
+        server.registry.unregister(build_id, ATTR)
+
+
+def test_log_page_keeps_up_with_a_line_burst(page: Page, server: TestServer) -> None:
+    """Mic92/nixbot#98: thousands of lines must not cost a layout each."""
+    build_id = server.run(_build_id(server, 3))
+    writer = LogWriter(path=server.state_dir / "live" / f"{ATTR}-burst.zst")
+    cap = StructuredCapture()
+    writer.capture = cap
+    server.registry.register(build_id, ATTR, writer)
+    lines = 8000
+    max_live_rows = 5000  # structured-logs.js MAX_LIVE_ROWS
+    # Unbatched: one forced layout per line. Batched: one per frame.
+    max_layouts = lines // 20
+    cdp = page.context.new_cdp_session(page)
+    cdp.send("Performance.enable")
+
+    def layout_count() -> int:
+        metrics = cdp.send("Performance.getMetrics")["metrics"]
+        return next(int(m["value"]) for m in metrics if m["name"] == "LayoutCount")
+
+    async def burst() -> None:
+        cap.start_build(1, "/nix/store/aaa-linux-6.6.drv")
+        for i in range(lines):
+            cap.log_line(1, f"  CC      drivers/gpu/drm/obj_{i}.o")
+            if i % 200 == 0:
+                await asyncio.sleep(0)
+        cap.log_line(1, "burst done")
+
+    try:
+        page.goto(f"/repos/github/acme/widget/builds/3/logs/{ATTR}")
+        deadline = time.monotonic() + 15
+        while not cap._subs:  # noqa: SLF001
+            if time.monotonic() > deadline:
+                msg = "browser never connected to the SSE stream"
+                raise TimeoutError(msg)
+            time.sleep(0.1)
+        before = layout_count()
+        server.run(burst())
+        page.locator(".logline", has_text="burst done").wait_for(timeout=60_000)
+        assert layout_count() - before < max_layouts
+        rows = page.locator(".log-card .log-lines > *")
+        assert rows.count() == max_live_rows
+        assert "burst done" in rows.last.inner_text()
+    finally:
+        cdp.detach()
+        cap.close()
         server.registry.unregister(build_id, ATTR)

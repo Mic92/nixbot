@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import functools
 import html
 import json
 from typing import TYPE_CHECKING, Any, NamedTuple
@@ -131,25 +132,33 @@ def _apply_osc(payload: str, style: _Style) -> _Style:
     return style._replace(href=uri or None)
 
 
+@functools.lru_cache(maxsize=256)
+def _wrap(style: _Style) -> tuple[str, str]:
+    pre = post = ""
+    classes = " ".join(c for c in (style.fg, "ansi-bold" if style.bold else None) if c)
+    if classes:
+        pre, post = f'<span class="{classes}">', "</span>"
+    if style.href:
+        pre = f'<a href="{html.escape(style.href, quote=True)}" rel="nofollow">{pre}'
+        post += "</a>"
+    return pre, post
+
+
 def _render_segment(segment: str, style: _Style) -> str:
     if not segment:
         return ""
     # Stripping C0 before tokenizing would eat OSC's BEL terminator.
     out = html.escape(CTRL_RE.sub("", segment))
-    classes = " ".join(c for c in (style.fg, "ansi-bold" if style.bold else None) if c)
-    if classes:
-        out = f'<span class="{classes}">{out}</span>'
-    if style.href:
-        out = (
-            f'<a href="{html.escape(style.href, quote=True)}" rel="nofollow">{out}</a>'
-        )
-    return out
+    pre, post = _wrap(style)
+    return f"{pre}{out}{post}"
 
 
 def _ansi_convert(text: str, style: _Style) -> tuple[str, _Style]:
     """Convert SGR colors to spans and OSC 8 to links. Strip every
     other sequence. `style` carries in from the previous chunk/line;
     the style left open at the end is returned for the next one."""
+    if "\x1b" not in text:
+        return _render_segment(text, style), style
     out: list[str] = []
     pos = 0
     for match in ANSI_TOKEN_RE.finditer(text):
@@ -1177,6 +1186,69 @@ async def _stream_events(
             writer.unsubscribe(queue)
 
 
+async def _drain(queue: asyncio.Queue[dict | None]) -> list[dict | None]:
+    """Everything already queued (at least one item). One SSE event per
+    burst instead of one per line keeps chatty builds cheap on both ends."""
+    batch = [await asyncio.wait_for(queue.get(), timeout=30)]
+    while batch[-1] is not None and not queue.empty():
+        batch.append(queue.get_nowait())
+    return batch
+
+
+def _coalesce_lines(deltas: Iterable[dict]) -> list[dict]:
+    """Merge runs of rendered line deltas of one derivation."""
+    out: list[dict] = []
+    for delta in deltas:
+        prev = out[-1] if out else None
+        if prev and delta["t"] == "line" == prev["t"] and prev["idx"] == delta["idx"]:
+            prev["html"] += delta["html"]
+        else:
+            out.append(delta)
+    return out
+
+
+class _LiveRenderer:
+    """Renders card shells (drv_card macro) and rows for the live stream,
+    carrying each derivation's trailing SGR style into the next batch."""
+
+    def __init__(self, drv_card: Callable[..., str], base: str) -> None:
+        self._drv_card = drv_card
+        self._base = base
+        self._styles: dict[int, _Style] = {}
+
+    def card(self, d: dict) -> str:
+        # live=True: rows arrive over the SSE, so no htmx fetch attrs and
+        # no raw link (the container behind it does not exist yet).
+        live = d["status"] in ("running", "failed")
+        return str(self._drv_card(d, self._base, open=live, live=True))
+
+    def state(self, state: list[dict]) -> list[dict]:
+        for e in state:
+            e["html"], self._styles[e["idx"]] = render_rows(
+                e["idx"], 1, e.pop("lines"), phases=_phase_at(e["ph"])
+            )
+            e["card"] = self.card(e)
+        return state
+
+    def delta(self, delta: dict) -> dict:
+        if delta["t"] == "drv":
+            delta["card"] = self.card(
+                {**delta, "status": "running", "n": 0, "ph": [], "t0": None}
+            )
+        elif delta["t"] == "line":
+            idx = delta["idx"]
+            delta["html"], self._styles[idx] = render_rows(
+                idx, delta["from"], [delta.pop("text")], self._styles.get(idx, _RESET)
+            )
+        elif delta["t"] == "phase":
+            delta = {
+                "t": "line",
+                "idx": delta["idx"],
+                "html": phase_sep(delta["phase"]),
+            }
+        return delta
+
+
 async def _structured_events(
     capture: StructuredCapture | None,
     drv_card: Callable[..., str],
@@ -1184,54 +1256,28 @@ async def _structured_events(
 ) -> AsyncGenerator[str, None]:
     """Live per-derivation stream: a full-state burst on connect, then
     JSON deltas until the build finishes. A finished/absent capture just
-    signals done so the client reloads into the container page.
-
-    Card shells (via the drv_card macro) and log rows are rendered here;
-    the client only inserts HTML. Each drv carries its trailing SGR style
-    so a later line delta continues the same color."""
-
-    def card(d: dict) -> str:
-        # live=True: rows arrive over the SSE, so no htmx fetch attrs and
-        # no raw link (the container behind it does not exist yet).
-        return str(
-            drv_card(d, base, open=d["status"] in ("running", "failed"), live=True)
-        )
-
+    signals done so the client reloads into the container page."""
     if capture is None:
         yield "event: done\ndata: \n\n"
         return
+    render = _LiveRenderer(drv_card, base)
     queue = capture.subscribe()
-    state = capture.state()  # atomic with subscribe: no await between
-    styles: dict[int, _Style] = {}
-    for e in state:
-        html_rows, styles[e["idx"]] = render_rows(
-            e["idx"], 1, e.pop("lines"), phases=_phase_at(e["ph"])
-        )
-        e["html"] = html_rows
-        e["card"] = card(e)
+    state = render.state(capture.state())  # atomic with subscribe: no await
     yield f"event: state\ndata: {json.dumps(state, separators=(',', ':'))}\n\n"
     try:
         while True:
             try:
-                delta = await asyncio.wait_for(queue.get(), timeout=30)
+                batch = await _drain(queue)
             except TimeoutError:
                 yield ": keepalive\n\n"
                 continue
-            if delta is None:
+            for delta in _coalesce_lines(
+                render.delta(d) for d in batch if d is not None
+            ):
+                yield f"event: delta\ndata: {json.dumps(delta, separators=(',', ':'))}\n\n"
+            if batch[-1] is None:
                 yield "event: done\ndata: \n\n"
                 return
-            if delta["t"] == "drv":
-                delta["card"] = card(
-                    {**delta, "status": "running", "n": 0, "ph": [], "t0": None}
-                )
-            elif delta["t"] == "line":
-                idx = delta["idx"]
-                delta["html"], styles[idx] = render_rows(
-                    idx, delta["from"], [delta.pop("text")], styles.get(idx, _RESET)
-                )
-            elif delta["t"] == "phase":
-                delta["html"] = phase_sep(delta["phase"])
-            yield f"event: delta\ndata: {json.dumps(delta, separators=(',', ':'))}\n\n"
     finally:
         capture.unsubscribe(queue)
 

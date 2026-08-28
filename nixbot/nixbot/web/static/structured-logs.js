@@ -7,8 +7,8 @@
 "use strict";
 
 /**
- * @typedef {{idx:number,name:string,status:string,n:number,t0?:number|null,t1?:number|null,html?:string,card?:string}} Drv
- * @typedef {{t:string,idx:number,name?:string,status?:string,from?:number,html?:string,card?:string}} Delta
+ * @typedef {{idx:number,status:string,html?:string,card?:string}} Drv
+ * @typedef {{t:string,idx:number,status?:string,html?:string,card?:string}} Delta
  */
 
 (() => {
@@ -136,10 +136,9 @@
   // in arrival order, the running one following its tail. The
   // terminal-status reload swaps to the polished container page.
   function runLive() {
-    /** @type {Map<number, Drv>} */
-    const byIdx = new Map();
-    /** @type {Map<number, HTMLDetailsElement>} */
-    const cardOf = new Map();
+    /** @typedef {{el: HTMLDetailsElement, vp: HTMLElement, status: string}} Card */
+    /** @type {Map<number, Card>} */
+    const cards = new Map();
     /** @param {string} s */
     const iconState = (s) =>
       s === "failed" ? "failed" : s === "running" ? "running" : "succeeded";
@@ -169,95 +168,92 @@
 
     /** Insert the server-rendered card shell (same drv_card macro as the
      * finished page).
-     * @param {Drv} d @returns {HTMLDetailsElement} */
-    function ensureCard(d) {
-      const existing = cardOf.get(d.idx);
-      if (existing) return existing;
-      const target = groupFor(d.status);
-      target.insertAdjacentHTML("beforeend", d.card ?? "");
+     * @param {number} idx @param {string} status @param {string} html */
+    function addCard(idx, status, html) {
+      const target = groupFor(status);
+      target.insertAdjacentHTML("beforeend", html);
       const el = /** @type {HTMLDetailsElement} */ (target.lastElementChild);
-      cardOf.set(d.idx, el);
-      updateGroups();
-      return el;
+      const c = { el, vp: pick(el, ".log-lines"), status };
+      cards.set(idx, c);
+      setStatus(c, status);
+      return c;
     }
 
-    /** @param {Drv} d @returns {HTMLDetailsElement} */
-    function setMeta(d) {
-      const el = ensureCard(d);
-      pick(el, ".status-icon").className = "status-icon " + iconState(d.status);
-      el.classList.toggle("ok", d.status !== "failed");
-      pick(el, ".meta-status").textContent = d.status === "running"
+    /** @param {Card} c @param {string} status */
+    function setStatus(c, status) {
+      c.status = status;
+      pick(c.el, ".status-icon").className = "status-icon " + iconState(status);
+      c.el.classList.toggle("ok", status !== "failed");
+      pick(c.el, ".meta-status").textContent = status === "running"
         ? "building…"
-        : d.status;
-      const target = groupFor(d.status);
-      if (el.parentElement !== target) {
-        target.appendChild(el);
-        updateGroups();
-      }
-      return el;
+        : status;
+      const target = groupFor(status);
+      if (c.el.parentElement !== target) target.appendChild(c.el);
+      updateGroups();
     }
 
-    /** Append server-rendered rows (ANSI already applied).
-     * @param {number} idx @param {number} n @param {string} html */
-    function addLines(idx, n, html) {
-      const d = byIdx.get(idx);
-      if (!d || !html) return;
-      const el = ensureCard(d);
-      const vp = pick(el, ".log-lines");
-      // Follow the tail only when already at the bottom, so scrolling up
-      // to read pauses following and scrolling back resumes it.
-      const atBottom = vp.scrollHeight - vp.scrollTop - vp.clientHeight < 40;
-      vp.insertAdjacentHTML("beforeend", html);
-      d.n = n;
-      if (el.open && atBottom) vp.scrollTop = vp.scrollHeight;
+    // Flushed once per frame: a per-line insert + scrollHeight read is a
+    // forced layout per line (Mic92/nixbot#98).
+    /** @type {Map<Card, string[]>} */
+    const pendingRows = new Map();
+    let flushScheduled = false;
+    // The finished page has the full log. Live only needs the tail.
+    const MAX_LIVE_ROWS = 5000;
+
+    function flush() {
+      flushScheduled = false;
+      for (const [c, chunks] of pendingRows) {
+        // Follow the tail only when already at the bottom, so scrolling up
+        // to read pauses following and scrolling back resumes it.
+        const atBottom =
+          c.vp.scrollHeight - c.vp.scrollTop - c.vp.clientHeight < 40;
+        c.vp.insertAdjacentHTML("beforeend", chunks.join(""));
+        const excess = c.vp.childElementCount - MAX_LIVE_ROWS;
+        if (excess > 0) {
+          const range = document.createRange();
+          range.setStartBefore(/** @type {Node} */ (c.vp.firstChild));
+          range.setEndAfter(/** @type {Node} */ (c.vp.children[excess - 1]));
+          range.deleteContents();
+        }
+        if (c.el.open && atBottom) c.vp.scrollTop = c.vp.scrollHeight;
+      }
+      pendingRows.clear();
+    }
+
+    /** @param {Card|undefined} c @param {string|undefined} html */
+    function addRows(c, html) {
+      if (!c || !html) return;
+      const chunks = pendingRows.get(c);
+      if (chunks) chunks.push(html);
+      else pendingRows.set(c, [html]);
+      if (!flushScheduled) {
+        flushScheduled = true;
+        requestAnimationFrame(flush);
+      }
     }
 
     /** @param {Delta} delta */
     function apply(delta) {
-      const d = byIdx.get(delta.idx);
+      const c = cards.get(delta.idx);
       if (delta.t === "drv") {
-        const nd = {
-          idx: delta.idx,
-          name: delta.name ?? "",
-          status: "running",
-          n: 0,
-          card: delta.card,
-        };
-        byIdx.set(nd.idx, nd);
-        setMeta(nd);
+        addCard(delta.idx, "running", delta.card ?? "");
       } else if (delta.t === "line") {
-        addLines(delta.idx, delta.from ?? 1, delta.html ?? "");
-      } else if (delta.t === "phase" && d) {
-        // The divider is a normal row appended before the phase's output.
-        pick(ensureCard(d), ".log-lines").insertAdjacentHTML(
-          "beforeend",
-          delta.html ?? "",
-        );
-      } else if (delta.t === "status" && d) {
-        d.status = delta.status ?? d.status;
-        const el = setMeta(d);
-        if (delta.status === "failed") el.open = true;
-        else if (delta.status !== "running") el.open = false;
+        addRows(c, delta.html);
+      } else if (delta.t === "status" && c && delta.status) {
+        flush();
+        setStatus(c, delta.status);
+        if (delta.status !== "running") c.el.open = delta.status === "failed";
       }
     }
 
     /** @param {Drv[]} state */
     function reset(state) {
-      for (const el of list.querySelectorAll(".log-card")) el.remove();
-      byIdx.clear();
-      cardOf.clear();
+      for (const c of cards.values()) c.el.remove();
+      cards.clear();
+      pendingRows.clear();
       updateGroups();
       for (const e of state) {
-        const d = {
-          idx: e.idx,
-          name: e.name,
-          status: e.status,
-          n: e.n,
-          card: e.card,
-        };
-        byIdx.set(d.idx, d);
-        setMeta(d);
-        addLines(d.idx, e.n, e.html || "");
+        addRows(addCard(e.idx, e.status, e.card ?? ""), e.html);
       }
     }
 
