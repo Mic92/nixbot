@@ -7,8 +7,8 @@
 "use strict";
 
 /**
- * @typedef {{idx:number,name:string,status:string,html?:string,card?:string}} Drv
- * @typedef {{t:string,idx:number,name?:string,status?:string,from?:number,html?:string,card?:string}} Delta
+ * @typedef {{idx:number,status:string,html?:string,card?:string}} Drv
+ * @typedef {{t:string,idx:number,status?:string,html?:string,card?:string}} Delta
  */
 
 (() => {
@@ -136,10 +136,9 @@
   // in arrival order, the running one following its tail. The
   // terminal-status reload swaps to the polished container page.
   function runLive() {
-    /** @type {Map<number, Drv>} */
-    const byIdx = new Map();
-    /** @type {Map<number, HTMLDetailsElement>} */
-    const cardOf = new Map();
+    /** @typedef {{el: HTMLDetailsElement, vp: HTMLElement, status: string}} Card */
+    /** @type {Map<number, Card>} */
+    const cards = new Map();
     /** @param {string} s */
     const iconState = (s) =>
       s === "failed" ? "failed" : s === "running" ? "running" : "succeeded";
@@ -169,62 +168,55 @@
 
     /** Insert the server-rendered card shell (same drv_card macro as the
      * finished page).
-     * @param {Drv} d @returns {HTMLDetailsElement} */
-    function ensureCard(d) {
-      const existing = cardOf.get(d.idx);
-      if (existing) return existing;
-      const target = groupFor(d.status);
-      target.insertAdjacentHTML("beforeend", d.card ?? "");
+     * @param {number} idx @param {string} status @param {string} html */
+    function addCard(idx, status, html) {
+      const target = groupFor(status);
+      target.insertAdjacentHTML("beforeend", html);
       const el = /** @type {HTMLDetailsElement} */ (target.lastElementChild);
-      cardOf.set(d.idx, el);
-      updateGroups();
-      return el;
+      const c = { el, vp: pick(el, ".log-lines"), status };
+      cards.set(idx, c);
+      setStatus(c, status);
+      return c;
     }
 
-    /** @param {Drv} d @returns {HTMLDetailsElement} */
-    function setMeta(d) {
-      const el = ensureCard(d);
-      pick(el, ".status-icon").className = "status-icon " + iconState(d.status);
-      el.classList.toggle("ok", d.status !== "failed");
-      pick(el, ".meta-status").textContent = d.status === "running"
+    /** @param {Card} c @param {string} status */
+    function setStatus(c, status) {
+      c.status = status;
+      pick(c.el, ".status-icon").className = "status-icon " + iconState(status);
+      c.el.classList.toggle("ok", status !== "failed");
+      pick(c.el, ".meta-status").textContent = status === "running"
         ? "building…"
-        : d.status;
-      const target = groupFor(d.status);
-      if (el.parentElement !== target) {
-        target.appendChild(el);
-        updateGroups();
-      }
-      return el;
+        : status;
+      const target = groupFor(status);
+      if (c.el.parentElement !== target) target.appendChild(c.el);
+      updateGroups();
     }
 
     // Flushed once per frame: a per-line insert + scrollHeight read is a
     // forced layout per line (Mic92/nixbot#98).
-    /** @type {Map<number, string[]>} */
+    /** @type {Map<Card, string[]>} */
     const pendingRows = new Map();
     let flushScheduled = false;
 
     function flush() {
       flushScheduled = false;
-      for (const [idx, chunks] of pendingRows) {
-        const d = byIdx.get(idx);
-        if (!d) continue;
-        const el = ensureCard(d);
-        const vp = pick(el, ".log-lines");
+      for (const [c, chunks] of pendingRows) {
         // Follow the tail only when already at the bottom, so scrolling up
         // to read pauses following and scrolling back resumes it.
-        const atBottom = vp.scrollHeight - vp.scrollTop - vp.clientHeight < 40;
-        vp.insertAdjacentHTML("beforeend", chunks.join(""));
-        if (el.open && atBottom) vp.scrollTop = vp.scrollHeight;
+        const atBottom =
+          c.vp.scrollHeight - c.vp.scrollTop - c.vp.clientHeight < 40;
+        c.vp.insertAdjacentHTML("beforeend", chunks.join(""));
+        if (c.el.open && atBottom) c.vp.scrollTop = c.vp.scrollHeight;
       }
       pendingRows.clear();
     }
 
-    /** @param {number} idx @param {string} html */
-    function addRows(idx, html) {
-      if (!html || !byIdx.has(idx)) return;
-      const chunks = pendingRows.get(idx);
+    /** @param {Card|undefined} c @param {string|undefined} html */
+    function addRows(c, html) {
+      if (!c || !html) return;
+      const chunks = pendingRows.get(c);
       if (chunks) chunks.push(html);
-      else pendingRows.set(idx, [html]);
+      else pendingRows.set(c, [html]);
       if (!flushScheduled) {
         flushScheduled = true;
         requestAnimationFrame(flush);
@@ -233,44 +225,26 @@
 
     /** @param {Delta} delta */
     function apply(delta) {
-      const d = byIdx.get(delta.idx);
+      const c = cards.get(delta.idx);
       if (delta.t === "drv") {
-        const nd = {
-          idx: delta.idx,
-          name: delta.name ?? "",
-          status: "running",
-          card: delta.card,
-        };
-        byIdx.set(nd.idx, nd);
-        setMeta(nd);
+        addCard(delta.idx, "running", delta.card ?? "");
       } else if (delta.t === "line" || delta.t === "phase") {
-        addRows(delta.idx, delta.html ?? "");
-      } else if (delta.t === "status" && d) {
+        addRows(c, delta.html);
+      } else if (delta.t === "status" && c && delta.status) {
         flush();
-        d.status = delta.status ?? d.status;
-        const el = setMeta(d);
-        if (delta.status === "failed") el.open = true;
-        else if (delta.status !== "running") el.open = false;
+        setStatus(c, delta.status);
+        if (delta.status !== "running") c.el.open = delta.status === "failed";
       }
     }
 
     /** @param {Drv[]} state */
     function reset(state) {
-      for (const el of list.querySelectorAll(".log-card")) el.remove();
-      byIdx.clear();
-      cardOf.clear();
+      for (const c of cards.values()) c.el.remove();
+      cards.clear();
       pendingRows.clear();
       updateGroups();
       for (const e of state) {
-        const d = {
-          idx: e.idx,
-          name: e.name,
-          status: e.status,
-          card: e.card,
-        };
-        byIdx.set(d.idx, d);
-        setMeta(d);
-        addRows(d.idx, e.html || "");
+        addRows(addCard(e.idx, e.status, e.card ?? ""), e.html);
       }
     }
 
