@@ -20,7 +20,6 @@ from nixbot_effects import EffectError
 
 from .db_gen import builds as builds_q
 from .db_gen import maintenance as q
-from .db_gen import web as web_q
 from .db_gen import work_queue as wq
 from .effects import (
     EffectMeta,
@@ -330,14 +329,11 @@ async def post_effects_summary(
 ) -> None:
     """Post the aggregate status once all effects settle. The items run
     independently, so the last to finish reports it."""
-    statuses = [e.status for e in await web_q.web_effects(o.pool, build_id=build.id)]
-    if any(s in ("pending", "running") for s in statuses):
+    summary = await builds_q.effects_summary(o.pool, build_id=build.id)
+    if summary is None or summary.status in ("pending", "running"):
         return
     await o.reporter.effects_finished(
-        event,
-        build,
-        failed=sum(1 for s in statuses if s in ("failed", "dependency_failed")),
-        succeeded=sum(1 for s in statuses if s == "succeeded"),
+        event, build, failed=summary.failed, succeeded=summary.succeeded
     )
 
 

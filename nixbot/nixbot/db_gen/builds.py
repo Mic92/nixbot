@@ -7,6 +7,7 @@ from __future__ import annotations
 __all__: collections.abc.Sequence[str] = (
     "AttributeStatusesRow",
     "EffectDepStatusesRow",
+    "EffectsSummaryRow",
     "EvalJobRowsRow",
     "LockBuildRowRow",
     "QueryResults",
@@ -21,6 +22,7 @@ __all__: collections.abc.Sequence[str] = (
     "detach_build_from_pr",
     "effect_dep_statuses",
     "effects_for_build",
+    "effects_summary",
     "eval_job_rows",
     "find_completed_eval",
     "find_reusable_build",
@@ -65,6 +67,13 @@ class AttributeStatusesRow:
 @dataclasses.dataclass()
 class EffectDepStatusesRow:
     name: str
+    status: str
+
+
+@dataclasses.dataclass()
+class EffectsSummaryRow:
+    failed: int
+    succeeded: int
     status: str
 
 
@@ -181,6 +190,23 @@ WHERE e.build_id = $1 AND e.name = $2
 
 EFFECTS_FOR_BUILD: typing.Final[str] = """-- name: EffectsForBuild :many
 SELECT id, build_id, name, status, error, log_size, log_truncated, started_at, finished_at, deps FROM build_effects WHERE build_id = $1 ORDER BY name
+"""
+
+EFFECTS_SUMMARY: typing.Final[str] = """-- name: EffectsSummary :one
+SELECT
+    count(*) FILTER (WHERE status IN ('failed', 'dependency_failed'))::bigint AS failed,
+    count(*) FILTER (WHERE status = 'succeeded')::bigint AS succeeded,
+    CASE
+        WHEN bool_or(status = 'running')
+          OR (bool_or(status = 'pending') AND NOT bool_and(status = 'pending'))
+          THEN 'running'
+        WHEN bool_or(status IN ('failed', 'dependency_failed')) THEN 'failed'
+        WHEN bool_or(status = 'pending') THEN 'pending'
+        WHEN bool_or(status = 'succeeded') THEN 'succeeded'
+        ELSE 'skipped'
+    END::text AS status
+FROM build_effects WHERE build_id = $1
+HAVING count(*) > 0
 """
 
 EVAL_JOB_ROWS: typing.Final[str] = """-- name: EvalJobRows :many
@@ -436,6 +462,13 @@ def effects_for_build(conn: ConnectionLike, *, build_id: int) -> QueryResults[mo
     def _decode_hook(row: asyncpg.Record) -> models.BuildEffect:
         return models.BuildEffect(id=row[0], build_id=row[1], name=row[2], status=row[3], error=row[4], log_size=row[5], log_truncated=row[6], started_at=row[7], finished_at=row[8], deps=row[9])
     return QueryResults[models.BuildEffect](conn, EFFECTS_FOR_BUILD, _decode_hook, build_id)
+
+
+async def effects_summary(conn: ConnectionLike, *, build_id: int) -> EffectsSummaryRow | None:
+    row = await conn.fetchrow(EFFECTS_SUMMARY, build_id)
+    if row is None:
+        return None
+    return EffectsSummaryRow(failed=row[0], succeeded=row[1], status=row[2])
 
 
 def eval_job_rows(conn: ConnectionLike, *, build_id: int) -> QueryResults[EvalJobRowsRow]:

@@ -308,7 +308,10 @@ ORDER BY number DESC LIMIT $8 OFFSET $7
 """
 
 WEB_EFFECTS: typing.Final[str] = """-- name: WebEffects :many
-SELECT id, build_id, name, status, error, log_size, log_truncated, started_at, finished_at, deps FROM build_effects WHERE build_id = $1 ORDER BY name
+SELECT id, build_id, name, status, error, log_size, log_truncated, started_at, finished_at, deps FROM build_effects WHERE build_id = $1
+ORDER BY array_position(
+    ARRAY['failed', 'dependency_failed', 'running', 'pending', 'succeeded', 'skipped'],
+    status), name
 """
 
 WEB_NEIGHBOR_NUMBERS: typing.Final[str] = """-- name: WebNeighborNumbers :one

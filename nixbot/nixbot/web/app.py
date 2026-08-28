@@ -82,24 +82,6 @@ ATTR_GROUPS: dict[str, tuple[str, ...]] = {
     "ignored": ("ignored_failure",),
 }
 INLINE_GROUPS = ("failed", "building")
-# Worst first: the display order and the precedence of the overall status.
-EFFECT_STATUS_ORDER = (
-    "failed",
-    "dependency_failed",
-    "running",
-    "pending",
-    "succeeded",
-    "skipped",
-)
-
-
-def effects_status(effects: list[dict[str, Any]]) -> str | None:
-    """Running while anything is in flight, else the worst status."""
-    statuses = {e["status"] for e in effects}
-    if "running" in statuses or ("pending" in statuses and len(statuses) > 1):
-        return "running"
-    worst = next((s for s in EFFECT_STATUS_ORDER if s in statuses), None)
-    return "failed" if worst == "dependency_failed" else worst
 
 
 class WebContext:
@@ -468,10 +450,6 @@ class _PageRoutes:
         )
         group_counts, inline = await self._grouped_attributes(build["id"], None)
         total = sum(group_counts.values())
-        effects = sorted(
-            await ctx.queries.effects(build["id"]),
-            key=lambda e: EFFECT_STATUS_ORDER.index(e["status"]),
-        )
         await ctx.queries.attach_eval_queue(
             [build], await ctx.visible_repo_ids(request)
         )
@@ -484,8 +462,8 @@ class _PageRoutes:
             attrs_done=total - group_counts["pending"] - group_counts["building"],
             group_counts=group_counts,
             inline=inline,
-            effects=effects,
-            effects_status=effects_status(effects),
+            effects=await ctx.queries.effects(build["id"]),
+            effects_status=await ctx.queries.effects_status(build["id"]),
             prev_number=prev_number,
             next_number=next_number,
             can_control=await ctx.can_control(request, build),

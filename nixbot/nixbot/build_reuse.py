@@ -18,7 +18,7 @@ from .canceller import RegisterOutcome
 from .db import BuildStatus
 from .db_gen import builds as builds_q
 from .db_gen import maintenance as q
-from .db_gen import web as web_q
+from .effects_run import post_effects_summary
 from .events import BuildResult, EvalReport
 from .gitrepo import GitError, run_git
 
@@ -75,27 +75,16 @@ async def replay_effect_statuses(
 ) -> None:
     """Re-post each finished effect's status and the aggregate summary
     onto the reusing commit's SHA, so a failed deploy is not green."""
-    effects = [
-        e
-        for e in await web_q.web_effects(o.pool, build_id=build.id)
-        if e.status in ("succeeded", "failed")
-    ]
-    if not effects:
-        return
-    for effect in effects:
-        await o.reporter.effect_finished(
-            event,
-            build,
-            effect.name,
-            success=effect.status == "succeeded",
-            error=effect.error,
-        )
-    await o.reporter.effects_finished(
-        event,
-        build,
-        failed=sum(1 for e in effects if e.status != "succeeded"),
-        succeeded=sum(1 for e in effects if e.status == "succeeded"),
-    )
+    for effect in await builds_q.effects_for_build(o.pool, build_id=build.id):
+        if effect.status in ("succeeded", "failed", "dependency_failed"):
+            await o.reporter.effect_finished(
+                event,
+                build,
+                effect.name,
+                success=effect.status == "succeeded",
+                error=effect.error,
+            )
+    await post_effects_summary(o, event, build)
 
 
 async def finish_linked(

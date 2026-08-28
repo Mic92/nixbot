@@ -117,7 +117,11 @@ WHERE a.build_id = $1 AND a.finished_at IS NOT NULL
 ORDER BY a.finished_at, a.id;
 
 -- name: WebEffects :many
-SELECT * FROM build_effects WHERE build_id = $1 ORDER BY name;
+-- Worst first.
+SELECT * FROM build_effects WHERE build_id = $1
+ORDER BY array_position(
+    ARRAY['failed', 'dependency_failed', 'running', 'pending', 'succeeded', 'skipped'],
+    status), name;
 
 -- name: WebAttributeCounts :many
 SELECT status, count(*) AS count FROM build_attributes
