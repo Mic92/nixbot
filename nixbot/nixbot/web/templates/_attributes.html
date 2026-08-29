@@ -15,6 +15,9 @@
              {% if eager %}open{% endif %}>
       <summary>
         {{ status_icon("skipped_local" if group == "skipped" else group, labelled=false) }}<span>{{ count }} {{ "already built" if group == "skipped" else group }}</span>
+        {% if warned_counts[group] %}
+          <span class="attr-warn-badge" title="attributes with evaluation warnings">⚠ {{ warned_counts[group] }}</span>
+        {% endif %}
       </summary>
       <div class="attr-scroll">
         <table class="attrs">

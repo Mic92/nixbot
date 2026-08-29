@@ -232,6 +232,30 @@ def test_build_page_shows_eval_warning_groups(client: WebHarness) -> None:
     assert "[&#34;" not in text
 
 
+def test_build_page_shows_per_attribute_eval_warnings(client: WebHarness) -> None:
+    long_warning = "obsolete options:\n\n  - a.b.c\n  - d.e.f\n\nsee release notes"
+
+    async def seed() -> None:
+        await client.ctx.pool.execute(
+            "UPDATE build_attributes a SET eval_warnings = $1::jsonb FROM builds b"
+            " WHERE a.build_id = b.id AND b.number = 1"
+            " AND a.attr = 'aarch64-linux.other'",
+            json.dumps(["stdenv.lib is deprecated", long_warning]),
+        )
+
+    client.loop.run_until_complete(seed())
+    text = client.get("/repos/github/acme/widget/builds/1").text
+    # The otherwise collapsed succeeded group opens and flags the count.
+    group = re.search(r'<details[^>]*data-group="succeeded"[^>]*>', text)
+    assert group is not None
+    assert "open" in group.group(0)
+    assert "\u26a0 1</span>" in text
+    assert "stdenv.lib is deprecated" in text
+    assert "see release notes" in text
+    # Warned attributes sort first.
+    assert text.index("aarch64-linux.other") < text.index("x86_64-linux.ok")
+
+
 def test_build_page_renders_ansi_in_error(client: WebHarness) -> None:
     """Eval failures carry nix's colored output. Raw escape codes must
     not reach the HTML (the API already strips them)."""

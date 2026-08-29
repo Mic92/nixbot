@@ -512,17 +512,21 @@ async def test_record_attributes_persists_pending_rows_with_outputs(
 ) -> None:
     project_id = await insert_project(pool, "record-attrs")
     build, _ = await db.get_or_create_build(pool, project_id, "tree-ra", "sha", "main")
-    await build_run.record_attributes(pool, build.id_, [mk_job("a"), mk_job("b")])
+    warned = mk_job("b").model_copy(update={"warnings": ["b is deprecated"]})
+    await build_run.record_attributes(pool, build.id_, [mk_job("a"), warned])
     rows = {
         r["attr"]: r
         for r in await pool.fetch(
-            "SELECT attr, status, outputs FROM build_attributes WHERE build_id = $1",
+            "SELECT attr, status, outputs, eval_warnings FROM build_attributes"
+            " WHERE build_id = $1",
             build.id_,
         )
     }
     assert set(rows) == {"a", "b"}
     assert rows["a"]["status"] == "pending"
     assert '"/nix/store/a-out"' in rows["a"]["outputs"]
+    assert rows["a"]["eval_warnings"] is None
+    assert json.loads(rows["b"]["eval_warnings"]) == ["b is deprecated"]
     # Re-recording (rerun) must not reset completed rows.
     await db.complete_attribute(
         pool,

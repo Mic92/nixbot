@@ -149,16 +149,18 @@ RETURNING id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_a
 """
 
 RECORD_ATTRIBUTES: typing.Final[str] = """-- name: RecordAttributes :exec
-INSERT INTO build_attributes (build_id, attr, system, drv_path, outputs, status)
-SELECT $1::bigint, u.attr, u.system, u.drv_path, u.outputs, 'pending'
+INSERT INTO build_attributes (build_id, attr, system, drv_path, outputs, eval_warnings, status)
+SELECT $1::bigint, u.attr, u.system, u.drv_path, u.outputs, NULLIF(u.eval_warnings, 'null'::jsonb), 'pending'
 FROM (SELECT unnest($2::text[]) AS attr,
              unnest($3::text[]) AS system,
              unnest($4::text[]) AS drv_path,
-             unnest($5::jsonb[]) AS outputs) u
+             unnest($5::jsonb[]) AS outputs,
+             unnest($6::jsonb[]) AS eval_warnings) u
 ON CONFLICT (build_id, attr) DO UPDATE SET
     system = EXCLUDED.system,
     drv_path = EXCLUDED.drv_path,
-    outputs = EXCLUDED.outputs
+    outputs = EXCLUDED.outputs,
+    eval_warnings = EXCLUDED.eval_warnings
 WHERE build_attributes.status IN ('pending', 'building')
 """
 
@@ -567,8 +569,8 @@ async def create_failed_build(conn: ConnectionLike, *, project_id: int, commit_s
     )
 
 
-async def record_attributes(conn: ConnectionLike, *, build_id: int, attrs: collections.abc.Sequence[str], systems: collections.abc.Sequence[str], drv_paths: collections.abc.Sequence[str], outputs: collections.abc.Sequence[str]) -> None:
-    await conn.execute(RECORD_ATTRIBUTES, build_id, attrs, systems, drv_paths, outputs)
+async def record_attributes(conn: ConnectionLike, *, build_id: int, attrs: collections.abc.Sequence[str], systems: collections.abc.Sequence[str], drv_paths: collections.abc.Sequence[str], outputs: collections.abc.Sequence[str], eval_warnings: collections.abc.Sequence[str]) -> None:
+    await conn.execute(RECORD_ATTRIBUTES, build_id, attrs, systems, drv_paths, outputs, eval_warnings)
 
 
 async def set_eval_warnings(conn: ConnectionLike, *, id_: int, warnings: str) -> None:

@@ -1,5 +1,6 @@
 {% from "_macros.html" import error_row, status_icon %}
 {% for a in attributes %}
+  {% set aw = a.eval_warnings | fromjson %}
   <tr data-attr="{{ a.attr | lower }}">
     <td class="attr-status">{{ status_icon(a.status) }}</td>
     <td class="attr-name">
@@ -7,6 +8,9 @@
         <a href="{{ build_path(project, build.number) }}/logs/{{ a.attr | urlencode }}"><code>{{ a.attr }}</code></a>
       {% else %}
         <code>{{ a.attr }}</code>
+      {% endif %}
+      {% if aw %}
+        <ul class="attr-warnings">{% for w in aw %}<li>{{ w | ansi }}</li>{% endfor %}</ul>
       {% endif %}
     </td>
     <td class="attr-duration">{{ a | duration }}</td>

@@ -4,6 +4,7 @@ serving shared by the web routes."""
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -160,6 +161,8 @@ def make_env() -> Environment:
     env.filters["duration_secs"] = duration_secs
     env.filters["excerpt"] = excerpt
     env.filters["plain"] = strip_ansi
+    # asyncpg returns jsonb columns as text.
+    env.filters["fromjson"] = lambda v: json.loads(v) if isinstance(v, str) else v
     # ansi_to_html escapes its input before adding span tags.
     env.filters["ansi"] = lambda text: Markup(ansi_to_html(text or ""))  # noqa: S704
     env.globals["commit_url"] = commit_url

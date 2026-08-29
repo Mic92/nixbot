@@ -56,13 +56,14 @@ LIVE_WARNINGS_FLUSH_INTERVAL = 2.0
 
 def _job_columns(
     jobs: Sequence[NixEvalJob],
-) -> tuple[list[str], list[str], list[str], list[str]]:
+) -> tuple[list[str], list[str], list[str], list[str], list[str]]:
     successes = [job for job in jobs if isinstance(job, NixEvalJobSuccess)]
     return (
         [job.attr for job in successes],
         [job.system for job in successes],
         [job.drv_path for job in successes],
         [json.dumps(job.outputs) for job in successes],
+        [json.dumps(job.warnings or None) for job in successes],
     )
 
 
@@ -71,7 +72,7 @@ async def record_attributes(
 ) -> None:
     """Persist eval results as pending rows so crash recovery can
     resume without a re-eval."""
-    attrs, systems, drv_paths, outputs = _job_columns(jobs)
+    attrs, systems, drv_paths, outputs, warnings = _job_columns(jobs)
     if not attrs:
         return
     await q.record_attributes(
@@ -81,6 +82,7 @@ async def record_attributes(
         systems=systems,
         drv_paths=drv_paths,
         outputs=outputs,
+        eval_warnings=warnings,
     )
 
 
@@ -89,7 +91,7 @@ async def commit_eval_result(
 ) -> None:
     """Publish a completed eval: the only operation that may shrink
     the attribute set."""
-    attrs, systems, drv_paths, outputs = _job_columns(jobs)
+    attrs, systems, drv_paths, outputs, warnings = _job_columns(jobs)
     await mq.commit_eval_result(
         pool,
         build_id=build_id,
@@ -97,6 +99,7 @@ async def commit_eval_result(
         systems=systems,
         drv_paths=drv_paths,
         outputs=outputs,
+        eval_warnings=warnings,
     )
 
 

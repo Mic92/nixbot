@@ -349,6 +349,47 @@ pre.warning {
 details summary {
 	cursor: pointer;
 }
+.attr-warn-badge {
+	display: inline-block;
+	margin-left: 0.6em;
+	padding: 0 0.55em;
+	border-radius: 999px;
+	background: color-mix(in srgb, var(--warn) 18%, transparent);
+	color: var(--warn);
+	font-size: 0.72rem;
+	font-weight: 600;
+}
+/* builtins.warn output per attribute. Module-system warnings are often
+   paragraphs: two lines until clicked. */
+.attr-warnings {
+	list-style: none;
+	margin: 0.3rem 0 0.1rem;
+	padding: 0;
+	font-size: 0.78rem;
+	color: var(--muted);
+}
+.attr-warnings li {
+	position: relative;
+	padding-left: 1.3em;
+	margin: 0.1rem 0;
+	overflow-wrap: anywhere;
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 2;
+	line-clamp: 2;
+	overflow: hidden;
+	cursor: pointer;
+}
+.attr-warnings li.expanded {
+	display: block;
+	white-space: pre-line;
+}
+.attr-warnings li::before {
+	content: "⚠";
+	position: absolute;
+	left: 0;
+	color: var(--warn);
+}
 /* Live (deduplicated) eval warnings streamed during evaluation. */
 .live-warnings {
 	border: 1px solid var(--border);
