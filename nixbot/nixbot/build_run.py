@@ -177,11 +177,11 @@ def _eval_settings(
     # Auto-sized workers come with a matching per-worker memory
     # limit. The configured limit acts as a ceiling. An explicit
     # worker count keeps the configured limit as-is.
+    worker_config = calculate_eval_workers()
     if o.config.eval_worker_count:
         worker_count = o.config.eval_worker_count
         eval_max_memory = o.config.eval_max_memory_size
     else:
-        worker_config = calculate_eval_workers()
         worker_count = worker_config.count
         eval_max_memory = min(
             o.config.eval_max_memory_size, worker_config.max_memory_mib
@@ -198,6 +198,7 @@ def _eval_settings(
         timeout=o.config.eval_timeout,
         worker_count=worker_count,
         max_memory_size_mib=eval_max_memory,
+        cgroup_limit_mib=worker_config.cgroup_limit_mib,
         show_trace=o.config.show_trace_on_failure,
         netrc_file=netrc_file,
         # The worktree's .git points into the central clone. The

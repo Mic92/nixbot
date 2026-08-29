@@ -15,8 +15,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_EVAL_MAX_MEMORY_MIB = 2048
 MIN_EVAL_MEMORY_MIB = 1024
-# Headroom for one eval's memory spike before the limit check triggers.
-SPIKE_HEADROOM_MIB = 2048
+SYSTEM_RESERVE_MIB = 2048
 MAX_EVAL_WORKERS = 16
 
 
@@ -24,6 +23,11 @@ MAX_EVAL_WORKERS = 16
 class EvalWorkerConfig:
     count: int
     max_memory_mib: int
+    # Hard cgroup limit for the whole eval tree: everything the host can
+    # spare. nix-eval-jobs keeps the workers within count * max_memory
+    # itself, the cgroup only makes the eval its own OOM domain so the
+    # kernel kills it rather than the service or the database.
+    cgroup_limit_mib: int
 
 
 @dataclass
@@ -82,11 +86,7 @@ def calculate_eval_workers(
         reclaimable_arc = int(memory_info.zfs_arc_used * 0.75)
         effective_available_memory += reclaimable_arc
 
-    # Reserve 2GB for system/service plus headroom for one eval spike,
-    # since the worker memory limit is checked after an eval finishes.
-    memory_for_workers = max(
-        2048, effective_available_memory - 2048 - SPIKE_HEADROOM_MIB
-    )
+    memory_for_workers = max(2048, effective_available_memory - SYSTEM_RESERVE_MIB)
 
     eval_max_memory = DEFAULT_EVAL_MAX_MEMORY_MIB
     memory_based_workers = max(1, memory_for_workers // eval_max_memory)
@@ -111,4 +111,6 @@ def calculate_eval_workers(
             )
             optimal_workers = possible_workers
 
-    return EvalWorkerConfig(int(optimal_workers), int(eval_max_memory))
+    return EvalWorkerConfig(
+        int(optimal_workers), int(eval_max_memory), int(memory_for_workers)
+    )

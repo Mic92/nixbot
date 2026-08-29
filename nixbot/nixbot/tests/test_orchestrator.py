@@ -1071,7 +1071,7 @@ async def test_eval_settings_wired(
     monkeypatch.setattr(
         build_run_mod,
         "calculate_eval_workers",
-        lambda: EvalWorkerConfig(count=3, max_memory_mib=1234),
+        lambda: EvalWorkerConfig(count=3, max_memory_mib=1234, cgroup_limit_mib=9999),
     )
 
     sha = add_commit(upstream, "setw")
@@ -1092,6 +1092,7 @@ async def test_eval_settings_wired(
     assert settings.max_memory_size_mib == min(
         orchestrator.config.eval_max_memory_size, 1234
     )
+    assert settings.memory_limit_mib == 9999
     assert settings.netrc_file == netrc
     assert settings.eval_systems == ["aarch64-linux"]
 

@@ -77,6 +77,9 @@ class EvalSettings:
 
     worker_count: int = 1
     max_memory_size_mib: int = 4096
+    # See EvalWorkerConfig.cgroup_limit_mib. None derives it from the
+    # worker budget.
+    cgroup_limit_mib: int | None = None
     show_trace: bool = False
     # bwrap sandbox. Disable only in tests.
     sandbox: bool = True
@@ -93,6 +96,12 @@ class EvalSettings:
     eval_systems: list[str] = field(default_factory=list)
     # See Config.legacy_attr_prefix.
     legacy_attr_prefix: bool = False
+
+    @property
+    def memory_limit_mib(self) -> int:
+        if self.cgroup_limit_mib is not None:
+            return self.cgroup_limit_mib
+        return self.max_memory_size_mib * (self.worker_count + 1)
 
 
 @dataclass
@@ -379,16 +388,12 @@ class CgroupLimiter:
 def build_systemd_scope_command(settings: EvalSettings) -> list[str]:
     """Transient scope so the kernel enforces a cgroup memory limit on
     the whole eval process tree."""
-    # Head-room above the per-worker limit: workers are restarted by
-    # nix-eval-jobs when they exceed max-memory-size, the scope limit is
-    # the hard backstop for the whole tree.
-    scope_limit = settings.max_memory_size_mib * (settings.worker_count + 1)
     return [
         "systemd-run",
         "--scope",
         "--collect",
         "--quiet",
-        f"--property=MemoryMax={scope_limit}M",
+        f"--property=MemoryMax={settings.memory_limit_mib}M",
     ]
 
 
@@ -554,9 +559,8 @@ class EvalRunner:
         # kernel-enforced tree-wide limit without needing polkit.
         eval_cgroup: Path | None = None
         if self.limiter is not None and settings.systemd_scope:
-            limit = settings.max_memory_size_mib * (settings.worker_count + 1)
             try:
-                eval_cgroup = self.limiter.new_eval_cgroup(limit)
+                eval_cgroup = self.limiter.new_eval_cgroup(settings.memory_limit_mib)
             except OSError:
                 logger.exception("failed to create eval cgroup")
             else:
@@ -649,8 +653,10 @@ class EvalRunner:
             if returncode in OOM_RETURN_CODES or cgroup_oom_killed(eval_cgroup):
                 msg = (
                     "evaluation ran out of memory (cgroup limit "
-                    f"{settings.max_memory_size_mib} MiB/worker); this is a "
-                    f"permanent failure, reduce evaluation memory usage:\n{tail}"
+                    f"{settings.memory_limit_mib} MiB, "
+                    f"{settings.worker_count} x {settings.max_memory_size_mib} "
+                    "MiB workers); this is a permanent failure, reduce "
+                    f"evaluation memory usage:\n{tail}"
                 )
                 raise EvalOOMError(msg)
             msg = f"nix-eval-jobs failed with exit code {returncode}:\n{tail}"
