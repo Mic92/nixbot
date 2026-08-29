@@ -448,7 +448,9 @@ class _PageRoutes:
         prev_number, next_number = await ctx.queries.neighbor_numbers(
             project["id"], number
         )
-        group_counts, inline = await self._grouped_attributes(build["id"], None)
+        group_counts, warned_counts, inline = await self._grouped_attributes(
+            build["id"], None
+        )
         total = sum(group_counts.values())
         await ctx.queries.attach_eval_queue(
             [build], await ctx.visible_repo_ids(request)
@@ -461,6 +463,7 @@ class _PageRoutes:
             attrs_total=total,
             attrs_done=total - group_counts["pending"] - group_counts["building"],
             group_counts=group_counts,
+            warned_counts=warned_counts,
             inline=inline,
             effects=await ctx.queries.effects(build["id"]),
             effects_status=await ctx.queries.effects_status(build["id"]),
@@ -512,15 +515,20 @@ class _PageRoutes:
 
     async def _grouped_attributes(
         self, build_id: int, q: str | None
-    ) -> tuple[dict[str, int], dict[str, Any]]:
+    ) -> tuple[dict[str, int], dict[str, int], dict[str, Any]]:
         """Per-group counts plus eagerly loaded first pages: the inline
         groups normally, every matching group under a search query."""
-        counts = await self.ctx.queries.attribute_counts(build_id, q)
+        counts, warned = await self.ctx.queries.attribute_counts(build_id, q)
         group_counts = {
             group: sum(counts.get(s, 0) for s in statuses)
             for group, statuses in ATTR_GROUPS.items()
         }
-        eager = tuple(ATTR_GROUPS) if q else INLINE_GROUPS
+        warned_counts = {
+            group: sum(warned.get(s, 0) for s in statuses)
+            for group, statuses in ATTR_GROUPS.items()
+        }
+        # Groups with eval warnings open eagerly so they are not buried.
+        eager = [g for g in ATTR_GROUPS if q or g in INLINE_GROUPS or warned_counts[g]]
         inline = {
             group: await self.ctx.queries.attribute_page(
                 build_id, ATTR_GROUPS[group], ATTR_PAGE, 1, q
@@ -528,7 +536,7 @@ class _PageRoutes:
             for group in eager
             if group_counts[group]
         }
-        return group_counts, inline
+        return group_counts, warned_counts, inline
 
     async def _attribute_groups(
         self,
@@ -539,13 +547,16 @@ class _PageRoutes:
     ) -> HTMLResponse:
         """The grouped attribute fragment. A query filters every group
         and renders all of them eagerly opened."""
-        group_counts, inline = await self._grouped_attributes(build["id"], q)
+        group_counts, warned_counts, inline = await self._grouped_attributes(
+            build["id"], q
+        )
         return await self.ctx.render(
             "_attributes.html",
             request=request,
             project=project,
             build=build,
             group_counts=group_counts,
+            warned_counts=warned_counts,
             inline=inline,
             q=q,
         )

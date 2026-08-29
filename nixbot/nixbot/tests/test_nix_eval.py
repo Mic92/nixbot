@@ -16,6 +16,7 @@ import pytest
 from nixbot import nix_eval
 from nixbot.memory import (
     MAX_EVAL_WORKERS,
+    SYSTEM_RESERVE_MIB,
     EvalWorkerConfig,
     MemoryInfo,
     calculate_eval_workers,
@@ -158,7 +159,10 @@ def test_calculate_eval_workers() -> None:
     config = calculate_eval_workers(
         MemoryInfo(total_memory_mib=65536, available_memory_mib=60000), cpu_count=8
     )
-    assert config == EvalWorkerConfig(count=4, max_memory_mib=2048)
+    # The cgroup is only an OOM domain: all the host can spare.
+    assert config == EvalWorkerConfig(
+        count=4, max_memory_mib=2048, cgroup_limit_mib=60000 - SYSTEM_RESERVE_MIB
+    )
 
     # Memory-tight host: fewer/smaller workers, at least one.
     config = calculate_eval_workers(

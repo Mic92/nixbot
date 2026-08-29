@@ -97,6 +97,10 @@
          attribute groups - an SSE refresh would snap them back and
          drop lazily loaded rows. Remember the user's toggles and
          reapply them after swaps. */
+      document.body.addEventListener("click", (e) => {
+        const li = e.target.closest?.(".attr-warnings li");
+        if (li) li.classList.toggle("expanded");
+      });
       const groupState = new Map();
       document.body.addEventListener("toggle", (e) => {
         const g = e.target.closest?.("details.attr-group");

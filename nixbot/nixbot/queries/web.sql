@@ -124,7 +124,9 @@ ORDER BY array_position(
     status), name;
 
 -- name: WebAttributeCounts :many
-SELECT status, count(*) AS count FROM build_attributes
+SELECT status, count(*) AS count,
+       count(*) FILTER (WHERE eval_warnings IS NOT NULL) AS warned
+FROM build_attributes
 WHERE build_id = $1 AND (sqlc.narg(pattern)::text IS NULL OR attr ILIKE sqlc.narg(pattern))
 GROUP BY status;
 
@@ -132,7 +134,8 @@ GROUP BY status;
 SELECT a.* FROM build_attributes a
 WHERE a.build_id = $1 AND a.status = ANY(sqlc.arg(statuses)::text[])
   AND (sqlc.narg(pattern)::text IS NULL OR a.attr ILIKE sqlc.narg(pattern))
-ORDER BY a.attr LIMIT sqlc.arg(limit_)::bigint OFFSET sqlc.arg(offset_)::bigint;
+ORDER BY (a.eval_warnings IS NULL), a.attr
+LIMIT sqlc.arg(limit_)::bigint OFFSET sqlc.arg(offset_)::bigint;
 
 -- name: WebAttributeHistory :many
 SELECT a.*, b.number AS build_number, b.branch, b.commit_sha,

@@ -65,16 +65,18 @@ WHERE build_id = $1 AND status IN ('pending', 'building');
 -- rows, prunes rows the eval no longer produced, publishes via
 -- eval_completed, atomically.
 WITH new_rows AS (
-    INSERT INTO build_attributes (build_id, attr, system, drv_path, outputs, status)
-    SELECT sqlc.arg(build_id)::bigint, u.attr, u.system, u.drv_path, u.outputs, 'pending'
+    INSERT INTO build_attributes (build_id, attr, system, drv_path, outputs, eval_warnings, status)
+    SELECT sqlc.arg(build_id)::bigint, u.attr, u.system, u.drv_path, u.outputs, NULLIF(u.eval_warnings, 'null'::jsonb), 'pending'
     FROM (SELECT unnest(sqlc.arg(attrs)::text[]) AS attr,
                  unnest(sqlc.arg(systems)::text[]) AS system,
                  unnest(sqlc.arg(drv_paths)::text[]) AS drv_path,
-                 unnest(sqlc.arg(outputs)::jsonb[]) AS outputs) u
+                 unnest(sqlc.arg(outputs)::jsonb[]) AS outputs,
+                 unnest(sqlc.arg(eval_warnings)::jsonb[]) AS eval_warnings) u
     ON CONFLICT (build_id, attr) DO UPDATE SET
         system = EXCLUDED.system,
         drv_path = EXCLUDED.drv_path,
-        outputs = EXCLUDED.outputs
+        outputs = EXCLUDED.outputs,
+        eval_warnings = EXCLUDED.eval_warnings
     WHERE build_attributes.status IN ('pending', 'building')
 ), pruned AS (
     DELETE FROM build_attributes WHERE build_id = sqlc.arg(build_id)

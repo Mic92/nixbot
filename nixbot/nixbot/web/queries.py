@@ -169,12 +169,13 @@ class WebQueries:
 
     async def attribute_counts(
         self, build_id: int, q: str | None = None
-    ) -> dict[str, int]:
-        """Attribute counts per status, optionally name-filtered."""
+    ) -> tuple[dict[str, int], dict[str, int]]:
+        """(count, with-eval-warnings count) per status, optionally
+        name-filtered."""
         rows = await gen.web_attribute_counts(
             self.pool, build_id=build_id, pattern=_like_pattern(q)
         )
-        return {r.status: r.count for r in rows}
+        return {r.status: r.count for r in rows}, {r.status: r.warned for r in rows}
 
     async def attribute_page(
         self,

@@ -123,6 +123,7 @@ class WebNeighborNumbersRow:
 class WebAttributeCountsRow:
     status: str
     count: int
+    warned: int
 
 
 @dataclasses.dataclass()
@@ -140,6 +141,7 @@ class WebAttributeHistoryRow:
     finished_at: datetime.datetime | None
     log_size: int
     log_truncated: bool
+    eval_warnings: str | None
     build_number: int
     branch: str
     commit_sha: str
@@ -306,7 +308,7 @@ FROM builds WHERE project_id = $1
 """
 
 WEB_ATTRIBUTES: typing.Final[str] = """-- name: WebAttributes :many
-SELECT a.id, a.build_id, a.attr, a.system, a.drv_path, a.outputs, a.status, a.cached, a.error, a.started_at, a.finished_at, a.log_size, a.log_truncated FROM build_attributes a
+SELECT a.id, a.build_id, a.attr, a.system, a.drv_path, a.outputs, a.status, a.cached, a.error, a.started_at, a.finished_at, a.log_size, a.log_truncated, a.eval_warnings FROM build_attributes a
 WHERE a.build_id = $1
 ORDER BY CASE
     WHEN a.status IN ('failed', 'failed_eval', 'dependency_failed',
@@ -319,7 +321,7 @@ END, a.attr
 """
 
 WEB_ATTRIBUTES_FINISHED_AFTER: typing.Final[str] = """-- name: WebAttributesFinishedAfter :many
-SELECT a.id, a.build_id, a.attr, a.system, a.drv_path, a.outputs, a.status, a.cached, a.error, a.started_at, a.finished_at, a.log_size, a.log_truncated FROM build_attributes a
+SELECT a.id, a.build_id, a.attr, a.system, a.drv_path, a.outputs, a.status, a.cached, a.error, a.started_at, a.finished_at, a.log_size, a.log_truncated, a.eval_warnings FROM build_attributes a
 WHERE a.build_id = $1 AND a.finished_at IS NOT NULL
   AND ($2::timestamptz IS NULL
        OR (a.finished_at, a.id) > ($2::timestamptz,
@@ -335,20 +337,23 @@ ORDER BY array_position(
 """
 
 WEB_ATTRIBUTE_COUNTS: typing.Final[str] = """-- name: WebAttributeCounts :many
-SELECT status, count(*) AS count FROM build_attributes
+SELECT status, count(*) AS count,
+       count(*) FILTER (WHERE eval_warnings IS NOT NULL) AS warned
+FROM build_attributes
 WHERE build_id = $1 AND ($2::text IS NULL OR attr ILIKE $2)
 GROUP BY status
 """
 
 WEB_ATTRIBUTE_PAGE: typing.Final[str] = """-- name: WebAttributePage :many
-SELECT a.id, a.build_id, a.attr, a.system, a.drv_path, a.outputs, a.status, a.cached, a.error, a.started_at, a.finished_at, a.log_size, a.log_truncated FROM build_attributes a
+SELECT a.id, a.build_id, a.attr, a.system, a.drv_path, a.outputs, a.status, a.cached, a.error, a.started_at, a.finished_at, a.log_size, a.log_truncated, a.eval_warnings FROM build_attributes a
 WHERE a.build_id = $1 AND a.status = ANY($2::text[])
   AND ($3::text IS NULL OR a.attr ILIKE $3)
-ORDER BY a.attr LIMIT $5::bigint OFFSET $4::bigint
+ORDER BY (a.eval_warnings IS NULL), a.attr
+LIMIT $5::bigint OFFSET $4::bigint
 """
 
 WEB_ATTRIBUTE_HISTORY: typing.Final[str] = """-- name: WebAttributeHistory :many
-SELECT a.id, a.build_id, a.attr, a.system, a.drv_path, a.outputs, a.status, a.cached, a.error, a.started_at, a.finished_at, a.log_size, a.log_truncated, b.number AS build_number, b.branch, b.commit_sha,
+SELECT a.id, a.build_id, a.attr, a.system, a.drv_path, a.outputs, a.status, a.cached, a.error, a.started_at, a.finished_at, a.log_size, a.log_truncated, a.eval_warnings, b.number AS build_number, b.branch, b.commit_sha,
        b.created_at AS build_created_at
 FROM build_attributes a
 JOIN builds b ON b.id = a.build_id
@@ -603,14 +608,14 @@ async def web_neighbor_numbers(conn: ConnectionLike, *, project_id: int, number:
 
 def web_attributes(conn: ConnectionLike, *, build_id: int) -> QueryResults[models.BuildAttribute]:
     def _decode_hook(row: asyncpg.Record) -> models.BuildAttribute:
-        return models.BuildAttribute(id_=row[0], build_id=row[1], attr=row[2], system=row[3], drv_path=row[4], outputs=row[5], status=row[6], cached=row[7], error=row[8], started_at=row[9], finished_at=row[10], log_size=row[11], log_truncated=row[12])
+        return models.BuildAttribute(id_=row[0], build_id=row[1], attr=row[2], system=row[3], drv_path=row[4], outputs=row[5], status=row[6], cached=row[7], error=row[8], started_at=row[9], finished_at=row[10], log_size=row[11], log_truncated=row[12], eval_warnings=row[13])
 
     return QueryResults(conn, WEB_ATTRIBUTES, _decode_hook, build_id)
 
 
 def web_attributes_finished_after(conn: ConnectionLike, *, build_id: int, after: datetime.datetime | None, after_id: int) -> QueryResults[models.BuildAttribute]:
     def _decode_hook(row: asyncpg.Record) -> models.BuildAttribute:
-        return models.BuildAttribute(id_=row[0], build_id=row[1], attr=row[2], system=row[3], drv_path=row[4], outputs=row[5], status=row[6], cached=row[7], error=row[8], started_at=row[9], finished_at=row[10], log_size=row[11], log_truncated=row[12])
+        return models.BuildAttribute(id_=row[0], build_id=row[1], attr=row[2], system=row[3], drv_path=row[4], outputs=row[5], status=row[6], cached=row[7], error=row[8], started_at=row[9], finished_at=row[10], log_size=row[11], log_truncated=row[12], eval_warnings=row[13])
 
     return QueryResults(conn, WEB_ATTRIBUTES_FINISHED_AFTER, _decode_hook, build_id, after, after_id)
 
@@ -624,14 +629,14 @@ def web_effects(conn: ConnectionLike, *, build_id: int) -> QueryResults[models.B
 
 def web_attribute_counts(conn: ConnectionLike, *, build_id: int, pattern: str | None) -> QueryResults[WebAttributeCountsRow]:
     def _decode_hook(row: asyncpg.Record) -> WebAttributeCountsRow:
-        return WebAttributeCountsRow(status=row[0], count=row[1])
+        return WebAttributeCountsRow(status=row[0], count=row[1], warned=row[2])
 
     return QueryResults(conn, WEB_ATTRIBUTE_COUNTS, _decode_hook, build_id, pattern)
 
 
 def web_attribute_page(conn: ConnectionLike, *, build_id: int, statuses: collections.abc.Sequence[str], pattern: str | None, offset_: int, limit_: int) -> QueryResults[models.BuildAttribute]:
     def _decode_hook(row: asyncpg.Record) -> models.BuildAttribute:
-        return models.BuildAttribute(id_=row[0], build_id=row[1], attr=row[2], system=row[3], drv_path=row[4], outputs=row[5], status=row[6], cached=row[7], error=row[8], started_at=row[9], finished_at=row[10], log_size=row[11], log_truncated=row[12])
+        return models.BuildAttribute(id_=row[0], build_id=row[1], attr=row[2], system=row[3], drv_path=row[4], outputs=row[5], status=row[6], cached=row[7], error=row[8], started_at=row[9], finished_at=row[10], log_size=row[11], log_truncated=row[12], eval_warnings=row[13])
 
     return QueryResults(conn, WEB_ATTRIBUTE_PAGE, _decode_hook, build_id, statuses, pattern, offset_, limit_)
 
@@ -652,10 +657,11 @@ def web_attribute_history(conn: ConnectionLike, *, project_id: int, attr: str, l
             finished_at=row[10],
             log_size=row[11],
             log_truncated=row[12],
-            build_number=row[13],
-            branch=row[14],
-            commit_sha=row[15],
-            build_created_at=row[16],
+            eval_warnings=row[13],
+            build_number=row[14],
+            branch=row[15],
+            commit_sha=row[16],
+            build_created_at=row[17],
         )
 
     return QueryResults(conn, WEB_ATTRIBUTE_HISTORY, _decode_hook, project_id, attr, limit_)

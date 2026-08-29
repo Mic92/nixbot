@@ -59,6 +59,7 @@ class BuildAttribute:
     finished_at: datetime.datetime | None
     log_size: int
     log_truncated: bool
+    eval_warnings: str | None
 
 
 @dataclasses.dataclass()

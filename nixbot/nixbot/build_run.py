@@ -56,13 +56,14 @@ LIVE_WARNINGS_FLUSH_INTERVAL = 2.0
 
 def _job_columns(
     jobs: Sequence[NixEvalJob],
-) -> tuple[list[str], list[str], list[str], list[str]]:
+) -> tuple[list[str], list[str], list[str], list[str], list[str]]:
     successes = [job for job in jobs if isinstance(job, NixEvalJobSuccess)]
     return (
         [job.attr for job in successes],
         [job.system for job in successes],
         [job.drv_path for job in successes],
         [json.dumps(job.outputs) for job in successes],
+        [json.dumps(job.warnings or None) for job in successes],
     )
 
 
@@ -71,7 +72,7 @@ async def record_attributes(
 ) -> None:
     """Persist eval results as pending rows so crash recovery can
     resume without a re-eval."""
-    attrs, systems, drv_paths, outputs = _job_columns(jobs)
+    attrs, systems, drv_paths, outputs, warnings = _job_columns(jobs)
     if not attrs:
         return
     await q.record_attributes(
@@ -81,6 +82,7 @@ async def record_attributes(
         systems=systems,
         drv_paths=drv_paths,
         outputs=outputs,
+        eval_warnings=warnings,
     )
 
 
@@ -89,7 +91,7 @@ async def commit_eval_result(
 ) -> None:
     """Publish a completed eval: the only operation that may shrink
     the attribute set."""
-    attrs, systems, drv_paths, outputs = _job_columns(jobs)
+    attrs, systems, drv_paths, outputs, warnings = _job_columns(jobs)
     await mq.commit_eval_result(
         pool,
         build_id=build_id,
@@ -97,6 +99,7 @@ async def commit_eval_result(
         systems=systems,
         drv_paths=drv_paths,
         outputs=outputs,
+        eval_warnings=warnings,
     )
 
 
@@ -174,11 +177,11 @@ def _eval_settings(
     # Auto-sized workers come with a matching per-worker memory
     # limit. The configured limit acts as a ceiling. An explicit
     # worker count keeps the configured limit as-is.
+    worker_config = calculate_eval_workers()
     if o.config.eval_worker_count:
         worker_count = o.config.eval_worker_count
         eval_max_memory = o.config.eval_max_memory_size
     else:
-        worker_config = calculate_eval_workers()
         worker_count = worker_config.count
         eval_max_memory = min(
             o.config.eval_max_memory_size, worker_config.max_memory_mib
@@ -195,6 +198,7 @@ def _eval_settings(
         timeout=o.config.eval_timeout,
         worker_count=worker_count,
         max_memory_size_mib=eval_max_memory,
+        cgroup_limit_mib=worker_config.cgroup_limit_mib,
         show_trace=o.config.show_trace_on_failure,
         netrc_file=netrc_file,
         # The worktree's .git points into the central clone. The
