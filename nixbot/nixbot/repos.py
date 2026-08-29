@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 def repo_info(record: RepoRecord) -> RepoInfo:
     return RepoInfo(
-        id=record.id,
+        id=record.id_,
         key=f"{record.forge}/{record.owner}/{record.name}",
         name=f"{record.owner}/{record.name}",
         owner=record.owner,

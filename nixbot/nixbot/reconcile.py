@@ -218,12 +218,12 @@ async def reconcile_repo(
     recovering from downtime: build the default branch only, the
     open-PR backlog would be stale work. PRs build on their next
     push."""
-    first_contact = not await _has_builds(pool, project.id)
+    first_contact = not await _has_builds(pool, project.id_)
     submitted = 0
     for head in heads:
         if first_contact and head.pr_number is not None:
             continue
-        if await is_built(pool, project.id, head.commit_sha):
+        if await is_built(pool, project.id_, head.commit_sha):
             continue
         logger.info(
             "reconciliation: building unbuilt head",

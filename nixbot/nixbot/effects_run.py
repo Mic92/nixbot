@@ -79,7 +79,7 @@ async def maybe_run_effects(  # noqa: PLR0913
     if allowed and (
         await builds_q.mark_effects_started(
             o.pool,
-            id_=build.id,
+            id_=build.id_,
             commit_sha=event.commit_sha,
             branch=event.branch,
             pr_number=event.pr_number,
@@ -91,7 +91,7 @@ async def maybe_run_effects(  # noqa: PLR0913
     if effects is None:
         return
     # Also drops rows a rerun selected that the flake no longer has.
-    await q.drop_removed_effects(o.pool, build_id=build.id, names=list(effects))
+    await q.drop_removed_effects(o.pool, build_id=build.id_, names=list(effects))
     if only is not None:
         effects = {n: m for n, m in effects.items() if n in only}
     if allowed:
@@ -99,7 +99,7 @@ async def maybe_run_effects(  # noqa: PLR0913
     elif effects:
         # Gated refs (PRs) still list what a merge would run.
         await builds_q.record_skipped_effects(
-            o.pool, build_id=build.id, names=list(effects)
+            o.pool, build_id=build.id_, names=list(effects)
         )
 
 
@@ -145,7 +145,7 @@ async def discover_effects(
     except (EffectError, OSError):
         # OSError: nix/git missing from PATH. Effects are best-effort
         # and must not fail the (already reported) build.
-        logger.exception("effects discovery failed", extra={"build_id": build.id})
+        logger.exception("effects discovery failed", extra={"build_id": build.id_})
         return None
 
 
@@ -156,7 +156,7 @@ def _dedup_key(build: BuildRecord, name: str, meta: EffectMeta) -> str:
     dependencies have not settled)."""
     if meta.lock is not None:
         return f"effect-lock-{build.project_id}-{meta.lock}"
-    return f"build-{build.id}-effect-{name}"
+    return f"build-{build.id_}-effect-{name}"
 
 
 async def enqueue_effects(
@@ -171,14 +171,14 @@ async def enqueue_effects(
     names = list(effects)
     await builds_q.start_pending_effects(
         o.pool,
-        build_id=build.id,
+        build_id=build.id_,
         names=names,
         deps=[json.dumps(list(effects[n].after)) for n in names],
     )
     await o.reporter.effects_started(event, build, len(names))
     await wq.enqueue_effect_items(
         o.pool,
-        build_id=build.id,
+        build_id=build.id_,
         names=names,
         dedup_keys=[_dedup_key(build, n, effects[n]) for n in names],
     )
@@ -192,11 +192,11 @@ async def _skip_effect(
     look green)."""
     error = f"dependency '{failed_dep}' did not succeed"
     await builds_q.start_effect(
-        o.pool, build_id=build.id, name=name, status="dependency_failed"
+        o.pool, build_id=build.id_, name=name, status="dependency_failed"
     )
     await builds_q.finish_effect(
         o.pool,
-        build_id=build.id,
+        build_id=build.id_,
         name=name,
         status="dependency_failed",
         error=error,
@@ -247,7 +247,7 @@ async def run_effect_item(
         msg = "run_effect_item must run inside a task"
         raise RuntimeError(msg)
     running = RunningEffect(task=task)
-    o.running_effects[(build.id, name)] = running
+    o.running_effects[(build.id_, name)] = running
     try:
         await _claimed_effect_item(o, info, build, name, credentials)
     except asyncio.CancelledError:
@@ -255,7 +255,7 @@ async def run_effect_item(
         if not running.restart:
             raise
     finally:
-        o.running_effects.pop((build.id, name), None)
+        o.running_effects.pop((build.id_, name), None)
         running.settled.set()
 
 
@@ -266,12 +266,12 @@ async def _claimed_effect_item(
     name: str,
     credentials: FetchCredentials | None,
 ) -> None:
-    row = await q.effect_status(o.pool, build_id=build.id, name=name)
+    row = await q.effect_status(o.pool, build_id=build.id_, name=name)
     if row != "pending":
         # Swept after a crash mid-run, or already terminal. Started
         # effects never auto-re-run (deploys are not idempotent).
         return
-    dep_rows = await builds_q.effect_dep_statuses(o.pool, build_id=build.id, name=name)
+    dep_rows = await builds_q.effect_dep_statuses(o.pool, build_id=build.id_, name=name)
     unsettled = [d.name for d in dep_rows if d.status in ("pending", "running")]
     if unsettled:
         # Only when an effects restart reset the rows under a stale claim;
@@ -279,7 +279,7 @@ async def _claimed_effect_item(
         logger.warning(
             "effect %s of build %s claimed before %s settled; deferring",
             name,
-            build.id,
+            build.id_,
             ", ".join(unsettled),
         )
         return
@@ -297,7 +297,7 @@ async def _claimed_effect_item(
         # (see effects_event_for_build).
         event = effects_event_for_build(worktree_event.repo, build)
         task_token = o.task_tokens.issue(
-            build.project_id, identity_from_event(event, name, build.id)
+            build.project_id, identity_from_event(event, name, build.id_)
         )
         try:
             async with effect_checkout(
@@ -329,7 +329,7 @@ async def post_effects_summary(
 ) -> None:
     """Post the aggregate status once all effects settle. The items run
     independently, so the last to finish reports it."""
-    summary = await builds_q.effects_summary(o.pool, build_id=build.id)
+    summary = await builds_q.effects_summary(o.pool, build_id=build.id_)
     if summary is None or summary.status in ("pending", "running"):
         return
     await o.reporter.effects_finished(
@@ -346,11 +346,11 @@ async def _run_one_effect(
 ) -> None:
     """One effect with its own row and log."""
     # A rerun resets the existing effect row.
-    await builds_q.start_effect(o.pool, build_id=build.id, name=name, status="running")
+    await builds_q.start_effect(o.pool, build_id=build.id_, name=name, status="running")
     # A green commit status on a failed deploy hides the failure. Report
     # per-effect status so the forge reflects the real outcome.
     await o.reporter.effect_started(event, build, name)
-    async with o.open_log(build.id, f"effect:{name}") as writer:
+    async with o.open_log(build.id_, f"effect:{name}") as writer:
         try:
             success = await run_effect(ctx, name, writer.write)
         except Exception as e:
@@ -359,17 +359,17 @@ async def _run_one_effect(
             # remaining effects.
             logger.exception(
                 "effect crashed",
-                extra={"build_id": build.id, "effect": name},
+                extra={"build_id": build.id_, "effect": name},
             )
             await writer.write(f"\n{e}\n".encode())
             success = False
     error = None
     if not success:
-        logger.error("effect failed", extra={"build_id": build.id, "effect": name})
+        logger.error("effect failed", extra={"build_id": build.id_, "effect": name})
         error = failure_excerpt(writer.tail_lines()) or None
     await builds_q.finish_effect(
         o.pool,
-        build_id=build.id,
+        build_id=build.id_,
         name=name,
         status="succeeded" if success else "failed",
         error=error,

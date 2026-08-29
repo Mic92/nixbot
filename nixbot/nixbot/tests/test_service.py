@@ -80,7 +80,7 @@ def capture_run_build(service: CIService) -> list[int]:
     async def fake_run_build(
         event: Any, build: Any, worktree_path: Path, credentials: Any = None
     ) -> None:
-        build_ids.append(build.id)
+        build_ids.append(build.id_)
 
     service.orchestrator.run_build = fake_run_build  # type: ignore[method-assign]
     return build_ids
@@ -94,7 +94,7 @@ def capture_resume(service: CIService) -> list[int]:
     async def fake_resume(
         info: Any, build: Any, jobs: Any, credentials: Any = None
     ) -> None:
-        build_ids.append(build.id)
+        build_ids.append(build.id_)
 
     service.orchestrator.rerun_pending_attributes = fake_resume  # type: ignore[method-assign, assignment]
     return build_ids
@@ -328,7 +328,7 @@ async def test_restart_eval_failed_build_reevaluates(
         credentials: Any = None,
     ) -> None:
         assert await asyncio.to_thread(worktree_path.exists)
-        reevals.append(build.id)
+        reevals.append(build.id_)
 
     service.orchestrator.run_build = fake_run_build  # type: ignore[method-assign]
     await service.restart_build(build_id)
@@ -592,7 +592,7 @@ async def test_restart_while_unwinding_waits_then_runs(
     async def fake_rerun_pending_attributes(
         info: Any, build: Any, pending_jobs: Any, credentials: Any = None
     ) -> None:
-        rescheduled.append(build.id)
+        rescheduled.append(build.id_)
 
     service.orchestrator.rerun_pending_attributes = fake_rerun_pending_attributes  # type: ignore[method-assign]
 
@@ -631,7 +631,7 @@ class RecordingReporter(NullStatusReporter):
         self.finished: list[tuple[int, str, int]] = []
 
     async def build_finished(self, event: Any, build: Any, result: BuildResult) -> None:
-        self.finished.append((build.id, result.status, result.generation))
+        self.finished.append((build.id_, result.status, result.generation))
 
 
 async def test_cancel_not_running_posts_forge_status(service: CIService) -> None:

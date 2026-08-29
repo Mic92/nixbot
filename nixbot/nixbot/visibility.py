@@ -263,11 +263,11 @@ class VisibilityService:
         if is_admin(user, self.authz):
             return None
         rows = await q.project_visibility_rows(self.pool)
-        visible = [row.id for row in rows if not row.private]
+        visible = [row.id_ for row in rows if not row.private]
         # Configured viewer rules (e.g. OIDC users without forge accounts).
         if user is not None:
             visible.extend(
-                row.id
+                row.id_
                 for row in rows
                 if row.private
                 and can_view_private(
@@ -283,10 +283,10 @@ class VisibilityService:
             return visible
         seen = set(visible)
         visible.extend(
-            row.id
+            row.id_
             for row in rows
             if row.private
-            and row.id not in seen
+            and row.id_ not in seen
             and f"{row.forge}:{row.forge_repo_id}" in access.accessible
         )
         return visible
@@ -313,7 +313,9 @@ class VisibilityService:
             return []
         granted = select(access)
         rows = await q.project_forge_ids(self.pool)
-        return [row.id for row in rows if f"{row.forge}:{row.forge_repo_id}" in granted]
+        return [
+            row.id_ for row in rows if f"{row.forge}:{row.forge_repo_id}" in granted
+        ]
 
     async def _repo_access(self, user: User | None) -> RepoAccess | None:
         """None: no usable access info (anonymous, no fetcher, or the

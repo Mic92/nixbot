@@ -816,7 +816,7 @@ async def test_report_retry(
                 self, event: ChangeEvent, build: Any, result: BuildResult
             ) -> None:
                 del event
-                posts.append({"build": build.id, "attrs": result.attr_statuses})
+                posts.append({"build": build.id_, "attrs": result.attr_statuses})
                 if fail:
                     msg = "forge 502"
                     raise RuntimeError(msg)
@@ -917,7 +917,7 @@ async def test_restart_attribute_posts_pending(
                 self, event: ChangeEvent, build: Any, attr: str | None
             ) -> None:
                 del event
-                restarts.append((build.id, attr))
+                restarts.append((build.id_, attr))
 
         service.orchestrator.reporter = FakeReporter()
 

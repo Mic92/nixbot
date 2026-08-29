@@ -147,16 +147,16 @@ async def run_build(
         if isinstance(e, EvalError):
             logger.warning(
                 "evaluation failed",
-                extra={"build_id": build.id, "error": str(e)},
+                extra={"build_id": build.id_, "error": str(e)},
             )
         else:
             logger.exception(
-                "build failed with unexpected error", extra={"build_id": build.id}
+                "build failed with unexpected error", extra={"build_id": build.id_}
             )
         # Skip settling when the final fan-out already happened
         # (e.g. the effects phase failed): the build's aggregated
         # result must not be overwritten with a failure.
-        current = await q.get_build(o.pool, id_=build.id)
+        current = await q.get_build(o.pool, id_=build.id_)
         if current is None or current.status not in BuildStatus.TERMINAL:
             await _settle_aborted(o, event, build, BuildStatus.FAILED, error=str(e))
     finally:
@@ -217,8 +217,8 @@ async def _settle_aborted(
     ended without a normal aggregation (failure or cancellation)."""
     # Otherwise pending/building attribute rows would look like they
     # are still running.
-    await q.settle_unfinished_attributes(o.pool, build_id=build.id)
-    await db.set_build_status(o.pool, build.id, status, error=error)
+    await q.settle_unfinished_attributes(o.pool, build_id=build.id_)
+    await db.set_build_status(o.pool, build.id_, status, error=error)
     if status == BuildStatus.CANCELLED:
         await o.reporter.eval_cancelled(event, build)
     else:
@@ -250,7 +250,7 @@ async def _record_eval_success(
         for job in jobs
         if isinstance(job, NixEvalJobSuccess) and job.system in o.config.build_systems
     ]
-    await commit_eval_result(o.pool, build.id, buildable)
+    await commit_eval_result(o.pool, build.id_, buildable)
     await o.reporter.eval_finished(
         event,
         build,
@@ -314,7 +314,7 @@ async def _evaluate(  # noqa: PLR0913
         # Pending rows appear in the UI while the eval is running.
         await record_attributes(
             o.pool,
-            build.id,
+            build.id_,
             [
                 job
                 for job in jobs
@@ -336,12 +336,12 @@ async def _evaluate(  # noqa: PLR0913
         if now - last_flush >= LIVE_WARNINGS_FLUSH_INTERVAL:
             last_flush = now
             await q.set_eval_warnings(
-                o.pool, id_=build.id, warnings=json.dumps(live_warnings.snapshot())
+                o.pool, id_=build.id_, warnings=json.dumps(live_warnings.snapshot())
             )
 
     branch_config = BranchConfig.load(worktree_path)
     async with o.eval_slots:
-        await db.set_build_status(o.pool, build.id, BuildStatus.EVALUATING)
+        await db.set_build_status(o.pool, build.id_, BuildStatus.EVALUATING)
         await _prefetch_inputs(o, build, worktree_path, branch_config, credentials)
         return await o.eval_runner.run(
             worktree_path,
@@ -361,7 +361,7 @@ async def _run_build_inner(
 ) -> None:
     await o.reporter.build_started(event, build)
     # Reruns enter with a terminal row. Stay pending until a slot is held.
-    await db.set_build_status(o.pool, build.id, BuildStatus.PENDING)
+    await db.set_build_status(o.pool, build.id_, BuildStatus.PENDING)
 
     if await _try_reuse_eval(o, event, build, worktree_path, credentials):
         return
@@ -370,7 +370,7 @@ async def _run_build_inner(
     live_warnings = LiveWarningAggregator()
     # Race slot wait and evaluation against the cancel event. A
     # superseded build must not hold or wait for the slot to completion.
-    cancel_event = o.cancel_events.setdefault(build.id, asyncio.Event())
+    cancel_event = o.cancel_events.setdefault(build.id_, asyncio.Event())
     eval_task = asyncio.ensure_future(
         _evaluate(
             o, event, build, worktree_path, credentials, jobs_queue, live_warnings
@@ -400,9 +400,9 @@ async def _run_build_inner(
         finally:
             if live_warnings:
                 await q.set_eval_warnings(
-                    o.pool, id_=build.id, warnings=json.dumps(live_warnings.snapshot())
+                    o.pool, id_=build.id_, warnings=json.dumps(live_warnings.snapshot())
                 )
-        await db.set_build_status(o.pool, build.id, BuildStatus.BUILDING)
+        await db.set_build_status(o.pool, build.id_, BuildStatus.BUILDING)
         await _record_eval_success(o, event, build, eval_result.jobs, live_warnings)
 
         # Re-send the complete eval result: the scheduler dedupes
@@ -434,7 +434,7 @@ async def _reusable_eval_jobs(
         o.pool,
         project_id=build.project_id,
         tree_hash=build.tree_hash,
-        exclude_build_id=build.id,
+        exclude_build_id=build.id_,
     )
     if source_id is None:
         return None
@@ -448,7 +448,7 @@ async def _reusable_eval_jobs(
         return None  # garbage-collected since the eval
     logger.info(
         "reusing eval results from earlier build",
-        extra={"build_id": build.id, "source_build_id": source_id},
+        extra={"build_id": build.id_, "source_build_id": source_id},
     )
     return jobs
 
@@ -465,8 +465,8 @@ async def _try_reuse_eval(
     reused = await _reusable_eval_jobs(o, build)
     if reused is None:
         return False
-    await commit_eval_result(o.pool, build.id, reused)
-    await db.set_build_status(o.pool, build.id, BuildStatus.BUILDING)
+    await commit_eval_result(o.pool, build.id_, reused)
+    await db.set_build_status(o.pool, build.id_, BuildStatus.BUILDING)
     await o.reporter.eval_finished(event, build, EvalReport(success=True, jobs=reused))
     # cache_failures=False: see _ReadOnlyFailedBuildCache.
     status = await build_attributes(
@@ -490,12 +490,12 @@ async def build_attributes(  # noqa: PLR0913
     re-aggregate the build (shared by fresh builds and reruns).
     Accepts either a complete job list or a queue fed during an
     ongoing evaluation. Returns the aggregated build status."""
-    cancel_event = o.cancel_events.setdefault(build.id, asyncio.Event())
+    cancel_event = o.cancel_events.setdefault(build.id_, asyncio.Event())
 
     async def record_early(result: AttributeResult) -> None:
         """Persist skips and dependency failures as they happen;
         otherwise they stay pending until the whole build ends."""
-        await db.complete_attribute(o.pool, build.id, result, if_unfinished=True)
+        await db.complete_attribute(o.pool, build.id_, result, if_unfinished=True)
 
     failed_build_cache: FailedBuildCache | None = (
         o.failed_build_cache(build.project_id)
@@ -519,7 +519,7 @@ async def build_attributes(  # noqa: PLR0913
     # Persist results the executor adapter didn't already write
     # (failed_eval, dependency_failed, cached_failure, skips).
     for result in schedule_result.results:
-        await db.complete_attribute(o.pool, build.id, result, if_unfinished=True)
+        await db.complete_attribute(o.pool, build.id_, result, if_unfinished=True)
 
     # Skipped-as-local attributes still get gcroots/outputs
     # updates. A filesystem error here must not skip the final
@@ -530,15 +530,15 @@ async def build_attributes(  # noqa: PLR0913
     except Exception as e:
         logger.exception(
             "post-processing skipped attributes failed",
-            extra={"build_id": build.id},
+            extra={"build_id": build.id_},
         )
         post_process_error = str(e)
 
-    status, generation = await db.aggregate_build(o.pool, build.id)
+    status, generation = await db.aggregate_build(o.pool, build.id_)
     if post_process_error is not None:
         status = BuildStatus.FAILED
         await db.set_build_status(
-            o.pool, build.id, BuildStatus.FAILED, error=post_process_error
+            o.pool, build.id_, BuildStatus.FAILED, error=post_process_error
         )
     await o.reporter.build_finished(
         event,
@@ -549,7 +549,7 @@ async def build_attributes(  # noqa: PLR0913
             schedule_result.results,
             attr_statuses={
                 r.attr: r.status
-                for r in await q.attribute_statuses(o.pool, build_id=build.id)
+                for r in await q.attribute_statuses(o.pool, build_id=build.id_)
             },
             attr_prefix=BranchConfig.load(worktree_path).attribute,
         ),
@@ -559,7 +559,7 @@ async def build_attributes(  # noqa: PLR0913
         BuildResult(status, generation, schedule_result.results),
         eval_success=True,
     )
-    o.cancel_events.pop(build.id, None)
+    o.cancel_events.pop(build.id_, None)
 
     if status == BuildStatus.SUCCEEDED:
         await o.refresh_schedules(event)
@@ -608,7 +608,7 @@ class _OrchestratorExecutor:
         except Exception:
             logger.exception(
                 "unexpected error building attribute",
-                extra={"build_id": self.build_record.id, "attr": job.attr},
+                extra={"build_id": self.build_record.id_, "attr": job.attr},
             )
             result = AttributeResult(
                 attr=job.attr,
@@ -618,7 +618,7 @@ class _OrchestratorExecutor:
                 drv_path=job.drv_path,
                 system=job.system,
             )
-            await db.complete_attribute(self.o.pool, self.build_record.id, result)
+            await db.complete_attribute(self.o.pool, self.build_record.id_, result)
             # Internal errors are not derivation failures: don't cache.
             return BuildOutcome.failure_no_cache
 
@@ -628,7 +628,7 @@ class _OrchestratorExecutor:
         async def mark_building() -> bool:
             marked = await q.mark_attribute_building(
                 self.o.pool,
-                build_id=self.build_record.id,
+                build_id=self.build_record.id_,
                 attr=job.attr,
                 system=job.system,
                 drv_path=job.drv_path,
@@ -638,7 +638,7 @@ class _OrchestratorExecutor:
         # Per-attribute cancellation: the executor watches one event, so
         # mirror the build-level cancel into the attribute's own event.
         attr_cancel = asyncio.Event()
-        self.o.attr_cancel_events[(self.build_record.id, job.attr)] = attr_cancel
+        self.o.attr_cancel_events[(self.build_record.id_, job.attr)] = attr_cancel
 
         async def _mirror_build_cancel() -> None:
             await self.cancel_event.wait()
@@ -646,9 +646,9 @@ class _OrchestratorExecutor:
 
         mirror = asyncio.create_task(_mirror_build_cancel())
         try:
-            async with self.o.open_log(self.build_record.id, job.attr) as writer:
+            async with self.o.open_log(self.build_record.id_, job.attr) as writer:
                 outcome = await self.o.executor.build_attribute(
-                    self.build_record.id,
+                    self.build_record.id_,
                     job,
                     writer,
                     self.worktree_path,
@@ -672,7 +672,7 @@ class _OrchestratorExecutor:
                         outcome = BuildOutcome.post_build_failure
         finally:
             mirror.cancel()
-            self.o.attr_cancel_events.pop((self.build_record.id, job.attr), None)
+            self.o.attr_cancel_events.pop((self.build_record.id_, job.attr), None)
 
         status, error = outcome_status(job, outcome)
         # Failed attributes carry a log-tail excerpt so the build page
@@ -701,7 +701,7 @@ class _OrchestratorExecutor:
         )
         await db.complete_attribute(
             self.o.pool,
-            self.build_record.id,
+            self.build_record.id_,
             result,
             log_size=writer.bytes_seen,
             log_truncated=writer.truncated,
@@ -716,6 +716,6 @@ class _OrchestratorExecutor:
                 # the failed-build cache.
                 logger.exception(
                     "post-processing failed",
-                    extra={"build_id": self.build_record.id, "attr": job.attr},
+                    extra={"build_id": self.build_record.id_, "attr": job.attr},
                 )
         return outcome

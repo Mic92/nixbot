@@ -4,8 +4,8 @@ plugins:
     wasm:
       # Kept in sync with nix/sqlc.nix (the dev shell and the freshness
       # check use the nix-pinned copy of the same artifact).
-      url: https://github.com/Mic92/sqlc-gen-better-python/releases/download/v0.4.5-mic92.1/sqlc-gen-better-python.wasm
-      sha256: 0591d150f96fee81977937038b27f09db773cc0476dbd63353a69bdb1a8b0ced
+      url: https://github.com/rayakame/sqlc-gen-better-python/releases/download/v0.9.0/sqlc-gen-better-python.wasm
+      sha256: d1787aa32e61f2e73c81a4f93b3e5a9beeec918952cff3183fb96313057f58a8
 sql:
   - engine: postgresql
     queries: nixbot/nixbot/queries
@@ -20,11 +20,3 @@ sql:
           model_type: dataclass
           docstrings: none
           omit_unused_models: true
-          # Column/field names that must not be singularized in
-          # generated row dataclasses.
-          inflection_exclude_table_names: [
-            outputs,
-            groups,
-            median_secs,
-            eval_warnings,
-          ]

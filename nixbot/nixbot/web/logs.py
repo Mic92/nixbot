@@ -8,7 +8,6 @@ executor's LogWriter fans out to any number of SSE subscribers.
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 import functools
 import html
 import json
@@ -35,6 +34,7 @@ from ..db_gen import scheduled as sched_gen  # noqa: TID252
 from ..db_gen import web as gen  # noqa: TID252
 from ..executor import container_path, log_path_for_key, read_log  # noqa: TID252
 from ..logstore import LogContainerReader, is_container  # noqa: TID252
+from ..sql_util import row_dict, row_dicts  # noqa: TID252
 from ..status import NO_LOG_STATUSES  # noqa: TID252
 from .api_routes import FailureSummary, clean_row
 
@@ -620,7 +620,7 @@ class _LogRoutes:
             "scheduled_log.html",
             request=request,
             project=project,
-            run=dataclasses.asdict(run),
+            run=row_dict(run),
             content=content,
             live=live,
             waiting=waiting,
@@ -671,7 +671,7 @@ class _LogRoutes:
             before=before,
             limit_=_HISTORY_PAGE + 1,
         )
-        runs = [dataclasses.asdict(r) for r in rows]
+        runs = row_dicts(rows)
         has_more = len(runs) > _HISTORY_PAGE
         runs = runs[:_HISTORY_PAGE]
         template = "_schedule_run_rows.html" if before else "schedule_runs.html"

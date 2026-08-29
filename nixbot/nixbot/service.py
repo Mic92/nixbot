@@ -180,10 +180,10 @@ class RetryingReporter:
             await self.inner.build_finished(event, build, result)
         except Exception as e:
             logger.exception(
-                "status post failed; queueing a retry", extra={"build_id": build.id}
+                "status post failed; queueing a retry", extra={"build_id": build.id_}
             )
             await self.service.enqueue_work(
-                "report", f"report-{build.id}", _report_payload(build.id, 1, e)
+                "report", f"report-{build.id_}", _report_payload(build.id_, 1, e)
             )
 
 
@@ -246,7 +246,7 @@ class CIService:
                 event.forge, event.forge_repo_id
             )
             if project is not None:
-                self.orchestrator.canceller.cancel_pr(project.id, event.pr_number)
+                self.orchestrator.canceller.cancel_pr(project.id_, event.pr_number)
             # Queued events for the PR would build it after the close.
             await q.supersede_pending_changes(
                 self.pool,
@@ -272,17 +272,17 @@ class CIService:
             build = await builds_q.get_build(self.pool, id_=build_id)
             # external_id is attacker-influenced (set by whichever app
             # created the run). Never restart another project's build.
-            if build is None or build.project_id != project.id:
+            if build is None or build.project_id != project.id_:
                 build_id = None
         if build_id is None:
             build_id = await failed_q.latest_build_for_sha(
-                self.pool, project_id=project.id, commit_sha=event.head_sha
+                self.pool, project_id=project.id_, commit_sha=event.head_sha
             )
         if build_id is None:
             return
         if event.name is not None:
             row = await failed_q.check_run_attr(
-                self.pool, project_id=project.id, sha=event.head_sha, name=event.name
+                self.pool, project_id=project.id_, sha=event.head_sha, name=event.name
             )
             if row is not None and row.attr is not None:
                 await self.restart_attribute(build_id, row.attr)

@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 async def _reconcile_project(s: CIService, project: RepoRecord) -> None:
     try:
-        watermark = await s.repo_store.reconcile_watermark(project.id)
+        watermark = await s.repo_store.reconcile_watermark(project.id_)
         if project.forge == "github" and s.github is not None:
             heads = await github_heads(s.github, project, watermark)
         elif project.forge == "gitea" and s.gitea is not None:
@@ -48,7 +48,7 @@ async def _reconcile_project(s: CIService, project: RepoRecord) -> None:
         # must retry the same window on the next startup.
         new_watermark = max_pr_updated(heads)
         if new_watermark is not None:
-            await s.repo_store.set_reconcile_watermark(project.id, new_watermark)
+            await s.repo_store.set_reconcile_watermark(project.id_, new_watermark)
     except Exception:
         logger.exception(
             "reconciliation failed",
@@ -170,7 +170,7 @@ async def _register_project_hook(
         await register(
             client,
             WebhookSecrets(s.pool, project.forge),
-            project.id,
+            project.id_,
             project.owner,
             project.name,
             base,

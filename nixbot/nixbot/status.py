@@ -447,7 +447,7 @@ class ForgeStatusReporter:
                 strip_ansi(description),
                 self.build_url(event, build),
                 project_id=event.repo.id,
-                build_id=build.id,
+                build_id=build.id_,
                 attr=attr,
                 text=text,
                 force_new=force_new,
@@ -467,7 +467,7 @@ class ForgeStatusReporter:
                 raise
             logger.exception(
                 "failed to post commit status",
-                extra={"build_id": build.id, "context": context},
+                extra={"build_id": build.id_, "context": context},
             )
 
     async def build_started(self, event: ChangeEvent, build: BuildRecord) -> None:
@@ -595,14 +595,14 @@ class ForgeStatusReporter:
         results = result.results
         attr_statuses = result.attr_statuses
         # Monotonic generation: drop stale posts after re-aggregation.
-        if generation < self._posted_generations.get(build.id, 0):
+        if generation < self._posted_generations.get(build.id_, 0):
             logger.info(
                 "dropping stale status post",
-                extra={"build_id": build.id, "generation": generation},
+                extra={"build_id": build.id_, "generation": generation},
             )
             return
-        self._posted_generations[build.id] = generation
-        self._posted_generations.move_to_end(build.id)
+        self._posted_generations[build.id_] = generation
+        self._posted_generations.move_to_end(build.id_)
         while len(self._posted_generations) > POSTED_GENERATIONS_MAX:
             self._posted_generations.popitem(last=False)
 

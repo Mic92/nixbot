@@ -74,7 +74,7 @@ class ApiTokenStore:
         rows = await q.api_tokens_for_user(self.pool, user_qualified=user.qualified)
         return [
             TokenInfo(
-                id=row.id,
+                id=row.id_,
                 name=row.name,
                 created_at=row.created_at,
                 expires_at=row.expires_at,

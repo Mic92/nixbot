@@ -52,7 +52,7 @@ class WorkQueue:
         if row is None:
             return None
         return WorkItem(
-            id=row.id,
+            id=row.id_,
             kind=row.kind,
             dedup_key=row.dedup_key,
             payload=json.loads(row.payload),
