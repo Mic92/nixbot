@@ -106,7 +106,7 @@ async def _resumable_eval_jobs(
         return None
     if not resumable.has_attributes:
         return None
-    unfinished_count = await q.count_unfinished_attributes(s.pool, build_id=build.id)
+    unfinished_count = await q.count_unfinished_attributes(s.pool, build_id=build.id_)
     if len(resumable.pending_jobs) != unfinished_count:
         return None
     # Stored drv paths may have been garbage-collected since the eval;
@@ -116,7 +116,7 @@ async def _resumable_eval_jobs(
     if not all(drv in valid for drv in drvs):
         logger.info(
             "stored derivations missing from the store; re-evaluating",
-            extra={"build_id": build.id},
+            extra={"build_id": build.id_},
         )
         return None
     return resumable.pending_jobs
@@ -135,7 +135,7 @@ async def _reeval(
         ):
             await s.orchestrator.run_build(event, build, worktree_path)
     finally:
-        s.orchestrator.cancel_events.pop(build.id, None)
+        s.orchestrator.cancel_events.pop(build.id_, None)
 
 
 async def change_event_for(

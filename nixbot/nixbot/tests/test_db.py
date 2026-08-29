@@ -197,7 +197,7 @@ async def test_get_or_create_build_concurrent_no_duplicates(postgres_dsn: str) -
                 for _ in range(5)
             )
         )
-        assert len({build.id for build, _ in results}) == 1
+        assert len({build.id_ for build, _ in results}) == 1
         assert sum(created for _, created in results) == 1
         count = await pool.fetchval(
             "SELECT count(*) FROM builds WHERE project_id = $1", project_id
@@ -249,12 +249,14 @@ async def test_cancelled_build_not_reused(pool: asyncpg.Pool) -> None:
         pool, project_id, "tree-c", "sha", "main"
     )
     assert created
-    await pool.execute("UPDATE builds SET status = 'cancelled' WHERE id = $1", first.id)
+    await pool.execute(
+        "UPDATE builds SET status = 'cancelled' WHERE id = $1", first.id_
+    )
     second, created = await db.get_or_create_build(
         pool, project_id, "tree-c", "sha2", "main"
     )
     assert created
-    assert second.id != first.id
+    assert second.id_ != first.id_
 
 
 async def test_reuse_backfills_pr_fields(pool: asyncpg.Pool) -> None:
@@ -276,10 +278,10 @@ async def test_reuse_backfills_pr_fields(pool: asyncpg.Pool) -> None:
         pr_author="github:alice",
     )
     assert not created
-    assert second.id == first.id
+    assert second.id_ == first.id_
     assert second.pr_number == 7
     row = await pool.fetchrow(
-        "SELECT pr_number, pr_author FROM builds WHERE id = $1", first.id
+        "SELECT pr_number, pr_author FROM builds WHERE id = $1", first.id_
     )
     assert row["pr_number"] == 7
     assert row["pr_author"] == "github:alice"
@@ -311,10 +313,10 @@ async def test_reuse_by_other_pr_clears_both_identity_fields(
         pr_author="github:bob",
     )
     assert not created
-    assert second.id == first.id
+    assert second.id_ == first.id_
     row = await pool.fetchrow(
         "SELECT pr_number, pr_author, branch FROM builds WHERE id = $1",
-        first.id,
+        first.id_,
     )
     # Never mix two PRs' identities: clear both together. The
     # branch stays: only a plain branch push takes it over.
@@ -341,12 +343,12 @@ async def test_branch_push_takes_over_reused_pr_build(pool: asyncpg.Pool) -> Non
         pool, project_id, "tree-d", "sha", "main"
     )
     assert not created
-    assert second.id == first.id
+    assert second.id_ == first.id_
     assert second.pr_number is None
     assert second.branch == "main"
     row = await pool.fetchrow(
         "SELECT pr_number, pr_author, branch FROM builds WHERE id = $1",
-        first.id,
+        first.id_,
     )
     assert dict(row) == {"pr_number": None, "pr_author": None, "branch": "main"}
 
@@ -367,9 +369,9 @@ async def test_pr_does_not_capture_branch_push_build(pool: asyncpg.Pool) -> None
         pr_author="github:mallory",
     )
     assert not created
-    assert second.id == first.id
+    assert second.id_ == first.id_
     row = await pool.fetchrow(
-        "SELECT pr_number, pr_author FROM builds WHERE id = $1", first.id
+        "SELECT pr_number, pr_author FROM builds WHERE id = $1", first.id_
     )
     assert row["pr_number"] is None
     assert row["pr_author"] is None
@@ -391,21 +393,21 @@ async def test_complete_attribute_preserves_eval_outputs(pool: asyncpg.Pool) -> 
             }
         }
     )
-    await build_run.record_attributes(pool, build.id, [job])
+    await build_run.record_attributes(pool, build.id_, [job])
 
     async def outputs() -> dict:
         return json.loads(
             await pool.fetchval(
                 "SELECT outputs FROM build_attributes "
                 "WHERE build_id = $1 AND attr = 'foo'",
-                build.id,
+                build.id_,
             )
         )
 
     # Completion without an out path (e.g. cancelled) keeps the map.
     await db.complete_attribute(
         pool,
-        build.id,
+        build.id_,
         AttributeResult(
             attr="foo",
             status=AttributeStatus.cancelled,
@@ -422,7 +424,7 @@ async def test_complete_attribute_preserves_eval_outputs(pool: asyncpg.Pool) -> 
     # Successful completion updates "out" but keeps "dev".
     await db.complete_attribute(
         pool,
-        build.id,
+        build.id_,
         AttributeResult(
             attr="foo",
             status=AttributeStatus.succeeded,
@@ -450,7 +452,7 @@ async def test_complete_attribute_marks_substituted_as_cached(
     async def cached(attr: str) -> bool:
         return await pool.fetchval(
             "SELECT cached FROM build_attributes WHERE build_id = $1 AND attr = $2",
-            build.id,
+            build.id_,
             attr,
         )
 
@@ -462,7 +464,7 @@ async def test_complete_attribute_marks_substituted_as_cached(
         job = mk_job(attr, cache_status=cache_status)
         await db.complete_attribute(
             pool,
-            build.id,
+            build.id_,
             AttributeResult(
                 attr=attr,
                 status=status,
@@ -486,7 +488,7 @@ async def test_complete_attribute_replaces_log_metadata(pool: asyncpg.Pool) -> N
     for size in (10, 20):
         await db.complete_attribute(
             pool,
-            build.id,
+            build.id_,
             AttributeResult(
                 attr="foo",
                 status=AttributeStatus.succeeded,
@@ -499,7 +501,7 @@ async def test_complete_attribute_replaces_log_metadata(pool: asyncpg.Pool) -> N
         )
     rows = await pool.fetch(
         "SELECT log_size FROM build_attributes WHERE build_id = $1 AND attr = 'foo'",
-        build.id,
+        build.id_,
     )
     assert len(rows) == 1
     assert rows[0]["log_size"] == 20
@@ -510,12 +512,12 @@ async def test_record_attributes_persists_pending_rows_with_outputs(
 ) -> None:
     project_id = await insert_project(pool, "record-attrs")
     build, _ = await db.get_or_create_build(pool, project_id, "tree-ra", "sha", "main")
-    await build_run.record_attributes(pool, build.id, [mk_job("a"), mk_job("b")])
+    await build_run.record_attributes(pool, build.id_, [mk_job("a"), mk_job("b")])
     rows = {
         r["attr"]: r
         for r in await pool.fetch(
             "SELECT attr, status, outputs FROM build_attributes WHERE build_id = $1",
-            build.id,
+            build.id_,
         )
     }
     assert set(rows) == {"a", "b"}
@@ -524,7 +526,7 @@ async def test_record_attributes_persists_pending_rows_with_outputs(
     # Re-recording (rerun) must not reset completed rows.
     await db.complete_attribute(
         pool,
-        build.id,
+        build.id_,
         AttributeResult(
             attr="a",
             status=AttributeStatus.succeeded,
@@ -532,10 +534,10 @@ async def test_record_attributes_persists_pending_rows_with_outputs(
             out_path="/nix/store/a-out",
         ),
     )
-    await build_run.record_attributes(pool, build.id, [mk_job("a")])
+    await build_run.record_attributes(pool, build.id_, [mk_job("a")])
     status = await pool.fetchval(
         "SELECT status FROM build_attributes WHERE build_id = $1 AND attr = 'a'",
-        build.id,
+        build.id_,
     )
     assert status == "succeeded"
 
@@ -549,11 +551,11 @@ async def test_mark_attribute_building_does_not_resurrect_cancelled_rows(
     project_id = await insert_project(pool, "no-resurrect")
     build, _ = await db.get_or_create_build(pool, project_id, "tree-c", "sha", "main")
     job = mk_job("foo")
-    await build_run.record_attributes(pool, build.id, [job])
+    await build_run.record_attributes(pool, build.id_, [job])
     assert (
         await builds_q.mark_attribute_building(
             pool,
-            build_id=build.id,
+            build_id=build.id_,
             attr="foo",
             system=job.system,
             drv_path=job.drv_path,
@@ -563,12 +565,12 @@ async def test_mark_attribute_building_does_not_resurrect_cancelled_rows(
     await pool.execute(
         "UPDATE build_attributes SET status = 'cancelled', "
         "finished_at = now() WHERE build_id = $1 AND attr = 'foo'",
-        build.id,
+        build.id_,
     )
     assert (
         await builds_q.mark_attribute_building(
             pool,
-            build_id=build.id,
+            build_id=build.id_,
             attr="foo",
             system=job.system,
             drv_path=job.drv_path,
@@ -577,7 +579,7 @@ async def test_mark_attribute_building_does_not_resurrect_cancelled_rows(
     )
     status = await pool.fetchval(
         "SELECT status FROM build_attributes WHERE build_id = $1 AND attr = 'foo'",
-        build.id,
+        build.id_,
     )
     assert status == "cancelled"
 
@@ -588,20 +590,20 @@ async def test_mark_attribute_building_sets_status_and_started_at(
     project_id = await insert_project(pool, "building-status")
     build, _ = await db.get_or_create_build(pool, project_id, "tree-b", "sha", "main")
     job = mk_job("foo")
-    await build_run.record_attributes(pool, build.id, [job])
+    await build_run.record_attributes(pool, build.id_, [job])
     await builds_q.mark_attribute_building(
-        pool, build_id=build.id, attr="foo", system=job.system, drv_path=job.drv_path
+        pool, build_id=build.id_, attr="foo", system=job.system, drv_path=job.drv_path
     )
     row = await pool.fetchrow(
         "SELECT status, started_at FROM build_attributes "
         "WHERE build_id = $1 AND attr = 'foo'",
-        build.id,
+        build.id_,
     )
     assert row["status"] == "building"
     assert row["started_at"] is not None
     await db.complete_attribute(
         pool,
-        build.id,
+        build.id_,
         AttributeResult(
             attr="foo",
             status=AttributeStatus.succeeded,
@@ -612,7 +614,7 @@ async def test_mark_attribute_building_sets_status_and_started_at(
     row = await pool.fetchrow(
         "SELECT status, started_at, finished_at FROM build_attributes "
         "WHERE build_id = $1 AND attr = 'foo'",
-        build.id,
+        build.id_,
     )
     assert row["status"] == "succeeded"
     assert row["started_at"] is not None  # preserved by completion
@@ -638,19 +640,19 @@ async def test_complete_attribute_if_unfinished_skips_terminal_rows(
             system=job.system,
         )
 
-    await build_run.record_attributes(pool, build.id, [job])
+    await build_run.record_attributes(pool, build.id_, [job])
     await db.complete_attribute(
-        pool, build.id, result(AttributeStatus.succeeded), if_unfinished=True
+        pool, build.id_, result(AttributeStatus.succeeded), if_unfinished=True
     )
-    assert await attribute_statuses(pool, build.id) == {"foo": "succeeded"}
+    assert await attribute_statuses(pool, build.id_) == {"foo": "succeeded"}
     await db.complete_attribute(
-        pool, build.id, result(AttributeStatus.cancelled), if_unfinished=True
+        pool, build.id_, result(AttributeStatus.cancelled), if_unfinished=True
     )
-    assert await attribute_statuses(pool, build.id) == {"foo": "succeeded"}
+    assert await attribute_statuses(pool, build.id_) == {"foo": "succeeded"}
     job_b = mk_job("bar")
     await db.complete_attribute(
         pool,
-        build.id,
+        build.id_,
         AttributeResult(
             attr="bar",
             status=AttributeStatus.skipped_local,
@@ -660,7 +662,7 @@ async def test_complete_attribute_if_unfinished_skips_terminal_rows(
         ),
         if_unfinished=True,
     )
-    statuses = await attribute_statuses(pool, build.id)
+    statuses = await attribute_statuses(pool, build.id_)
     assert statuses["bar"] == "skipped_local"
 
 

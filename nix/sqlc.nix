@@ -6,9 +6,9 @@
 { pkgs }:
 let
   # Keep URL and checksum in sync with sqlc.yaml.
-  pluginSha256 = "0591d150f96fee81977937038b27f09db773cc0476dbd63353a69bdb1a8b0ced";
+  pluginSha256 = "d1787aa32e61f2e73c81a4f93b3e5a9beeec918952cff3183fb96313057f58a8";
   plugin = pkgs.fetchurl {
-    url = "https://github.com/Mic92/sqlc-gen-better-python/releases/download/v0.4.5-mic92.1/sqlc-gen-better-python.wasm";
+    url = "https://github.com/rayakame/sqlc-gen-better-python/releases/download/v0.9.0/sqlc-gen-better-python.wasm";
     hash = "sha256:${pluginSha256}";
   };
 in

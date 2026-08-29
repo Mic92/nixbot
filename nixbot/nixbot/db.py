@@ -71,7 +71,7 @@ async def get_or_create_build(  # noqa: PLR0913
             if pr_number != row.pr_number:
                 if row.pr_number is not None or row.pr_author is not None:
                     row = await q.detach_build_from_pr(
-                        conn, id_=row.id, pr_number=pr_number, branch=branch
+                        conn, id_=row.id_, pr_number=pr_number, branch=branch
                     )
                 elif pr_number is not None and branch == row.branch:
                     # Backfill PR identity for the pr_author authz
@@ -81,14 +81,14 @@ async def get_or_create_build(  # noqa: PLR0913
                     # default-branch push sharing the tree hash).
                     row = await q.attach_build_to_pr(
                         conn,
-                        id_=row.id,
+                        id_=row.id_,
                         pr_number=pr_number,
                         pr_author=pr_author,
                     )
             elif pr_author is not None and row.pr_author is None:
                 # Same PR: fill in the author when a previous event
                 # for this PR lacked it.
-                row = await q.backfill_pr_author(conn, id_=row.id, pr_author=pr_author)
+                row = await q.backfill_pr_author(conn, id_=row.id_, pr_author=pr_author)
             return expect(row), False
         row = await q.create_build(
             conn,

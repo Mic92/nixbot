@@ -38,15 +38,15 @@ async def attach_linked_event(
 ) -> None:
     """In-flight (or recovering) build shared with another context:
     attach for the final status fan-out."""
-    o.linked_events.setdefault(build.id, []).append(event)
+    o.linked_events.setdefault(build.id_, []).append(event)
     await o.reporter.build_started(event, build)
     # The build may have turned terminal between the record fetch
     # and the attach: the final fan-out already happened and would
     # never cover this event. Replay the final status instead.
-    current = await builds_q.get_build(o.pool, id_=build.id)
+    current = await builds_q.get_build(o.pool, id_=build.id_)
     if current is not None and current.status in BuildStatus.TERMINAL:
         with contextlib.suppress(KeyError, ValueError):
-            o.linked_events[build.id].remove(event)
+            o.linked_events[build.id_].remove(event)
         await replay_terminal_status(o, event, current)
 
 
@@ -62,7 +62,7 @@ async def replay_terminal_status(
         await o.reporter.eval_cancelled(event, build)
     else:
         eval_success = build.status == BuildStatus.SUCCEEDED or bool(
-            await builds_q.attribute_statuses(o.pool, build_id=build.id)
+            await builds_q.attribute_statuses(o.pool, build_id=build.id_)
         )
         await o.reporter.eval_finished(event, build, EvalReport(success=eval_success))
     await o.reporter.build_finished(
@@ -75,7 +75,7 @@ async def replay_effect_statuses(
 ) -> None:
     """Re-post each finished effect's status and the aggregate summary
     onto the reusing commit's SHA, so a failed deploy is not green."""
-    for effect in await builds_q.effects_for_build(o.pool, build_id=build.id):
+    for effect in await builds_q.effects_for_build(o.pool, build_id=build.id_):
         if effect.status in ("succeeded", "failed", "dependency_failed"):
             await o.reporter.effect_finished(
                 event,
@@ -96,7 +96,7 @@ async def finish_linked(
 ) -> None:
     """Final status fan-out for second contexts attached to this
     build. eval_success is None when no eval result exists."""
-    for linked in o.linked_events.pop(build.id, []):
+    for linked in o.linked_events.pop(build.id_, []):
         if eval_success is not None:
             await o.reporter.eval_finished(
                 linked, build, EvalReport(success=eval_success)
@@ -139,12 +139,12 @@ async def reuse_terminal_build(  # noqa: PLR0913
     gcroots/outputs updates."""
     logger.info(
         "reusing build for tree hash",
-        extra={"build_id": build.id, "tree_hash": tree_hash},
+        extra={"build_id": build.id_, "tree_hash": tree_hash},
     )
     outcome = o.canceller.register(
         event.repo.id,
         key,
-        build.id,
+        build.id_,
         tree_hash,
         event.commit_sha,
         asyncio.Event(),
@@ -154,7 +154,7 @@ async def reuse_terminal_build(  # noqa: PLR0913
         # Redelivered out-of-order event: superseding the in-flight
         # newer build with this old result would cancel it.
         return
-    o.canceller.complete(build.id)
+    o.canceller.complete(build.id_)
     if build.status == BuildStatus.SUCCEEDED:
         # Guarded like in-build post-processing: a gcroots/outputs
         # failure must not strand this context without a status.
@@ -172,7 +172,7 @@ async def reuse_terminal_build(  # noqa: PLR0913
         except Exception:
             logger.exception(
                 "post-processing reused build failed",
-                extra={"build_id": build.id},
+                extra={"build_id": build.id_},
             )
     await replay_terminal_status(o, event, build)
 
@@ -182,7 +182,7 @@ async def _post_process_existing(
 ) -> None:
     """Gcroots/outputs updates for a context reusing an already
     succeeded build (e.g. default-branch push reusing a PR build)."""
-    rows = await q.succeeded_attribute_outputs(o.pool, build_id=build.id)
+    rows = await q.succeeded_attribute_outputs(o.pool, build_id=build.id_)
     pairs = []
     for row in rows:
         out = (json.loads(row.outputs) if row.outputs else {}).get("out")

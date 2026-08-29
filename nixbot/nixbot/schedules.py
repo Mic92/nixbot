@@ -9,7 +9,6 @@ config.ScheduleWhen.resolved. All times are UTC.
 
 from __future__ import annotations
 
-import dataclasses
 import json
 import logging
 from dataclasses import dataclass
@@ -19,7 +18,7 @@ from typing import TYPE_CHECKING, Any, cast
 from .config import ScheduledEffectConfig, ScheduleWhen
 from .db_gen import scheduled as q
 from .effects import list_scheduled_effects
-from .sql_util import expect
+from .sql_util import expect, row_dicts
 
 if TYPE_CHECKING:
     import asyncpg
@@ -265,11 +264,11 @@ class ScheduledEffectsStore:
     async def latest_runs_for_project(self, project_id: int) -> list[dict]:
         """Most recent run per (schedule, effect)."""
         rows = await q.latest_scheduled_runs(self.pool, project_id=project_id)
-        return [dataclasses.asdict(row) for row in rows]
+        return row_dicts(rows)
 
     async def schedules_for_project(self, project_id: int) -> list[dict]:
         rows = await q.project_schedules(self.pool, project_id=project_id)
-        return [dataclasses.asdict(row) for row in rows]
+        return row_dicts(rows)
 
     async def mark_run(self, due: DueEffect, now: datetime | None = None) -> None:
         await q.mark_schedule_run(

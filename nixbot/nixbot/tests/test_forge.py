@@ -421,7 +421,7 @@ async def test_project_store_sync_and_legacy_import(pool: asyncpg.Pool) -> None:
     # Admin toggle.
     later = await store.by_forge_id("github", "acme-later")
     assert later is not None
-    await store.set_enabled(later.id, enabled=True)
+    await store.set_enabled(later.id_, enabled=True)
     assert {p.name for p in await store.enabled_repos()} == {
         "renamed",
         "later",
@@ -480,7 +480,7 @@ async def test_prune_missing_disabled_projects(pool: asyncpg.Pool) -> None:
     await store.sync_pull_based([("pull/one", "https://x/one.git", "main")])
     enabled_row = await store.by_forge_id("github", kept_enabled.forge_repo_id)
     assert enabled_row is not None
-    await store.set_enabled(enabled_row.id, enabled=True)
+    await store.set_enabled(enabled_row.id_, enabled=True)
 
     # Discovery no longer sees kept-enabled and gone-disabled.
     await store.prune_missing_disabled("github", [still_there.forge_repo_id])

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import dataclasses
 import json
 import re
 from dataclasses import dataclass
@@ -10,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..db_gen import builds as builds_gen  # noqa: TID252
 from ..db_gen import web as gen  # noqa: TID252
+from ..sql_util import row_dict, row_dicts  # noqa: TID252
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -53,9 +53,7 @@ class Page:
     has_next: bool
 
 
-def _dicts(rows: Any) -> list[dict[str, Any]]:
-    """Generated row dataclasses -> template-friendly dicts."""
-    return [dataclasses.asdict(r) for r in rows]
+_dicts = row_dicts
 
 
 class WebQueries:
@@ -73,7 +71,7 @@ class WebQueries:
         self, forge: str, owner: str, name: str
     ) -> dict[str, Any] | None:
         row = await gen.web_repo(self.pool, forge=forge, owner=owner, name=name)
-        return dataclasses.asdict(row) if row else None
+        return row_dict(row) if row else None
 
     async def repo_candidates(self, owner: str, name: str) -> list[dict[str, Any]]:
         """All forges' rows for an unqualified owner/name. Used by the
@@ -137,7 +135,7 @@ class WebQueries:
         row = await gen.web_build_by_number(
             self.pool, project_id=project_id, number=number
         )
-        return dataclasses.asdict(row) if row else None
+        return row_dict(row) if row else None
 
     async def neighbor_numbers(
         self, project_id: int, number: int

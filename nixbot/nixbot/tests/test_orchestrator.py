@@ -131,31 +131,31 @@ class RecordingReporter:
     started: asyncio.Event = field(default_factory=asyncio.Event)
 
     async def build_started(self, event: ChangeEvent, build: BuildRecord) -> None:
-        self.events.append(("started", build.id))
+        self.events.append(("started", build.id_))
         self.started.set()
 
     async def eval_finished(
         self, event: ChangeEvent, build: BuildRecord, report: EvalReport
     ) -> None:
-        self.events.append(("eval", build.id, report.success, tuple(report.warnings)))
+        self.events.append(("eval", build.id_, report.success, tuple(report.warnings)))
 
     async def eval_cancelled(self, event: ChangeEvent, build: BuildRecord) -> None:
-        self.events.append(("eval-cancelled", build.id))
+        self.events.append(("eval-cancelled", build.id_))
 
     async def build_finished(
         self, event: ChangeEvent, build: BuildRecord, result: BuildResult
     ) -> None:
-        self.events.append(("finished", build.id, result.status, result.generation))
+        self.events.append(("finished", build.id_, result.status, result.generation))
 
     async def build_restarted(
         self, event: ChangeEvent, build: BuildRecord, attr: str | None
     ) -> None:
-        self.events.append(("restarted", build.id, attr))
+        self.events.append(("restarted", build.id_, attr))
 
     async def effect_started(
         self, event: ChangeEvent, build: BuildRecord, name: str
     ) -> None:
-        self.events.append(("effect-started", build.id, name, event.commit_sha))
+        self.events.append(("effect-started", build.id_, name, event.commit_sha))
 
     async def effect_finished(
         self,
@@ -166,12 +166,12 @@ class RecordingReporter:
         success: bool,
         error: str | None = None,
     ) -> None:
-        self.events.append(("effect-finished", build.id, name, success))
+        self.events.append(("effect-finished", build.id_, name, success))
 
     async def effects_started(
         self, event: ChangeEvent, build: BuildRecord, total: int
     ) -> None:
-        self.events.append(("effects-started", build.id, total, event.commit_sha))
+        self.events.append(("effects-started", build.id_, total, event.commit_sha))
 
     async def effects_finished(
         self,
@@ -182,7 +182,7 @@ class RecordingReporter:
         succeeded: int,
     ) -> None:
         self.events.append(
-            ("effects-finished", build.id, failed, succeeded, event.commit_sha)
+            ("effects-finished", build.id_, failed, succeeded, event.commit_sha)
         )
 
 
@@ -377,13 +377,13 @@ async def test_full_lifecycle(pool: asyncpg.Pool, run_event: EventRunner) -> Non
     executor = FakeExecutor()
     build, reporter = await run_event(eval_runner, executor)
     assert build is not None
-    row = await pool.fetchrow("SELECT * FROM builds WHERE id = $1", build.id)
+    row = await pool.fetchrow("SELECT * FROM builds WHERE id = $1", build.id_)
     assert row["status"] == BuildStatus.SUCCEEDED
     assert row["status_generation"] == 1
     assert row["tree_hash"]
     attrs = await pool.fetch(
         "SELECT attr, status FROM build_attributes WHERE build_id = $1",
-        build.id,
+        build.id_,
     )
     assert {r["attr"]: r["status"] for r in attrs} == {
         "a": "succeeded",
@@ -392,7 +392,7 @@ async def test_full_lifecycle(pool: asyncpg.Pool, run_event: EventRunner) -> Non
     # Log metadata written in the same transaction as completion.
     logs = await pool.fetch(
         "SELECT log_size FROM build_attributes WHERE build_id = $1 AND log_size > 0",
-        build.id,
+        build.id_,
     )
     assert len(logs) == 2
     kinds = [e[0] for e in reporter.events]
@@ -409,11 +409,11 @@ async def test_failure_aggregation(
     executor = FakeExecutor({"bad": BuildOutcome.failure})
     build, reporter = await run_event(eval_runner, executor)
     assert build is not None
-    assert await build_status(pool, build.id) == BuildStatus.FAILED
+    assert await build_status(pool, build.id_) == BuildStatus.FAILED
     assert reporter.events[-1][2] == BuildStatus.FAILED
     error = await pool.fetchval(
         "SELECT error FROM build_attributes WHERE build_id = $1 AND attr = 'bad'",
-        build.id,
+        build.id_,
     )
     assert error is not None
     assert "fake build output" in error
@@ -429,7 +429,7 @@ async def test_tree_hash_reuse(run_event: EventRunner, upstream: Path) -> None:
     build2, reporter2 = await run_event(eval_runner, executor)
     assert build1 is not None
     assert build2 is not None
-    assert build1.id == build2.id
+    assert build1.id_ == build2.id_
     assert eval_runner.calls == 1
     # The eval context must not stay pending on the second commit.
     assert [e[0] for e in reporter2.events] == ["eval", "finished"]
@@ -462,7 +462,7 @@ def rebuild_same_tree_after_cancel(
         assert build1 is not None
         assert eval_runner.calls == 1
         await pool.execute(
-            "UPDATE builds SET status = 'cancelled' WHERE id = $1", build1.id
+            "UPDATE builds SET status = 'cancelled' WHERE id = $1", build1.id_
         )
         git(upstream, "commit", "--allow-empty", "-m", "same tree")
         sha2 = git(upstream, "rev-parse", "HEAD")
@@ -470,7 +470,7 @@ def rebuild_same_tree_after_cancel(
             ChangeEvent(repo=project, branch="main", commit_sha=sha2)
         )
         assert build2 is not None
-        assert build2.id != build1.id
+        assert build2.id_ != build1.id_
         return build2
 
     return run
@@ -487,10 +487,10 @@ async def test_eval_reuse_from_cancelled_build(
         eval_runner, "evalreuse", drvs_valid=True
     )
     assert eval_runner.calls == 1  # eval skipped
-    assert await build_status(pool, build2.id) == BuildStatus.SUCCEEDED
+    assert await build_status(pool, build2.id_) == BuildStatus.SUCCEEDED
     attrs = await pool.fetch(
         "SELECT attr, status FROM build_attributes WHERE build_id = $1",
-        build2.id,
+        build2.id_,
     )
     assert {r["attr"]: r["status"] for r in attrs} == {
         "a": "succeeded",
@@ -507,7 +507,7 @@ async def test_eval_reuse_skipped_when_drvs_gone(
         eval_runner, "evalreuse2", drvs_valid=False
     )
     assert eval_runner.calls == 2  # re-evaluated
-    assert await build_status(pool, build2.id) == BuildStatus.SUCCEEDED
+    assert await build_status(pool, build2.id_) == BuildStatus.SUCCEEDED
 
 
 async def test_main_push_promotes_reused_pr_build(
@@ -530,9 +530,9 @@ async def test_main_push_promotes_reused_pr_build(
         ChangeEvent(repo=project, branch="main", commit_sha=sha)
     )
     assert main_build is not None
-    assert main_build.id == pr_build.id
+    assert main_build.id_ == pr_build.id_
     row = await pool.fetchrow(
-        "SELECT branch, pr_number FROM builds WHERE id = $1", pr_build.id
+        "SELECT branch, pr_number FROM builds WHERE id = $1", pr_build.id_
     )
     assert dict(row) == {"branch": "main", "pr_number": None}
     assert await pool.fetchval(
@@ -567,14 +567,14 @@ async def test_merge_conflict_fails_build(
         )
     )
     assert build is not None
-    row = await pool.fetchrow("SELECT * FROM builds WHERE id = $1", build.id)
+    row = await pool.fetchrow("SELECT * FROM builds WHERE id = $1", build.id_)
     assert row["status"] == "failed"
     assert "conflict" in row["error"]
     assert row["pr_author"] == "github:alice"
     assert eval_runner.calls == 0
     assert reporter.events[-1][2] == BuildStatus.FAILED
     # The eval context must get a terminal status too.
-    assert ("eval", build.id, False, ()) in reporter.events
+    assert ("eval", build.id_, False, ()) in reporter.events
 
 
 async def test_build_reuse_clears_pr_author_in_other_context(
@@ -599,7 +599,9 @@ async def test_build_reuse_clears_pr_author_in_other_context(
     await db.get_or_create_build(
         pool, project.id, "tree-reuse", "sha", "main", pr_number=7
     )
-    author = await pool.fetchval("SELECT pr_author FROM builds WHERE id = $1", build.id)
+    author = await pool.fetchval(
+        "SELECT pr_author FROM builds WHERE id = $1", build.id_
+    )
     assert author == "github:alice"
 
     # Default-branch push producing the same tree: control revoked.
@@ -607,7 +609,9 @@ async def test_build_reuse_clears_pr_author_in_other_context(
         pool, project.id, "tree-reuse", "sha", "main"
     )
     assert not created
-    author = await pool.fetchval("SELECT pr_author FROM builds WHERE id = $1", build.id)
+    author = await pool.fetchval(
+        "SELECT pr_author FROM builds WHERE id = $1", build.id_
+    )
     assert author is None
 
 
@@ -618,14 +622,14 @@ async def test_effects_started_flag(pool: asyncpg.Pool, tmp_path: Path) -> None:
     )
     assert (
         await builds_q.mark_effects_started(
-            pool, id_=build.id, commit_sha="sha", branch="main", pr_number=None
+            pool, id_=build.id_, commit_sha="sha", branch="main", pr_number=None
         )
         is not None
     )
     # Second attempt (e.g. crash recovery) must not re-run.
     assert (
         await builds_q.mark_effects_started(
-            pool, id_=build.id, commit_sha="sha", branch="main", pr_number=None
+            pool, id_=build.id_, commit_sha="sha", branch="main", pr_number=None
         )
         is None
     )
@@ -639,7 +643,7 @@ async def test_aggregation_generation_monotonic(
     job = mk_job("x")
     await db.complete_attribute(
         pool,
-        build.id,
+        build.id_,
         AttributeResult(
             attr="x",
             status=AttributeStatus.failed,
@@ -648,12 +652,12 @@ async def test_aggregation_generation_monotonic(
             system=job.system,
         ),
     )
-    status1, gen1 = await db.aggregate_build(pool, build.id)
+    status1, gen1 = await db.aggregate_build(pool, build.id_)
     assert status1 == BuildStatus.FAILED
     # Attribute rebuilt successfully: aggregate flips, generation grows.
     await db.complete_attribute(
         pool,
-        build.id,
+        build.id_,
         AttributeResult(
             attr="x",
             status=AttributeStatus.succeeded,
@@ -662,7 +666,7 @@ async def test_aggregation_generation_monotonic(
             system=job.system,
         ),
     )
-    status2, gen2 = await db.aggregate_build(pool, build.id)
+    status2, gen2 = await db.aggregate_build(pool, build.id_)
     assert status2 == BuildStatus.SUCCEEDED
     assert gen2 > gen1
 
@@ -692,7 +696,7 @@ async def test_internal_error_not_recorded_in_failed_build_cache(
         ChangeEvent(repo=project, branch="main", commit_sha=sha)
     )
     assert build is not None
-    assert await build_status(pool, build.id) == BuildStatus.FAILED
+    assert await build_status(pool, build.id_) == BuildStatus.FAILED
     assert cache.added == []
 
 
@@ -706,13 +710,13 @@ async def test_log_path_attribute_name_sanitized(
         FakeExecutor(),
     )
     assert build is not None
-    log_dir = tmp_path / "state" / "logs" / str(build.id)
+    log_dir = tmp_path / "state" / "logs" / str(build.id_)
     files = list(log_dir.iterdir())
     assert len(files) == 1
     assert files[0].parent == log_dir
     assert not (tmp_path / 'evil".attr.zst').exists()
     state_dir = (tmp_path / "state").resolve()
-    path = attribute_log_path(state_dir, build.id, evil)
+    path = attribute_log_path(state_dir, build.id_, evil)
     assert path.resolve().is_relative_to(state_dir / "logs")
 
 
@@ -733,10 +737,10 @@ async def test_cancel_interrupts_evaluation(
         cancel_event.set()
     build = await asyncio.wait_for(task, timeout=10)
     assert build is not None
-    assert await build_status(pool, build.id) == BuildStatus.CANCELLED
+    assert await build_status(pool, build.id_) == BuildStatus.CANCELLED
     assert executor.built == []
     # The pending nix-eval status must resolve (merge queues).
-    assert ("eval-cancelled", build.id) in reporter.events
+    assert ("eval-cancelled", build.id_) in reporter.events
 
 
 async def test_build_waiting_for_eval_slot_stays_pending(
@@ -820,7 +824,7 @@ async def test_pending_attribute_rows_recorded_for_crash_recovery(
     executor.gate.set()
     build = await task
     assert build is not None
-    assert await build_status(pool, build.id) == BuildStatus.SUCCEEDED
+    assert await build_status(pool, build.id_) == BuildStatus.SUCCEEDED
 
 
 async def test_eval_warnings_null_when_empty(
@@ -833,7 +837,7 @@ async def test_eval_warnings_null_when_empty(
     )
     assert build is not None
     warnings = await pool.fetchval(
-        "SELECT eval_warnings FROM builds WHERE id = $1", build.id
+        "SELECT eval_warnings FROM builds WHERE id = $1", build.id_
     )
     assert warnings is None
 
@@ -854,7 +858,7 @@ async def test_rerun_flips_stale_red_eval_status(
         pool, project.id, "eval-flip-tree", sha, "main"
     )
     await orchestrator.rerun_pending_attributes(project, build, [mk_job("a")])
-    assert ("eval", build.id, True, ()) in reporter.events
+    assert ("eval", build.id_, True, ()) in reporter.events
 
 
 async def test_recovery_rerun_failures_not_cached(
@@ -877,7 +881,7 @@ async def test_recovery_rerun_failures_not_cached(
     )
     build, _ = await db.get_or_create_build(pool, project.id, "recov-tree", sha, "main")
     await orchestrator.rerun_pending_attributes(project, build, [mk_job("a")])
-    assert await attribute_statuses(pool, build.id) == {"a": "failed"}
+    assert await attribute_statuses(pool, build.id_) == {"a": "failed"}
     assert cache.added == []
 
 
@@ -935,7 +939,7 @@ async def test_gitlab_mr_fetches_merge_request_refs(
     )
     build = await orchestrator.handle_change_event(event)
     assert build is not None
-    assert await build_status(pool, build.id) == BuildStatus.SUCCEEDED
+    assert await build_status(pool, build.id_) == BuildStatus.SUCCEEDED
 
 
 @pytest.mark.parametrize("forge", ["github", "gitlab"])
@@ -956,7 +960,7 @@ async def test_rerun_fetches_forge_change_request_refs(
         pool, project.id, "mr-tree", mr_sha, "main", pr_number=7
     )
     await orchestrator.rerun_pending_attributes(project, build, [mk_job("a")])
-    assert await attribute_statuses(pool, build.id) == {"a": "succeeded"}
+    assert await attribute_statuses(pool, build.id_) == {"a": "succeeded"}
 
 
 async def test_cancelled_build_reuse_rebuilds(
@@ -967,15 +971,15 @@ async def test_cancelled_build_reuse_rebuilds(
     build1, _ = await run_event(eval_runner, FakeExecutor())
     assert build1 is not None
     await pool.execute(
-        "UPDATE builds SET status = 'cancelled' WHERE id = $1", build1.id
+        "UPDATE builds SET status = 'cancelled' WHERE id = $1", build1.id_
     )
     build2, _ = await run_event(eval_runner, FakeExecutor())
     # A cancelled build carries no verdict: a re-push of the
     # same tree gets a fresh build instead of reusing it.
     assert build2 is not None
-    assert build2.id != build1.id
+    assert build2.id_ != build1.id_
     assert eval_runner.calls == 2
-    assert await build_status(pool, build2.id) == BuildStatus.SUCCEEDED
+    assert await build_status(pool, build2.id_) == BuildStatus.SUCCEEDED
 
 
 async def test_inflight_share_fans_out_final_status(
@@ -1003,7 +1007,7 @@ async def test_inflight_share_fans_out_final_status(
     build1 = await task
     assert build1 is not None
     assert build2 is not None
-    assert build1.id == build2.id
+    assert build1.id_ == build2.id_
     finished = [e for e in reporter.events if e[0] == "finished"]
     assert len(finished) == 2  # one final status per context
 
@@ -1029,12 +1033,12 @@ async def test_stale_event_does_not_supersede_newer_build(
         ChangeEvent(repo=project, branch="main", commit_sha=old_sha)
     )
     assert stale_build is not None
-    assert await build_status(pool, stale_build.id) == BuildStatus.CANCELLED
+    assert await build_status(pool, stale_build.id_) == BuildStatus.CANCELLED
     assert executor.gate is not None
     executor.gate.set()
     build = await task
     assert build is not None
-    assert await build_status(pool, build.id) == BuildStatus.SUCCEEDED
+    assert await build_status(pool, build.id_) == BuildStatus.SUCCEEDED
 
 
 async def test_eval_failure_cleans_cancel_events(
@@ -1134,7 +1138,7 @@ async def test_eval_gcroots_dir_removed_after_build(
         FakeExecutor(),
     )
     assert build is not None
-    assert not (tmp_path / "state" / "eval-gcroots" / str(build.id)).exists()
+    assert not (tmp_path / "state" / "eval-gcroots" / str(build.id_)).exists()
 
 
 async def test_effects_run_after_default_branch_success(
@@ -1145,7 +1149,7 @@ async def test_effects_run_after_default_branch_success(
     assert build is not None
     assert ran == ["deploy"]
     started = await pool.fetchval(
-        "SELECT effects_started FROM builds WHERE id = $1", build.id
+        "SELECT effects_started FROM builds WHERE id = $1", build.id_
     )
     assert started is True
 
@@ -1187,10 +1191,10 @@ async def test_pr_worktree_config_cannot_grant_effects(
     await drain_effect_items(orchestrator, project, pool)
     assert ran == []
     assert not await pool.fetchval(
-        "SELECT effects_started FROM builds WHERE id = $1", build.id
+        "SELECT effects_started FROM builds WHERE id = $1", build.id_
     )
     # Listed for visibility (Mic92/nixbot#106), never queued or reported.
-    assert await effect_statuses(pool, build.id) == {"deploy": "skipped"}
+    assert await effect_statuses(pool, build.id_) == {"deploy": "skipped"}
     assert not [e for e in reporter.events if e[0].startswith("effect")]
 
 
@@ -1206,13 +1210,13 @@ async def test_rerun_effects_runs_effects_again(
     assert ran == ["deploy"]
     attrs_before = await pool.fetch(
         "SELECT attr, status, finished_at FROM build_attributes WHERE build_id = $1",
-        build.id,
+        build.id_,
     )
     # A stale row from an effect no longer in the flake.
     await pool.execute(
         "INSERT INTO build_effects (build_id, name, status) "
         "VALUES ($1, 'removed', 'failed')",
-        build.id,
+        build.id_,
     )
     await orchestrator.rerun_effects(project, build)
     await drain_effect_items(orchestrator, project, pool)
@@ -1223,12 +1227,12 @@ async def test_rerun_effects_runs_effects_again(
     )
     rows = await pool.fetch(
         "SELECT name, status FROM build_effects WHERE build_id = $1",
-        build.id,
+        build.id_,
     )
     assert [(r["name"], r["status"]) for r in rows] == [("deploy", "succeeded")]
     attrs_after = await pool.fetch(
         "SELECT attr, status, finished_at FROM build_attributes WHERE build_id = $1",
-        build.id,
+        build.id_,
     )
     assert attrs_before == attrs_after
 
@@ -1259,7 +1263,7 @@ async def test_rerun_effects_cancels_hung_effect(
         orchestrator.run_effect_item(project, build, item.payload["name"])
     )
     await asyncio.sleep(0)
-    assert (build.id, "deploy") in orchestrator.running_effects
+    assert (build.id_, "deploy") in orchestrator.running_effects
 
     ran2 = patch_effects(monkeypatch)
     await asyncio.wait_for(orchestrator.rerun_effects(project, build), timeout=5)
@@ -1269,7 +1273,7 @@ async def test_rerun_effects_cancels_hung_effect(
     assert ran2 == ["deploy"]
     status = await pool.fetchval(
         "SELECT status FROM build_effects WHERE build_id = $1 AND name = 'deploy'",
-        build.id,
+        build.id_,
     )
     assert status == "succeeded"
 
@@ -1313,7 +1317,7 @@ async def test_rerun_single_effect(
     statuses = {
         r["name"]: r["status"]
         for r in await pool.fetch(
-            "SELECT name, status FROM build_effects WHERE build_id = $1", build.id
+            "SELECT name, status FROM build_effects WHERE build_id = $1", build.id_
         )
     }
     assert statuses == {
@@ -1323,7 +1327,7 @@ async def test_rerun_single_effect(
     }
     other_finished = await pool.fetchval(
         "SELECT finished_at FROM build_effects WHERE build_id = $1 AND name = 'other'",
-        build.id,
+        build.id_,
     )
 
     fail_deploy = False
@@ -1334,7 +1338,7 @@ async def test_rerun_single_effect(
     statuses = {
         r["name"]: r["status"]
         for r in await pool.fetch(
-            "SELECT name, status FROM build_effects WHERE build_id = $1", build.id
+            "SELECT name, status FROM build_effects WHERE build_id = $1", build.id_
         )
     }
     assert statuses == {
@@ -1346,7 +1350,7 @@ async def test_rerun_single_effect(
         await pool.fetchval(
             "SELECT finished_at FROM build_effects "
             "WHERE build_id = $1 AND name = 'other'",
-            build.id,
+            build.id_,
         )
         == other_finished
     )
@@ -1364,11 +1368,11 @@ async def test_recovery_rerun_runs_effects(
     assert ran == ["deploy"]
     # Simulate a crash before effects started.
     await pool.execute(
-        "UPDATE builds SET effects_started = FALSE WHERE id = $1", build.id
+        "UPDATE builds SET effects_started = FALSE WHERE id = $1", build.id_
     )
     await pool.execute(
         "UPDATE build_attributes SET status = 'pending' WHERE build_id = $1",
-        build.id,
+        build.id_,
     )
     await orchestrator.rerun_pending_attributes(project, build, [mk_job("a")])
     await drain_effect_items(orchestrator, project, pool)
@@ -1385,10 +1389,10 @@ async def test_unsupported_system_attr_does_not_block_aggregation(
     jobs = [mk_job("a"), mk_job("other", system="riscv64-linux")]
     build, _ = await run_event(FakeEvalRunner(jobs), FakeExecutor())
     assert build is not None
-    assert await build_status(pool, build.id) == BuildStatus.SUCCEEDED
+    assert await build_status(pool, build.id_) == BuildStatus.SUCCEEDED
     attrs = await pool.fetch(
         "SELECT attr, status FROM build_attributes WHERE build_id = $1",
-        build.id,
+        build.id_,
     )
     assert {r["attr"]: r["status"] for r in attrs} == {"a": "succeeded"}
 
@@ -1415,7 +1419,7 @@ async def test_linked_context_reported_on_eval_failure(
     build1 = await task
     assert build1 is not None
     assert build2 is not None
-    assert build1.id == build2.id
+    assert build1.id_ == build2.id_
     finished = [e for e in reporter.events if e[0] == "finished"]
     assert len(finished) == 2
     assert all(e[2] == BuildStatus.FAILED for e in finished)
@@ -1441,10 +1445,10 @@ async def test_eval_failure_settles_streamed_attributes(
         ChangeEvent(repo=project, branch="main", commit_sha=sha)
     )
     assert build is not None
-    assert await build_status(pool, build.id) == BuildStatus.FAILED
+    assert await build_status(pool, build.id_) == BuildStatus.FAILED
     rows = await pool.fetch(
         "SELECT attr, status FROM build_attributes WHERE build_id = $1",
-        build.id,
+        build.id_,
     )
     assert {r["attr"]: r["status"] for r in rows} == {"streamed": "cancelled"}
 
@@ -1456,18 +1460,18 @@ async def test_effect_rows_roundtrip(pool: asyncpg.Pool, tmp_path: Path) -> None
     build, _ = await db.get_or_create_build(pool, project.id, "tree-fx", "sha", "main")
 
     await builds_q.start_effect(
-        pool, build_id=build.id, name="deploy", status="running"
+        pool, build_id=build.id_, name="deploy", status="running"
     )
     await builds_q.finish_effect(
         pool,
-        build_id=build.id,
+        build_id=build.id_,
         name="deploy",
         status="failed",
         error="ssh: connection refused",
         log_size=123,
         log_truncated=False,
     )
-    effects = await builds_q.effects_for_build(pool, build_id=build.id)
+    effects = await builds_q.effects_for_build(pool, build_id=build.id_)
     assert [(e.name, e.status, e.error) for e in effects] == [
         ("deploy", "failed", "ssh: connection refused")
     ]
@@ -1475,9 +1479,9 @@ async def test_effect_rows_roundtrip(pool: asyncpg.Pool, tmp_path: Path) -> None
 
     # A rerun resets the row to running with fresh timestamps.
     await builds_q.start_effect(
-        pool, build_id=build.id, name="deploy", status="running"
+        pool, build_id=build.id_, name="deploy", status="running"
     )
-    effects = await builds_q.effects_for_build(pool, build_id=build.id)
+    effects = await builds_q.effects_for_build(pool, build_id=build.id_)
     assert effects[0].status == "running"
     assert effects[0].finished_at is None
     assert effects[0].error is None
@@ -1497,7 +1501,7 @@ async def test_effect_items_resume_only_pending(
     # item must skip it.
     await pool.execute(
         "UPDATE build_effects SET status = 'running' WHERE build_id = $1",
-        build.id,
+        build.id_,
     )
     await fail_interrupted_effects(pool, datetime.now(UTC) + timedelta(minutes=1))
     await orchestrator.run_effect_item(project, build, "deploy")
@@ -1505,7 +1509,7 @@ async def test_effect_items_resume_only_pending(
     # Crash before the run: the pending row resumes.
     await pool.execute(
         "UPDATE build_effects SET status = 'pending' WHERE build_id = $1",
-        build.id,
+        build.id_,
     )
     await orchestrator.run_effect_item(project, build, "deploy")
     assert ran == ["deploy", "deploy"]
@@ -1542,7 +1546,7 @@ async def test_effect_crash_settles_the_row(
     assert build is not None
     row = await pool.fetchrow(
         "SELECT status, finished_at FROM build_effects WHERE build_id = $1",
-        build.id,
+        build.id_,
     )
     assert row is not None
     assert row["status"] == "failed"
@@ -1600,7 +1604,7 @@ async def test_concurrent_effects_use_independent_worktrees(
     rows = {
         r["name"]: r["status"]
         for r in await pool.fetch(
-            "SELECT name, status FROM build_effects WHERE build_id = $1", build.id
+            "SELECT name, status FROM build_effects WHERE build_id = $1", build.id_
         )
     }
     assert rows == {"deploy-alaska": "succeeded", "deploy-kk": "succeeded"}
@@ -1624,12 +1628,12 @@ async def test_locked_effect_gets_shared_dedup_key(
         await pool.fetch(
             "SELECT payload->>'name' AS name, dedup_key FROM work_queue"
             " WHERE kind = 'effect' AND (payload->>'build_id')::bigint = $1",
-            build.id,
+            build.id_,
         )
     )
     assert keys == {
         "deploy": f"effect-lock-{build.project_id}-hw-lab",
-        "notify": f"build-{build.id}-effect-notify",
+        "notify": f"build-{build.id_}-effect-notify",
     }
 
 
@@ -1679,7 +1683,7 @@ async def test_effect_item_not_claimable_until_dep_settles(
     await orchestrator.run_effect_item(project, build, "deploy")
     row = await pool.fetchrow(
         "SELECT status FROM build_effects WHERE build_id = $1 AND name = 'deploy'",
-        build.id,
+        build.id_,
     )
     assert row["status"] == "dependency_failed"
 
@@ -1711,7 +1715,7 @@ async def test_effect_dep_failure_skips_dependent(
         r["name"]: (r["status"], r["error"])
         for r in await pool.fetch(
             "SELECT name, status, error FROM build_effects WHERE build_id = $1",
-            build.id,
+            build.id_,
         )
     }
     assert rows["build-image"][0] == "failed"
@@ -1760,8 +1764,8 @@ async def test_lock_serializes_builds_without_interleaving(
 
     images = [await claim_effect(), await claim_effect()]
     assert {ident(i) for i in images if i is not None} == {
-        (build1.id, "build-image"),
-        (build2.id, "build-image"),
+        (build1.id_, "build-image"),
+        (build2.id_, "build-image"),
     }
     # Settle build 2's dependency first: its deploy is ready before
     # build 1's, but build 1 owns the front of the 'prod' lock queue.
@@ -1775,7 +1779,7 @@ async def test_lock_serializes_builds_without_interleaving(
     await queue.finish(b1_image.id)
     first_deploy = await claim_effect()
     assert first_deploy is not None
-    assert ident(first_deploy) == (build1.id, "deploy")
+    assert ident(first_deploy) == (build1.id_, "deploy")
 
 
 async def test_effect_dep_cycle_fails_discovery(
@@ -1794,10 +1798,10 @@ async def test_effect_dep_cycle_fails_discovery(
     patch_effects(monkeypatch)
     monkeypatch.setattr(effects_run_mod, "list_effects", cyclic_list)
     _, _, build = await _effects_build(make_env, upstream, "eff-cycle")
-    assert await build_status(pool, build.id) == BuildStatus.SUCCEEDED
+    assert await build_status(pool, build.id_) == BuildStatus.SUCCEEDED
     assert (
         await pool.fetchval(
-            "SELECT count(*) FROM build_effects WHERE build_id = $1", build.id
+            "SELECT count(*) FROM build_effects WHERE build_id = $1", build.id_
         )
         == 0
     )
@@ -1832,11 +1836,11 @@ async def test_failed_effect_reports_failure_status(
     await drain_effect_items(orchestrator, project, pool)
 
     effect_events = [e for e in reporter.events if e[0].startswith("effect")]
-    assert ("effect-started", build.id, "deploy", event.commit_sha) in effect_events
-    assert ("effect-finished", build.id, "deploy", False) in effect_events
+    assert ("effect-started", build.id_, "deploy", event.commit_sha) in effect_events
+    assert ("effect-finished", build.id_, "deploy", False) in effect_events
     # Aggregate summary mirrors the nix-build summary.
-    assert any(e[:3] == ("effects-started", build.id, 1) for e in effect_events)
-    assert any(e[:4] == ("effects-finished", build.id, 1, 0) for e in effect_events)
+    assert any(e[:3] == ("effects-started", build.id_, 1) for e in effect_events)
+    assert any(e[:4] == ("effects-finished", build.id_, 1, 0) for e in effect_events)
 
 
 async def test_post_process_error_does_not_wedge_build(
@@ -1868,7 +1872,7 @@ async def test_post_process_error_does_not_wedge_build(
     )
     assert build is not None
     row = await pool.fetchrow(
-        "SELECT status, error FROM builds WHERE id = $1", build.id
+        "SELECT status, error FROM builds WHERE id = $1", build.id_
     )
     assert row["status"] == BuildStatus.FAILED
     assert "disk full" in row["error"]
@@ -1876,7 +1880,7 @@ async def test_post_process_error_does_not_wedge_build(
     assert finished
     assert finished[-1][2] == BuildStatus.FAILED
     # The eval succeeded. Only the build may turn red.
-    assert ("eval", build.id, False, ()) not in reporter.events
+    assert ("eval", build.id_, False, ()) not in reporter.events
 
 
 async def test_unexpected_eval_path_error_settles_build(
@@ -1901,11 +1905,11 @@ async def test_unexpected_eval_path_error_settles_build(
     )
     assert build is not None
     row = await pool.fetchrow(
-        "SELECT status, error FROM builds WHERE id = $1", build.id
+        "SELECT status, error FROM builds WHERE id = $1", build.id_
     )
     assert row["status"] == BuildStatus.FAILED
     assert "db outage" in row["error"]
-    assert ("eval", build.id, False, ()) in reporter.events
+    assert ("eval", build.id_, False, ()) in reporter.events
     assert reporter.events[-1][2] == BuildStatus.FAILED
     # No leaked consumer task blocked on the jobs queue.
     leaked = [
@@ -1933,12 +1937,12 @@ async def test_reuse_empty_succeeded_build_posts_eval_success(
         ChangeEvent(repo=project, branch="main", commit_sha=sha)
     )
     assert build1 is not None
-    assert await build_status(pool, build1.id) == BuildStatus.SUCCEEDED
+    assert await build_status(pool, build1.id_) == BuildStatus.SUCCEEDED
     build2 = await orchestrator.handle_change_event(
         ChangeEvent(repo=project, branch="main", commit_sha=sha, pr_number=3)
     )
     assert build2 is not None
-    assert build2.id == build1.id
+    assert build2.id_ == build1.id_
     evals = [e for e in reporter.events if e[0] == "eval"]
     assert evals[-1][2] is True
 
@@ -1974,7 +1978,7 @@ async def test_stale_event_reusing_old_build_does_not_cancel_newer(
     eval_runner2.block.set()
     build2 = await task2
     assert build2 is not None
-    assert await build_status(pool, build2.id) == BuildStatus.SUCCEEDED
+    assert await build_status(pool, build2.id_) == BuildStatus.SUCCEEDED
 
 
 async def test_reuse_for_default_branch_push_runs_effects(
@@ -2001,7 +2005,7 @@ async def test_reuse_for_default_branch_push_runs_effects(
     assert pr_build is not None
     await drain_effect_items(orchestrator, project, pool)
     assert ran == []
-    assert await effect_statuses(pool, pr_build.id) == {"deploy": "skipped"}
+    assert await effect_statuses(pool, pr_build.id_) == {"deploy": "skipped"}
 
     # Squash-merge: an identical tree under a new SHA reuses the build.
     git(upstream, "commit", "--allow-empty", "-m", "reuse-deploy-merge")
@@ -2012,10 +2016,10 @@ async def test_reuse_for_default_branch_push_runs_effects(
         ChangeEvent(repo=project, branch="main", commit_sha=main_sha)
     )
     assert main_build is not None
-    assert main_build.id == pr_build.id
+    assert main_build.id_ == pr_build.id_
     await drain_effect_items(orchestrator, project, pool)
     assert ran == ["deploy"]
-    assert await effect_statuses(pool, pr_build.id) == {"deploy": "succeeded"}
+    assert await effect_statuses(pool, pr_build.id_) == {"deploy": "succeeded"}
     # Effects ran for the main merge, so their statuses belong on the
     # main commit -- not the build's stored PR-head commit (pr_sha).
     sha_events = ("effect-started", "effects-started", "effects-finished")
@@ -2058,10 +2062,10 @@ async def test_reuse_replays_effect_statuses_to_new_commit(
         ChangeEvent(repo=project, branch="main", commit_sha=sha2)
     )
     assert reused is not None
-    assert reused.id == first.id
+    assert reused.id_ == first.id_
     replayed = [e for e in reporter.events if e[0].startswith("effect")]
-    assert ("effect-finished", first.id, "deploy", False) in replayed
-    assert any(e[:4] == ("effects-finished", first.id, 1, 0) for e in replayed)
+    assert ("effect-finished", first.id_, "deploy", False) in replayed
+    assert any(e[:4] == ("effects-finished", first.id_, 1, 0) for e in replayed)
 
 
 async def test_attach_to_already_terminal_build_replays_status(
@@ -2083,11 +2087,11 @@ async def test_attach_to_already_terminal_build_replays_status(
             ChangeEvent(repo=project, branch="main", commit_sha=sha)
         )
         assert build is not None
-        assert await build_status(pool, build.id) == BuildStatus.SUCCEEDED
+        assert await build_status(pool, build.id_) == BuildStatus.SUCCEEDED
         # Simulate the race: record fetched before completion,
         # cancel event still registered (build "in flight").
         stale_record = replace(build, status=BuildStatus.BUILDING)
-        orchestrator.cancel_events[build.id] = asyncio.Event()
+        orchestrator.cancel_events[build.id_] = asyncio.Event()
         reporter.events.clear()
         event2 = ChangeEvent(repo=project, branch="main", commit_sha=sha, pr_number=11)
         await orchestrator._dispatch_build(  # noqa: SLF001
@@ -2129,7 +2133,7 @@ async def test_cancel_during_eval_resolves_linked_eval_contexts(
         ChangeEvent(repo=project, branch="main", commit_sha=sha, pr_number=4)
     )
     assert build2 is not None
-    orchestrator.cancel_events[build2.id].set()
+    orchestrator.cancel_events[build2.id_].set()
     await task1
     cancelled_evals = [e for e in reporter.events if e[0] == "eval-cancelled"]
     assert len(cancelled_evals) == 2
@@ -2164,8 +2168,8 @@ async def test_effect_log_does_not_collide_with_attribute_log(
     assert build is not None
     await drain_effect_items(orchestrator, project, pool)
     state_dir = orchestrator.config.state_dir
-    attr_log = attribute_log_path(state_dir, build.id, "effect-deploy")
-    effect_log = effect_log_path(state_dir, build.id, "deploy")
+    attr_log = attribute_log_path(state_dir, build.id_, "effect-deploy")
+    effect_log = effect_log_path(state_dir, build.id_, "deploy")
     assert attr_log != effect_log
     assert attr_log.exists()
     assert effect_log.exists()
@@ -2239,7 +2243,7 @@ async def test_effects_phase_error_keeps_succeeded_build(
         )
     )
     assert build is not None
-    assert await build_status(pool, build.id) == BuildStatus.SUCCEEDED
+    assert await build_status(pool, build.id_) == BuildStatus.SUCCEEDED
     finished = [e for e in reporter.events if e[0] == "finished"]
     assert finished[-1][2] == BuildStatus.SUCCEEDED
 

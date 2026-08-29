@@ -52,7 +52,7 @@ async def rerun_worktree(
     await o.repos.fetch(info.key, info.clone_url, refspecs, credentials)
     worktree = await o.repos.checkout_for_build(
         info.key,
-        f"{prefix}-{build.id}",
+        f"{prefix}-{build.id_}",
         base_commit=build.commit_sha,
         credentials=credentials,
     )
@@ -72,15 +72,15 @@ async def rerun_pending_attributes(
     """Re-run only the pending attributes of an existing build using
     the stored eval results — no re-evaluation (attribute restarts
     and crash recovery)."""
-    if build.id in o.cancel_events:
+    if build.id_ in o.cancel_events:
         # Already running. A concurrent rerun would double-write
         # attribute completions.
         return
     # Claim the slot before the first await. Concurrent reruns
     # must not pass the guard together.
-    cancel_event = o.cancel_events[build.id] = asyncio.Event()
+    cancel_event = o.cancel_events[build.id_] = asyncio.Event()
     try:
-        current = await builds_q.get_build(o.pool, id_=build.id)
+        current = await builds_q.get_build(o.pool, id_=build.id_)
         if current is not None and current.status == "cancelled":
             # Cancelled between scheduling the rerun and getting here.
             return
@@ -93,20 +93,20 @@ async def rerun_pending_attributes(
         if unsupported:
             await q.delete_attributes_by_name(
                 o.pool,
-                build_id=build.id,
+                build_id=build.id_,
                 attrs=[job.attr for job in unsupported],
             )
             pending_jobs = [
                 job for job in pending_jobs if job.system in o.config.build_systems
             ]
         # No re-eval happens on this path. Go straight to building.
-        await db.set_build_status(o.pool, build.id, BuildStatus.BUILDING)
+        await db.set_build_status(o.pool, build.id_, BuildStatus.BUILDING)
         # Register so supersede/PR-close cancellation also covers
         # recovered and restarted builds.
         o.canceller.register(
             info.id,
             branch_key(build.branch, build.pr_number),
-            build.id,
+            build.id_,
             build.tree_hash or "",
             build.commit_sha,
             cancel_event,
@@ -134,8 +134,8 @@ async def rerun_pending_attributes(
                 await o.maybe_run_effects(event, build, worktree_path, credentials)
                 await o.refresh_schedules(event)
     finally:
-        o.canceller.complete(build.id)
-        o.cancel_events.pop(build.id, None)
+        o.canceller.complete(build.id_)
+        o.cancel_events.pop(build.id_, None)
 
 
 async def _rerun_names(
@@ -144,7 +144,7 @@ async def _rerun_names(
     """The effect plus its transitive dependency_failed dependents. They
     must not stay failed after a green rerun. Returns None when
     `only` is not a row of this build."""
-    rows = await builds_q.effects_for_build(o.pool, build_id=build.id)
+    rows = await builds_q.effects_for_build(o.pool, build_id=build.id_)
     if all(r.name != only for r in rows):
         return None
     names = {only}
@@ -184,10 +184,10 @@ async def rerun_effects(
     """Effects-only restart: fresh worktree at the recorded commit,
     attributes untouched. `only` narrows the rerun to one effect and
     its dependency_failed dependents."""
-    if build.id in o.cancel_events:
+    if build.id_ in o.cancel_events:
         # A concurrent rerun (or double click) would deploy twice.
         return
-    o.cancel_events[build.id] = asyncio.Event()
+    o.cancel_events[build.id_] = asyncio.Event()
     try:
         names: list[str] | None = None
         if only is not None:
@@ -195,16 +195,16 @@ async def rerun_effects(
             if names is None:
                 logger.warning(
                     "rerun of unknown effect ignored",
-                    extra={"build_id": build.id, "effect": only},
+                    extra={"build_id": build.id_, "effect": only},
                 )
                 return
-        await _cancel_running_effects(o, build.id, names)
+        await _cancel_running_effects(o, build.id_, names)
         # Reset under the claim: resetting earlier (e.g. in the
         # service) could clobber a rerun already in flight. Drop the
         # previous run's logs here too, so pending rows show no stale
         # output.
-        await q.reset_effects_state(o.pool, build_id=build.id, names=names)
-        o.reset_effect_logs(build.id, names)
+        await q.reset_effects_state(o.pool, build_id=build.id_, names=names)
+        o.reset_effect_logs(build.id_, names)
         async with rerun_worktree(o, info, build, "effects", credentials) as (
             event,
             worktree_path,
@@ -216,4 +216,4 @@ async def rerun_effects(
         # The enqueued effect items share this build's key and only
         # become claimable once this item finishes.
     finally:
-        o.cancel_events.pop(build.id, None)
+        o.cancel_events.pop(build.id_, None)

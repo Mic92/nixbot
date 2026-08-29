@@ -85,13 +85,13 @@ async def find_unfinished_builds(
     if not rows:
         return []
     # One round-trip for all attribute rows, not one per build.
-    attr_rows = await q.attributes_for_builds(pool, build_ids=[row.id for row in rows])
+    attr_rows = await q.attributes_for_builds(pool, build_ids=[row.id_ for row in rows])
     attrs_by_build: dict[int, list[q.AttributesForBuildsRow]] = {}
     for attr in attr_rows:
         attrs_by_build.setdefault(attr.build_id, []).append(attr)
     builds = []
     for row in rows:
-        attrs = attrs_by_build.get(row.id, [])
+        attrs = attrs_by_build.get(row.id_, [])
         pending_jobs = []
         for attr in attrs:
             # 'building' rows are attributes that were running when the
@@ -116,7 +116,7 @@ async def find_unfinished_builds(
             )
         builds.append(
             ResumableBuild(
-                build_id=row.id,
+                build_id=row.id_,
                 project_id=row.project_id,
                 branch=row.branch,
                 commit_sha=row.commit_sha,
@@ -223,8 +223,8 @@ async def cleanup_old_builds(
     """Delete builds (cascading to attributes/log rows) and their log
     directories past the retention horizon. Returns deleted count."""
     rows = await q.cleanup_old_rows(pool, retention_days=retention_days)
-    deleted_ids = [r.id for r in rows if r.kind == "build"]
-    old_run_ids = [r.id for r in rows if r.kind == "scheduled_run"]
+    deleted_ids = [r.id_ for r in rows if r.kind == "build"]
+    old_run_ids = [r.id_ for r in rows if r.kind == "scheduled_run"]
     for build_id in deleted_ids:
         log_dir = state_dir / "logs" / str(build_id)
         with contextlib.suppress(OSError):

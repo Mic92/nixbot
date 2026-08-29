@@ -177,7 +177,7 @@ class Orchestrator:
             )
 
     def gcroots_dir(self, build: BuildRecord) -> Path:
-        return self.config.state_dir / "eval-gcroots" / str(build.id)
+        return self.config.state_dir / "eval-gcroots" / str(build.id_)
 
     async def default_branch_repo_config(
         self,
@@ -320,10 +320,10 @@ class Orchestrator:
             )
             return
 
-        in_flight = build.id in self.cancel_events
+        in_flight = build.id_ in self.cancel_events
         rebuild = created or (not in_flight and build.status == BuildStatus.CANCELLED)
         if rebuild or in_flight:
-            cancel_event = self.cancel_events.setdefault(build.id, asyncio.Event())
+            cancel_event = self.cancel_events.setdefault(build.id_, asyncio.Event())
         else:
             # Not running here (e.g. crashed build awaiting recovery):
             # a stored entry would block its rerun.
@@ -331,7 +331,7 @@ class Orchestrator:
         outcome = self.canceller.register(
             repo.id,
             key,
-            build.id,
+            build.id_,
             tree_hash,
             event.commit_sha,
             cancel_event,
@@ -339,9 +339,9 @@ class Orchestrator:
         )
         if outcome == RegisterOutcome.STALE:
             if rebuild:
-                self.cancel_events.pop(build.id, None)
+                self.cancel_events.pop(build.id_, None)
             if created:
-                await db.set_build_status(self.pool, build.id, BuildStatus.CANCELLED)
+                await db.set_build_status(self.pool, build.id_, BuildStatus.CANCELLED)
                 await self.reporter.build_finished(
                     event,
                     build,
@@ -354,9 +354,9 @@ class Orchestrator:
         try:
             await self.run_build(event, build, worktree_path, credentials)
         finally:
-            self.canceller.complete(build.id)
-            self.cancel_events.pop(build.id, None)
-            self.linked_events.pop(build.id, None)
+            self.canceller.complete(build.id_)
+            self.cancel_events.pop(build.id_, None)
+            self.linked_events.pop(build.id_, None)
 
     async def run_build(
         self,

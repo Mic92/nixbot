@@ -100,7 +100,7 @@ PROJECT = RepoInfo(
 EVENT = ChangeEvent(repo=PROJECT, branch="main", commit_sha="sha1")
 
 BUILD = BuildRecord(
-    id=10,
+    id_=10,
     project_id=1,
     number=42,
     tree_hash="tree",
@@ -158,7 +158,7 @@ async def test_posted_generations_bounded() -> None:
 
     reporter, _poster, _store = make_reporter()
     for build_id in range(POSTED_GENERATIONS_MAX + 100):
-        build = replace(BUILD, id=build_id)
+        build = replace(BUILD, id_=build_id)
         await reporter.build_finished(EVENT, build, BuildResult("succeeded", 1, []))
     assert len(reporter._posted_generations) <= POSTED_GENERATIONS_MAX  # noqa: SLF001
     assert (POSTED_GENERATIONS_MAX + 99) in reporter._posted_generations  # noqa: SLF001
@@ -688,7 +688,7 @@ async def test_reporter_forwards_attr_and_text() -> None:
     eval_extra = poster.extras[0]
     assert eval_extra["text"] == "```\nw1\nw2\n```"
     assert eval_extra["project_id"] == PROJECT.id
-    assert eval_extra["build_id"] == BUILD.id
+    assert eval_extra["build_id"] == BUILD.id_
 
     poster.posts.clear()
     poster.extras.clear()
