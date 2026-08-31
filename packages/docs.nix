@@ -34,6 +34,7 @@ let
         "EFFECTS.md"
         "OIDC.md"
         "CLI.md"
+        "WORKLOAD_IDENTITY.md"
       ];
     }
     {
