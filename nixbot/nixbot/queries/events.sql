@@ -4,16 +4,18 @@
 -- One row per (build, kind, name). A repeated delivery for the same
 -- build (e.g. a second /plan comment) resets it like an effects restart.
 INSERT INTO effect_runs (project_id, kind, build_id, name, status, skip_reason,
-                         payload, code_rev, actor, started_at, finished_at)
+                         payload, code_rev, actor, lock, started_at, finished_at)
 SELECT b.project_id, sqlc.arg(kind)::text, b.id, sqlc.arg(name)::text,
        sqlc.arg(status)::text, sqlc.narg(skip_reason)::text,
        sqlc.arg(payload)::jsonb, sqlc.arg(code_rev)::text, sqlc.narg(actor)::text,
+       sqlc.narg(lock)::text,
        now(), CASE WHEN sqlc.arg(status)::text = 'pending' THEN NULL ELSE now() END
 FROM builds b WHERE b.id = sqlc.arg(build_id)::bigint
 ON CONFLICT (build_id, kind, name) DO UPDATE SET
     status = EXCLUDED.status, skip_reason = EXCLUDED.skip_reason,
     payload = EXCLUDED.payload, code_rev = EXCLUDED.code_rev,
-    actor = EXCLUDED.actor, error = NULL, log_size = 0, log_truncated = FALSE,
+    actor = EXCLUDED.actor, lock = EXCLUDED.lock,
+    error = NULL, log_size = 0, log_truncated = FALSE,
     started_at = EXCLUDED.started_at, finished_at = EXCLUDED.finished_at
 WHERE effect_runs.status NOT IN ('running')
 RETURNING id;
@@ -46,6 +48,15 @@ WHERE w.kind = 'effect' AND w.status = 'pending'
   AND w.payload->>'kind' = sqlc.arg(kind)::text
   AND w.payload->>'name' = c.name
 RETURNING c.build_id, c.name;
+
+-- name: ResetEventEffect :one
+-- UI restart of one event effect: same payload, fresh run.
+UPDATE effect_runs SET status = 'pending', error = NULL, log_size = 0,
+    log_truncated = FALSE, started_at = now(), finished_at = NULL
+WHERE build_id = sqlc.arg(build_id)::bigint AND kind = sqlc.arg(kind)::text
+  AND name = sqlc.arg(name)::text
+  AND owner = 'delivery' AND payload IS NOT NULL
+RETURNING id, lock;
 
 -- name: LatestBuildForPr :one
 -- merged_pr_number: the merge push may have taken the build over

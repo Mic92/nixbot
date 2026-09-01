@@ -139,13 +139,13 @@ $ nbo effects run-scheduled github:org/repo#flake-update update
 
 ### Subcommands
 
-| Command          | Description                           |
-| ---------------- | ------------------------------------- |
-| `list`           | List available effects with metadata  |
-| `graph`          | Show the effect DAG as an ASCII tree  |
-| `run`            | Run a single effect                   |
-| `list-schedules` | List scheduled effects                |
-| `run-scheduled`  | Run a specific effect from a schedule |
+| Command          | Description                                                         |
+| ---------------- | ------------------------------------------------------------------- |
+| `list`           | List effects with metadata (`--event KIND --payload F` for onEvent) |
+| `graph`          | Show the effect DAG as an ASCII tree                                |
+| `run`            | Run a single effect (`--event`/`--payload` likewise)                |
+| `list-schedules` | List scheduled effects                                              |
+| `run-scheduled`  | Run a specific effect from a schedule                               |
 
 ### Flags
 
@@ -220,72 +220,140 @@ forge token to push with, the effect fails with an error.
 
 ## Event effects (`onEvent`)
 
-`herculesCI.onEvent.<kind>.<name>` defines effects that react to pull requests,
-PR comments, PR close and build results. See
-[examples/on-event/flake.nix](../examples/on-event/flake.nix). Hercules CI
-ignores `onEvent`.
+`onPush` effects run when a branch is built. `onEvent` effects react to things
+happening around a build: a pull request turning green, a `/command` comment, a
+PR being closed, a build breaking or getting fixed. A typical use is `tofu plan`
+on every PR with the result posted as a comment, and `tofu apply` on merge. A
+complete example is in
+[examples/on-event/flake.nix](../examples/on-event/flake.nix); Hercules CI
+itself ignores `onEvent`.
 
-The effect code is **always evaluated from the default branch**. A pull request
-cannot change what runs by editing `onEvent`. This is independent of
-`effects_on_pull_requests`, which controls whether a PR's own `onPush` effects
-run. The event only contributes data, available at runtime as JSON in
-`$NIXBOT_EVENT_JSON` (`/run/event.json`) and as `NIXBOT_EVENT_KIND`,
-`NIXBOT_ACTOR`, `NIXBOT_PR_NUMBER`, `NIXBOT_PR_HEAD`, `NIXBOT_COMMAND`,
-`NIXBOT_COMMAND_ARGS`, `NIXBOT_BUILD_STATUS`, `NIXBOT_BUILD_URL`.
+```nix
+herculesCI = { ... }: {
+  onPush.default.outputs.effects.apply = mkEffect {
+    lock = "infra";
+    effectScript = "tofu apply -auto-approve";
+  };
+  onEvent.pull_request.plan = mkEffect {
+    when.permission = "write";   # pusher or PR author can write to the repo
+    lock = "infra";              # waits for a running apply
+    checkout = true;             # PR head at $NIXBOT_EFFECT_CHECKOUT
+    effectScript = ''
+      tofu plan -no-color | nixbot-pr-comment --replace-marker plan
+    '';
+  };
+  onEvent.comment.apply = mkEffect {
+    when = { commands = [ "apply" ]; permission = "admin"; };
+    lock = "infra";
+    checkout = true;
+    effectScript = "tofu apply -auto-approve $NIXBOT_COMMAND_ARGS";
+  };
+};
+```
 
-| kind                  | delivered when                                         | payload                                                                  |
-| --------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------ |
-| `pull_request`        | a PR head built green, again on reopen or label change | `actor?`, `build`, `pullRequest`                                         |
-| `pull_request_closed` | PR closed or merged                                    | `actor?`, `pullRequest` (with `merged`)                                  |
-| `comment`             | new PR comment whose first line is `/command args`     | `actor`, `command`, `args`, `pullRequest`, `build?`                      |
-| `build_finished`      | any build reached a terminal status                    | `actor?`, `build` (with `previousStatus`, `failedAttrs`), `pullRequest?` |
+### Where the code comes from
 
-`actor` is who caused the delivery (pusher, commenter, the user who pressed
-restart) as `{ name = "github:alice"; permission = "write"; }`. It is absent
-when nobody did (poller). `pullRequest.author` carries the PR opener the same
-way. Permissions are looked up on the forge at delivery time. Comments by bot
-accounts (GitHub apps, nixbot itself on Gitea/GitLab) never deliver `comment`.
+The effect definitions are **always evaluated from the default branch**, no
+matter which pull request the event is about. A PR cannot change what runs by
+editing `onEvent`; it only contributes data. This is unrelated to
+`effects_on_pull_requests` in nixbot.toml, which is about a PR's own `onPush`
+effects.
 
-`mkEffect { when = { ... }; }` restricts when an effect runs. All given keys
-must match. An effect that does not match is recorded as `skipped` with the
-reason shown in the web UI.
+With `checkout = true` the **PR head** is cloned to `/build/checkout` (the
+working directory, also `$NIXBOT_EFFECT_CHECKOUT`). Unlike the `onPush` checkout
+it has no push credentials, and its content is untrusted: `tofu plan` and
+similar tools execute code from it. Guard such effects with `when.permission`.
+Event effects otherwise get the same secrets and forge token as `onPush`
+effects.
 
-| `when` key                              | matches if                                                        |
-| --------------------------------------- | ----------------------------------------------------------------- |
-| `permission = "read"\|"write"\|"admin"` | actor **or** PR author has at least this level (`comment`: actor) |
-| `labels = [ ... ]`                      | PR has all of these labels                                        |
-| `branches = [ "main" "release-*" ]`     | glob on PR base branch, or build branch                           |
-| `commands = [ "plan" ]`                 | `comment` kind: the `/command` used                               |
-| `status = [ "succeeded" ]`              | status of the build in the payload                                |
-| `transition = "broke"\|"fixed"`         | build status vs the previous finished build of the same branch/PR |
+### Events
 
-`lock` works as for `onPush` and may contain `{pr}`, so `lock = "preview-{pr}"`
-serialises per pull request, also against `onPush` effects using the same
-expanded name. A newer delivery for the same PR cancels still-queued effects of
-the previous one. `after` is not supported for event effects.
+| kind                  | delivered when                                              |
+| --------------------- | ----------------------------------------------------------- |
+| `pull_request`        | a PR head was built green; again when reopened or relabeled |
+| `comment`             | a PR comment whose first line is `/command args`            |
+| `pull_request_closed` | a PR was closed or merged                                   |
+| `build_finished`      | any build finished                                          |
 
-`checkout = true` mounts the **PR head** at `/build/checkout`. Unlike for
-`onPush` the clone has no push credentials, and its content is untrusted: tools
-like `tofu plan` execute code from it, so guard such effects with
-`when.permission`.
+Comments by bots (GitHub apps, nixbot's own account on Gitea/GitLab) are
+ignored. A `/command` for an effect that is still running from an earlier
+comment is answered with a note instead of being queued twice.
 
-Feedback goes through `nixbot-pr-comment [--replace-marker ID] [TEXT]` (on
-`PATH` in every `mkEffect`, body from stdin without `TEXT`). It comments on the
-pull request the event is about. With a marker the comment from a previous run
-is edited instead of adding a new one. Outside nixbot (local runs) it prints the
-body instead.
+The event is passed to the script as JSON in `$NIXBOT_EVENT_JSON`
+(`/run/event.json`) and, for the common fields, as environment variables:
+`NIXBOT_EVENT_KIND`, `NIXBOT_ACTOR`, `NIXBOT_PR_NUMBER`, `NIXBOT_PR_HEAD`,
+`NIXBOT_COMMAND`, `NIXBOT_COMMAND_ARGS`, `NIXBOT_BUILD_STATUS`,
+`NIXBOT_BUILD_URL`. The JSON has up to four top-level keys:
 
-Test locally with a hand-written payload:
+- `actor`: who caused it, `{ "name": "github:alice", "permission": "write" }`.
+  Absent when nobody did (polled changes).
+- `pullRequest`: `number`, `title`, `url`, `author` (shaped like `actor`),
+  `baseRef`, `headRef`, `headRev`, `labels`, `draft`, `isFork`, `merged`.
+- `build`: `number`, `url`, `status`, `branch`, `rev`; for `build_finished` also
+  `previousStatus` and `failedAttrs`.
+- `command`, `args`: for `comment`.
+
+Permissions are looked up on the forge when the event is delivered.
+
+### Conditions
+
+`when` restricts an effect to some deliveries. All given keys must match; an
+effect that does not match is listed as skipped with the reason.
+
+| `when` key                          | matches if                                                                                      |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `permission = "write"`              | actor or PR author has at least `read`/`write`/`admin`; for `comment` only the commenter counts |
+| `labels = [ "deploy" ]`             | the PR has all of these labels                                                                  |
+| `branches = [ "main" "release-*" ]` | glob on the PR base branch, or the built branch                                                 |
+| `commands = [ "plan" ]`             | `comment`: the `/command` used                                                                  |
+| `status = [ "failed" ]`             | status of the build in the payload                                                              |
+| `transition = "broke"` / `"fixed"`  | build status changed against the previous finished build of that branch or PR                   |
+
+### Ordering
+
+`lock` works as for `onPush`, so an event effect and a deploy holding the same
+lock never overlap. The name may contain `{pr}`: `lock = "preview-{pr}"`
+serialises per pull request. A newer delivery of the same kind for the same PR
+(for comments: the same command) cancels effects of the previous one that have
+not started yet. `after` is not supported.
+
+### Reporting back
+
+Event effects post no commit statuses. Instead `mkEffect` puts
+`nixbot-pr-comment` on `PATH`, which comments on the pull request the event is
+about: `nixbot-pr-comment "text"` or `... | nixbot-pr-comment`. With
+`--replace-marker ID` the comment a previous run left with the same marker is
+edited instead of adding another. Run locally it just prints the body.
+
+### Checks on every build
+
+A pull request that breaks an effect should be red before it is merged, even
+though its effects do not run. Every build therefore evaluates `onPush` and
+`onEvent` of the built commit and builds each effect's dependencies without
+running it (stdenv's `inputDerivation`, or `dependencies` of a hercules-ci
+`runIf false` effect). The results appear as "Effect checks" on the build page
+and count towards the `effects` forge status; evaluation errors are shown there
+too. If `onEvent` on the default branch is broken, the error is shown on the
+build an event was delivered for.
+
+### Restarting and testing
+
+Event effects can be restarted from the build and run pages, with
+`nbo build restart N --effect comment/apply`, or
+`POST /api/repos/.../builds/N/effects/restart?name=apply&kind=comment`. A
+running one is cancelled first; the stored payload is reused.
+
+To try an effect locally, write the payload by hand:
 
 ```console
 $ nbo effects list --event pull_request --payload pr.json
-$ nbo effects run --event comment --payload comment.json plan
+$ nbo effects run --event comment --payload comment.json --effect-checkout . apply
 ```
 
-## Buildbot secrets configuration
+## Secrets on the server
 
-When running effects through nixbot (not locally), secrets are configured at
-different scopes:
+When nixbot runs effects, secrets come from files configured per repository or
+per organization:
 
 1. **Repository-specific**: `"github:owner/repo"` — applies to a single
    repository

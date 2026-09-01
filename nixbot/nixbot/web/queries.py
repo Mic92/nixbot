@@ -162,7 +162,12 @@ class WebQueries:
         )
 
     async def effects(self, build_id: int) -> list[dict[str, Any]]:
-        return _dicts(await gen.web_effects(self.pool, build_id=build_id))
+        rows = _dicts(await gen.web_effects(self.pool, build_id=build_id))
+        for row in rows:
+            # Templates read the event PR number from it.
+            if isinstance(row.get("payload"), str):
+                row["payload"] = json.loads(row["payload"])
+        return rows
 
     async def eval_stats(
         self, build_id: int, *, by_alloc: bool
@@ -173,6 +178,9 @@ class WebQueries:
                 self.pool, build_id=build_id, by_alloc=by_alloc, limit_=EVAL_STATS_LIMIT
             )
         )
+
+    async def effect_eval_errors(self, build_id: int) -> list[dict[str, Any]]:
+        return _dicts(await builds_gen.effect_eval_errors(self.pool, build_id=build_id))
 
     async def effects_status(self, build_id: int) -> str | None:
         row = await builds_gen.effects_summary(self.pool, build_id=build_id)

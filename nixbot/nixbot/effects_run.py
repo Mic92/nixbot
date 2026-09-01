@@ -12,12 +12,12 @@ import asyncio
 import json
 import logging
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
 from functools import partial
 from typing import TYPE_CHECKING
 
 from nixbot_effects import EffectError
 
+from . import effect_checks
 from .db_gen import builds as builds_q
 from .db_gen import maintenance as q
 from .db_gen import work_queue as wq
@@ -31,6 +31,7 @@ from .effects import (
 from .event_effects import cloned_checkout, run_event_effect_item
 from .events import effects_event_for_build
 from .executor import failure_excerpt
+from .running_effect import RunningEffect
 from .workload_identity import identity_from_event
 
 if TYPE_CHECKING:
@@ -43,21 +44,6 @@ if TYPE_CHECKING:
     from .orchestrator import Orchestrator
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class RunningEffect:
-    """Registered for the full lifetime of a claimed effect item, so an
-    effects restart can always free the item's dedup key. `settled` is
-    set once the item released its row."""
-
-    task: asyncio.Task[None]
-    settled: asyncio.Event = field(default_factory=asyncio.Event)
-    restart: bool = False
-
-    def cancel(self) -> None:
-        self.restart = True
-        self.task.cancel()
 
 
 async def maybe_run_effects(  # noqa: PLR0913
@@ -87,6 +73,14 @@ async def maybe_run_effects(  # noqa: PLR0913
     ):
         return
     effects = await discover_effects(o, event, build, worktree_path)
+    if only is None:
+        # Dependencies of onEvent effects and of onPush effects that do
+        # not run here are built as checks, so a PR breaking them is red.
+        gated = [] if allowed or effects is None else list(effects)
+        checks = await effect_checks.discover_checks(
+            o, event, build, worktree_path, gated
+        )
+        await effect_checks.enqueue_checks(o, event, build, checks or [])
     if effects is None:
         return
     # Also drops rows a rerun selected that the flake no longer has.
@@ -140,12 +134,13 @@ async def discover_effects(
     try:
         # A bad effect DAG (cycle, unknown dependency) fails discovery
         # here and its reason ends up in the log.
-        return await o.effects.list_effects(ctx)
-    except (EffectError, OSError):
-        # OSError: nix/git missing from PATH. Effects are best-effort
-        # and must not fail the (already reported) build.
-        logger.exception("effects discovery failed", extra={"build_id": build.id_})
+        effects = await o.effects.list_effects(ctx)
+    except (EffectError, OSError) as e:
+        # OSError: nix/git missing from PATH.
+        await effect_checks.record_eval_error(o, build, "onPush", e)
         return None
+    await effect_checks.record_eval_error(o, build, "onPush", None)
+    return effects
 
 
 def _dedup_key(build: BuildRecord, name: str, meta: EffectMeta) -> str:
@@ -244,6 +239,10 @@ async def run_effect_item(  # noqa: PLR0913
     if task is None:
         msg = "run_effect_item must run inside a task"
         raise RuntimeError(msg)
+    if kind == effect_checks.KIND:
+        await effect_checks.run_check_item(o, info, build, name, credentials)
+        await post_effects_summary(o, effects_event_for_build(info, build), build)
+        return
     if kind != "push":
         await run_event_effect_item(o, info, build, kind, name, credentials)
         return

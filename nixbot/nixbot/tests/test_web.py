@@ -24,6 +24,7 @@ from joserfc.jwk import KeySet
 from nixbot.auth import User
 from nixbot.build_scheduler import AttributeStatus
 from nixbot.db import BuildStatus
+from nixbot.db_gen import builds as builds_gen
 from nixbot.effects_state import TaskTokens
 from nixbot.executor import (
     LogWriter,
@@ -1682,11 +1683,32 @@ def test_build_page_shows_event_effects(client: WebHarness) -> None:
             build_id,
         )
 
+        await ctx.pool.execute(
+            "INSERT INTO effect_runs (project_id, kind, build_id, name, status,"
+            " error, log_size, finished_at)"
+            " SELECT project_id, 'check', id, 'comment.apply', 'failed',"
+            " 'error: attribute hcloudx missing', 10, now()"
+            " FROM builds WHERE id = $1",
+            build_id,
+        )
+        await builds_gen.record_effect_eval_error(
+            ctx.pool,
+            build_id=build_id,
+            source="onPush",
+            error="error: undefined variable typo0",
+            code_rev=None,
+        )
+
     client.loop.run_until_complete(seed())
     text = client.get("/repos/github/acme/widget/builds/3").text
+    assert "onPush failed to evaluate" in text
+    assert "undefined variable typo0" in text
     assert "Event effects" in text
     assert "pull_request ·" in text
     assert "needs write access" in text
+    assert "Effect checks" in text
+    assert "comment.apply" in text
+    assert "hcloudx missing" in text
 
 
 def test_effect_log_raw_text(client: WebHarness, tmp_path: Path) -> None:

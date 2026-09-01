@@ -9,6 +9,7 @@ import pytest
 
 from nixbot_effects import EffectError, EventEffectMeta
 from nixbot_effects.eval import (
+    check_event_effect,
     instantiate_event_effect,
     list_all_event_effects,
     list_event_effects,
@@ -80,6 +81,10 @@ async def test_list_event_effects(tmp_path: Path) -> None:
     )
     assert drv.endswith("-effect.drv")
     assert should_run
+    # A bare `derivation` effect has no inputDerivation: eval-only check.
+    await check_event_effect(opts, "pull_request", "env.notify")
+    with pytest.raises(EffectError):
+        await check_event_effect(opts, "pull_request", "missing")
 
 
 PR = {

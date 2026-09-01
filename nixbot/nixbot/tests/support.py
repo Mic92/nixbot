@@ -85,6 +85,7 @@ class FakeEffects:
     events_error: Exception | None = None
     ran: list[str] = field(default_factory=list)
     event_ran: list[tuple[str, str, dict[str, Any]]] = field(default_factory=list)
+    checked: list[str] = field(default_factory=list)
 
     async def list_effects(self, _ctx: Any) -> dict[str, EffectMeta]:
         if self.push_error is not None:
@@ -100,6 +101,12 @@ class FakeEffects:
 
     async def list_scheduled_effects(self, _ctx: Any) -> dict[str, Any]:
         return self.schedules
+
+    async def check_effect(self, _ctx: Any, effect: str) -> None:
+        self.checked.append(effect)
+
+    async def check_event_effect(self, _ctx: Any, kind: str, effect: str) -> None:
+        self.checked.append(f"{kind}.{effect}")
 
     async def run_effect(self, _ctx: Any, effect: str, _log: Any = None) -> bool:
         self.ran.append(effect)

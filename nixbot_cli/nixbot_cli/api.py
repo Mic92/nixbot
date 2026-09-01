@@ -182,10 +182,13 @@ class NixbotClient:
         )
 
     def restart_effects(
-        self, repo: RepoRef, number: int, name: str | None = None
+        self, repo: RepoRef, number: int, name: str | None = None, kind: str = "push"
     ) -> dict:
-        """Re-run every effect of the build, or a single one by name."""
-        params = {"name": name} if name is not None else None
+        """Re-run every onPush effect of the build, or a single effect
+        by name (and kind, for event effects)."""
+        params = None
+        if name is not None:
+            params = {"name": name} if kind == "push" else {"name": name, "kind": kind}
         return self._json(
             "POST", f"/api/repos/{repo}/builds/{number}/effects/restart", params
         )

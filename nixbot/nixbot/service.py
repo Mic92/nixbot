@@ -24,6 +24,7 @@ from .db_gen import events as ev_q
 from .db_gen import failed as failed_q
 from .db_gen import maintenance as q
 from .deliver import Delivery, EventListingCache, deliver
+from .event_effects import restart_event_effect
 from .events import (
     BuildResult,
     ChangeEvent,
@@ -457,7 +458,19 @@ class CIService:
             {"build_id": build_id, "restart": True, "attr": attr},
         )
 
-    async def restart_effects(self, build_id: int, name: str | None = None) -> None:
+    async def restart_effects(
+        self,
+        build_id: int,
+        name: str | None = None,
+        kind: str = "push",
+    ) -> None:
+        if kind != "push" and name is not None:
+            await self.enqueue_work(
+                "event-restart",
+                f"build-{build_id}-{kind}-{name}-restart",
+                {"build_id": build_id, "kind": kind, "name": name},
+            )
+            return
         # Per-build dedup key: single-effect and full reruns serialize.
         await self.enqueue_work(
             "effects", f"build-{build_id}", {"build_id": build_id, "name": name}
@@ -550,6 +563,8 @@ class CIService:
             await restart_dispatch.restart_effects(
                 self, payload["build_id"], payload.get("name")
             )
+        elif item.kind == "event-restart":
+            await self._restart_event_effect(payload)
         elif item.kind == "effect":
             await self._run_effect_item(
                 payload["build_id"], payload["name"], payload.get("kind", "push")
@@ -623,6 +638,15 @@ class CIService:
                     _report_payload(build_id, attempt + 1, e),
                 )
             raise
+
+    async def _restart_event_effect(self, payload: dict[str, Any]) -> None:
+        build = await builds_q.get_build(self.pool, id_=payload["build_id"])
+        if build is None:
+            return
+        await restart_event_effect(
+            self.orchestrator, build, payload["kind"], payload["name"]
+        )
+        self.wake_work()
 
     async def _run_effect_item(self, build_id: int, name: str, kind: str) -> None:
         build = await builds_q.get_build(self.orchestrator.pool, id_=build_id)

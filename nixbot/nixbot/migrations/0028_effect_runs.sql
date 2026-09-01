@@ -7,8 +7,16 @@
 CREATE TABLE effect_runs (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     project_id BIGINT NOT NULL REFERENCES projects (id) ON DELETE CASCADE,
-    -- 'push' | 'schedule'
+    -- 'push' | 'check' | 'schedule' | an onEvent kind
     kind TEXT NOT NULL,
+    -- Which lifecycle the row follows: the build, event deliveries, none.
+    owner TEXT NOT NULL GENERATED ALWAYS AS (
+        CASE
+            WHEN kind IN ('push', 'check') THEN 'build'
+            WHEN kind = 'schedule' THEN 'schedule'
+            ELSE 'delivery'
+        END
+    ) STORED,
     build_id BIGINT REFERENCES builds (id) ON DELETE CASCADE,
     schedule_name TEXT,
     name TEXT NOT NULL,

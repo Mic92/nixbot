@@ -35,7 +35,12 @@ class ControlBackend(Protocol):
 
     async def restart_attribute(self, build_id: int, attr: str) -> None: ...
 
-    async def restart_effects(self, build_id: int, name: str | None = None) -> None: ...
+    async def restart_effects(
+        self,
+        build_id: int,
+        name: str | None = None,
+        kind: str = "push",
+    ) -> None: ...
 
     async def cancel_build(self, build_id: int) -> None: ...
 
@@ -146,15 +151,20 @@ class _ControlRoutes:
         name: str,
         number: int,
         effect: str | None = Query(None, alias="name"),
+        kind: str = Query("push"),
     ) -> RedirectResponse:
         build = await self._authorize(request, forge, owner, name, number)
-        await self._check_effect(build["id"], effect)
-        await self.backend.restart_effects(build["id"], effect)
+        await self._check_effect(build["id"], effect, kind)
+        await self.backend.restart_effects(build["id"], effect, kind)
         return _back(forge, owner, name, number)
 
-    async def _check_effect(self, build_id: int, effect: str | None) -> None:
+    async def _check_effect(self, build_id: int, effect: str | None, kind: str) -> None:
+        if kind != "push" and effect is None:
+            raise HTTPException(status_code=400, detail="kind needs a name")
         if effect is not None and (
-            await maint_gen.effect_status(self.ctx.pool, build_id=build_id, name=effect)
+            await maint_gen.effect_run(
+                self.ctx.pool, build_id=build_id, kind=kind, name=effect
+            )
             is None
         ):
             raise HTTPException(status_code=404, detail="unknown effect")
@@ -267,12 +277,14 @@ class _ControlRoutes:
         name: str,
         number: int,
         effect: str | None = Query(None, alias="name"),
+        kind: str = Query("push"),
     ) -> dict:
-        """Re-run the build's effects, or a single one via ?name=.
-        Authz: admins, the PR author, or repo writers."""
+        """Re-run the build's effects, or a single one via ?name=
+        (&kind= for event effects). Authz: admins, the PR author, or
+        repo writers."""
         build = await self._authorize(request, forge, owner, name, number)
-        await self._check_effect(build["id"], effect)
-        await self.backend.restart_effects(build["id"], effect)
+        await self._check_effect(build["id"], effect, kind)
+        await self.backend.restart_effects(build["id"], effect, kind)
         return {"number": number, "action": "restart-effects"}
 
     async def api_set_enabled(

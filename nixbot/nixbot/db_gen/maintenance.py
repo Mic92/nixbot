@@ -103,14 +103,17 @@ WITH cleared_failures AS (
 ), reset_effect_rows AS (
     UPDATE effect_runs SET status = 'pending', error = NULL,
         finished_at = NULL, log_size = 0, log_truncated = FALSE
-    WHERE build_id = $2::bigint AND kind = 'push'
+    WHERE build_id = $2::bigint AND owner = 'build'
       AND $1::text IS NULL
 ), cancel_event_rows AS (
     -- Event effects are re-delivered when the rebuilt build settles.
     -- Finished ones keep their history and log.
     UPDATE effect_runs SET status = 'cancelled', finished_at = now()
-    WHERE build_id = $2::bigint AND kind <> 'push'
+    WHERE build_id = $2::bigint AND owner = 'delivery'
       AND status = 'pending' AND $1::text IS NULL
+), cleared_eval_errors AS (
+    DELETE FROM effect_eval_errors
+    WHERE build_id = $2::bigint AND $1::text IS NULL
 )
 UPDATE builds SET status = 'pending', error = NULL,
     eval_warnings = NULL, started_at = NULL, finished_at = NULL,
@@ -265,7 +268,7 @@ SELECT status FROM effect_runs WHERE build_id = $1 AND kind = 'push' AND name = 
 """
 
 EFFECT_RUN: typing.Final[str] = """-- name: EffectRun :one
-SELECT id, project_id, kind, build_id, schedule_name, name, status, error, deps, log_size, log_truncated, started_at, finished_at, payload, code_rev, skip_reason, actor FROM effect_runs WHERE build_id = $1 AND kind = $2 AND name = $3
+SELECT id, project_id, kind, owner, build_id, schedule_name, name, status, error, deps, log_size, log_truncated, started_at, finished_at, payload, code_rev, skip_reason, actor, lock FROM effect_runs WHERE build_id = $1 AND kind = $2 AND name = $3
 """
 
 BUILD_EFFECT_RUN_IDS: typing.Final[str] = """-- name: BuildEffectRunIds :many
@@ -463,7 +466,27 @@ async def effect_run(conn: ConnectionLike, *, build_id: int | None, kind: str, n
     row = await conn.fetchrow(EFFECT_RUN, build_id, kind, name)
     if row is None:
         return None
-    return models.EffectRun(id_=row[0], project_id=row[1], kind=row[2], build_id=row[3], schedule_name=row[4], name=row[5], status=row[6], error=row[7], deps=row[8], log_size=row[9], log_truncated=row[10], started_at=row[11], finished_at=row[12], payload=row[13], code_rev=row[14], skip_reason=row[15], actor=row[16])
+    return models.EffectRun(
+        id_=row[0],
+        project_id=row[1],
+        kind=row[2],
+        owner=row[3],
+        build_id=row[4],
+        schedule_name=row[5],
+        name=row[6],
+        status=row[7],
+        error=row[8],
+        deps=row[9],
+        log_size=row[10],
+        log_truncated=row[11],
+        started_at=row[12],
+        finished_at=row[13],
+        payload=row[14],
+        code_rev=row[15],
+        skip_reason=row[16],
+        actor=row[17],
+        lock=row[18],
+    )
 
 
 def build_effect_run_ids(conn: ConnectionLike, *, build_id: int | None, names: collections.abc.Sequence[str] | None) -> QueryResults[int]:

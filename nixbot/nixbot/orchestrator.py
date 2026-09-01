@@ -77,6 +77,7 @@ if TYPE_CHECKING:
         StderrLineCallback,
     )
     from .repo_config import BranchConfig
+    from .running_effect import RunningEffect
 
     GcrootRegistrar = Callable[[Path, str, str, str], Awaitable[None]]
     OutputWriter = Callable[[Path, str, str, str, str, str, str], Path]
@@ -133,9 +134,10 @@ class Orchestrator:
     attr_cancel_events: dict[tuple[int, str], asyncio.Event] = field(
         default_factory=dict
     )
-    running_effects: dict[tuple[int, str], effects_run.RunningEffect] = field(
-        default_factory=dict
-    )
+    running_effects: dict[tuple[int, str], RunningEffect] = field(default_factory=dict)
+    # Event effects by run id, apart from onPush so an effects restart
+    # of a build never touches them.
+    running_event_effects: dict[int, RunningEffect] = field(default_factory=dict)
     # Injectable, default_effects is late-bound so tests can replace it.
     effects: EffectsBackend = field(default_factory=lambda: default_effects())  # noqa: PLW0108
     register_gcroot: GcrootRegistrar = gcroots.register_gcroot
@@ -194,6 +196,9 @@ class Orchestrator:
             self.pool, build_id=build_id, names=names
         ):
             effect_run_log_path(self.config.state_dir, run_id).unlink(missing_ok=True)
+
+    async def reset_effect_run_log(self, run_id: int) -> None:
+        effect_run_log_path(self.config.state_dir, run_id).unlink(missing_ok=True)
 
     def gcroots_dir(self, build: BuildRecord) -> Path:
         return self.config.state_dir / "eval-gcroots" / str(build.id_)

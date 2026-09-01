@@ -169,6 +169,18 @@ async def list_all_event_effects(
     )
 
 
+async def check_effect(ctx: EffectsContext, effect: str) -> None:
+    """Build an onPush effect's dependencies. Raises EffectError."""
+    await _with_timeout(nixbot_effects.check_effect(ctx, effect), "effect check")
+
+
+async def check_event_effect(ctx: EffectsContext, kind: str, effect: str) -> None:
+    """Build an onEvent effect's dependencies. Raises EffectError."""
+    await _with_timeout(
+        nixbot_effects.check_event_effect(ctx, kind, effect), "effect check"
+    )
+
+
 async def list_scheduled_effects(ctx: EffectsContext) -> dict:
     """The onSchedule definitions on the default branch."""
     return await _with_timeout(
@@ -257,6 +269,10 @@ class EffectsBackend(Protocol):
         self, ctx: EffectsContext
     ) -> dict[str, dict[str, nixbot_effects.EventEffectMeta]]: ...
     async def list_scheduled_effects(self, ctx: EffectsContext) -> dict: ...
+    async def check_effect(self, ctx: EffectsContext, effect: str) -> None: ...
+    async def check_event_effect(
+        self, ctx: EffectsContext, kind: str, effect: str
+    ) -> None: ...
     async def run_effect(
         self, ctx: EffectsContext, effect: str, log_write: LogWrite | None = None
     ) -> bool: ...
@@ -281,6 +297,8 @@ class NixEffects:
     list_effects = staticmethod(list_effects)
     list_all_event_effects = staticmethod(list_all_event_effects)
     list_scheduled_effects = staticmethod(list_scheduled_effects)
+    check_effect = staticmethod(check_effect)
+    check_event_effect = staticmethod(check_event_effect)
     run_effect = staticmethod(run_effect)
     run_event_effect = staticmethod(run_event_effect)
     run_scheduled_effect = staticmethod(run_scheduled_effect)
