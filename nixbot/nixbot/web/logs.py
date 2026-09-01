@@ -1252,9 +1252,8 @@ class _LiveRenderer:
 
     def delta(self, delta: dict) -> dict:
         if delta["t"] == "drv":
-            delta["card"] = self.card(
-                {**delta, "status": "running", "n": 0, "ph": [], "t0": None}
-            )
+            delta["status"] = "running"
+            delta["card"] = self.card({**delta, "n": 0, "ph": [], "t0": None})
         elif delta["t"] == "line":
             idx = delta["idx"]
             delta["html"], self._styles[idx] = render_rows(

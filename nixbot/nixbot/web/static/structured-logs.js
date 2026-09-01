@@ -7,12 +7,8 @@
 "use strict";
 
 /**
- * @typedef {{idx:number,status:string,html?:string,card?:string}} Drv
- * @typedef {{t:string,idx:number,status?:string,html?:string,card?:string}} Delta
+ * @typedef {{t?:string,idx:number,status?:string,html?:string,card?:string}} Delta
  */
-/** @param {Element|null} el */
-const hx = (el) => /** @type {any} */ (globalThis).htmx.process(el);
-
 (() => {
   /** @param {string} id @returns {HTMLElement|null} */
   const $ = (id) => document.getElementById(id);
@@ -59,9 +55,6 @@ const hx = (el) => /** @type {any} */ (globalThis).htmx.process(el);
 
   if (BASE) return runLive();
 
-  // Track cards whose rows are loaded so a jump fires now or waits.
-  /** @type {WeakSet<HTMLElement>} */
-  const loaded = new WeakSet();
   const succeeded =
     /** @type {HTMLDetailsElement|null} */ ($("succeeded-panel"));
   /** @type {{card:HTMLElement, idx:number, line:number|null}|null} */
@@ -85,7 +78,6 @@ const hx = (el) => /** @type {any} */ (globalThis).htmx.process(el);
     vp.removeAttribute("aria-busy");
     const card = /** @type {HTMLElement|null} */ (vp.closest(".log-card"));
     if (!card) return;
-    loaded.add(card);
     if (pending && pending.card === card) {
       jump(card, pending.idx, pending.line);
       pending = null;
@@ -103,8 +95,9 @@ const hx = (el) => /** @type {any} */ (globalThis).htmx.process(el);
     if (!card) return;
     if (succeeded && succeeded.contains(card)) succeeded.open = true;
     card.open = true; // triggers the htmx fetch if not yet loaded
-    if (loaded.has(card)) jump(card, idx, line);
-    else pending = { card, idx, line }; // afterSwap completes the jump
+    if (pick(card, ".log-lines").hasAttribute("aria-busy")) {
+      pending = { card, idx, line }; // afterSwap completes the jump
+    } else jump(card, idx, line);
   }
 
   // Search results are server-rendered. The client only jumps into a
@@ -138,58 +131,36 @@ const hx = (el) => /** @type {any} */ (globalThis).htmx.process(el);
   // in arrival order, the running one following its tail. The
   // terminal-status reload swaps to the polished container page.
   function runLive() {
-    /** @typedef {{el: HTMLDetailsElement, vp: HTMLElement, status: string}} Card */
+    /** @typedef {{el: HTMLDetailsElement, vp: HTMLElement}} Card */
     /** @type {Map<number, Card>} */
     const cards = new Map();
+    /** @param {Element|null} el */
+    const hx = (el) => /** @type {any} */ (globalThis).htmx.process(el);
     /** @param {string} s */
-    const iconState = (s) =>
-      s === "failed" ? "failed" : s === "running" ? "running" : "succeeded";
-
-    // Cards live in the status groups the template renders (Failures /
-    // Building / Succeeded panel), mirroring the finished page.
-    /** @param {string} s @returns {HTMLElement} */
-    const groupFor = (s) =>
-      must(
-        s === "failed"
-          ? "failed-cards"
-          : s === "running"
-          ? "building-cards"
-          : "succeeded-list",
-      );
+    const kind = (s) => s === "failed" || s === "running" ? s : "succeeded";
+    const groups = [...list.querySelectorAll(".live-group")].map((g) => ({
+      el: /** @type {HTMLElement} */ (g),
+      cards: pick(g, ".group-cards"),
+    }));
 
     function updateGroups() {
-      for (const id of ["failed", "building", "succeeded"]) {
-        const group = must(`group-${id}`);
-        const n = pick(group, ".group-cards").childElementCount;
-        group.hidden = n === 0;
-        for (const c of group.querySelectorAll(".count")) {
-          c.textContent = `${n}`;
-        }
+      for (const g of groups) {
+        const n = g.cards.childElementCount;
+        g.el.hidden = n === 0;
+        for (const c of g.el.querySelectorAll(".count")) c.textContent = `${n}`;
       }
-    }
-
-    /** Insert the server-rendered card shell (same drv_card macro as the
-     * finished page).
-     * @param {number} idx @param {string} status @param {string} html */
-    function addCard(idx, status, html) {
-      const target = groupFor(status);
-      target.insertAdjacentHTML("beforeend", html);
-      const el = /** @type {HTMLDetailsElement} */ (target.lastElementChild);
-      const c = { el, vp: pick(el, ".log-lines"), status };
-      cards.set(idx, c);
-      setStatus(c, status);
     }
 
     /** @param {Card} c @param {string} status */
     function setStatus(c, status) {
-      c.status = status;
-      pick(c.el, ".status-icon").className = "status-icon " + iconState(status);
-      c.el.classList.toggle("ok", status !== "failed");
-      pick(c.el, ".meta-status").textContent = status === "running"
+      const k = kind(status);
+      pick(c.el, ".status-icon").className = `status-icon ${k}`;
+      c.el.classList.toggle("ok", k !== "failed");
+      pick(c.el, ".meta-status").textContent = k === "running"
         ? "building…"
         : status;
-      const target = groupFor(status);
-      if (c.el.parentElement !== target) target.appendChild(c.el);
+      const g = groups.find((g) => g.el.dataset.status === k);
+      if (g && c.el.parentElement !== g.cards) g.cards.appendChild(c.el);
       updateGroups();
     }
 
@@ -219,7 +190,6 @@ const hx = (el) => /** @type {any} */ (globalThis).htmx.process(el);
           hidden.toLocaleString("en")
         } hidden lines…</div>`,
       );
-      hx(c.vp.firstElementChild);
     }
 
     function flush() {
@@ -230,53 +200,42 @@ const hx = (el) => /** @type {any} */ (globalThis).htmx.process(el);
         // Scrolling up pauses following and trimming.
         const atBottom =
           c.vp.scrollHeight - c.vp.scrollTop - c.vp.clientHeight < 40;
-        const html = chunks.join("");
-        c.vp.insertAdjacentHTML("beforeend", html);
-        if (html.includes("hx-get")) hx(c.vp);
-        if (!atBottom) continue;
-        trim(idx, c);
-        if (c.el.open) c.vp.scrollTop = c.vp.scrollHeight;
+        c.vp.insertAdjacentHTML("beforeend", chunks.join(""));
+        if (atBottom) {
+          trim(idx, c);
+          if (c.el.open) c.vp.scrollTop = c.vp.scrollHeight;
+        }
+        hx(c.vp);
       }
       pendingRows.clear();
     }
 
-    /** @param {number} idx @param {string|undefined} html */
-    function addRows(idx, html) {
-      if (!html) return;
-      const chunks = pendingRows.get(idx);
-      if (chunks) chunks.push(html);
-      else pendingRows.set(idx, [html]);
-      if (!flushScheduled) {
-        flushScheduled = true;
-        requestAnimationFrame(flush);
+    /** A state entry or delta: card shell, status change and/or rows.
+     * @param {Delta} d */
+    function apply(d) {
+      let c = cards.get(d.idx);
+      if (!c && d.card) {
+        list.insertAdjacentHTML("beforeend", d.card);
+        const el = /** @type {HTMLDetailsElement} */ (list.lastElementChild);
+        c = { el, vp: pick(el, ".log-lines") };
+        cards.set(d.idx, c);
       }
-    }
-
-    /** @param {Delta} delta */
-    function apply(delta) {
-      const c = cards.get(delta.idx);
-      if (delta.t === "drv") {
-        // Repeated for each activity on an already known derivation.
-        if (c) setStatus(c, "running");
-        else addCard(delta.idx, "running", delta.card ?? "");
-      } else if (delta.t === "line") {
-        addRows(delta.idx, delta.html);
-      } else if (delta.t === "status" && c && delta.status) {
+      if (!c) return;
+      if (d.status) {
         flush();
-        setStatus(c, delta.status);
-        if (delta.status !== "running") c.el.open = delta.status === "failed";
+        setStatus(c, d.status);
+        if (d.t === "status" && d.status !== "running") {
+          c.el.open = d.status === "failed";
+        }
       }
-    }
-
-    /** @param {Drv[]} state */
-    function reset(state) {
-      for (const c of cards.values()) c.el.remove();
-      cards.clear();
-      pendingRows.clear();
-      updateGroups();
-      for (const e of state) {
-        addCard(e.idx, e.status, e.card ?? "");
-        addRows(e.idx, e.html);
+      if (d.html) {
+        const chunks = pendingRows.get(d.idx);
+        if (chunks) chunks.push(d.html);
+        else pendingRows.set(d.idx, [d.html]);
+        if (!flushScheduled) {
+          flushScheduled = true;
+          requestAnimationFrame(flush);
+        }
       }
     }
 
@@ -284,7 +243,11 @@ const hx = (el) => /** @type {any} */ (globalThis).htmx.process(el);
     const src = new EventSource(`${BASE}/stream?format=structured`);
     src.addEventListener("state", (ev) => {
       errors = 0;
-      reset(JSON.parse(ev.data));
+      for (const c of cards.values()) c.el.remove();
+      cards.clear();
+      pendingRows.clear();
+      updateGroups();
+      for (const d of JSON.parse(ev.data)) apply(d);
     });
     src.addEventListener("delta", (ev) => apply(JSON.parse(ev.data)));
     src.addEventListener("done", () => src.close());

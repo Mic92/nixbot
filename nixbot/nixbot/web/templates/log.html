@@ -69,19 +69,19 @@
           {% if live_structured %}
             {# Status groups matching the finished page. The JS moves
                cards between them on status deltas. #}
-            <div class="live-group" id="group-failed" hidden>
+            <div class="live-group" data-status="failed" hidden>
               <h2 class="section">
                 Failures (<span class="count">0</span>)
               </h2>
               <div class="group-cards" id="failed-cards"></div>
             </div>
-            <div class="live-group" id="group-building" hidden>
+            <div class="live-group" data-status="running" hidden>
               <h2 class="section">
                 Building (<span class="count">0</span>)
               </h2>
               <div class="group-cards" id="building-cards"></div>
             </div>
-            <div class="live-group" id="group-succeeded" hidden>
+            <div class="live-group" data-status="succeeded" hidden>
               <h2 class="section">
                 Succeeded (<span class="count">0</span>)
               </h2>
