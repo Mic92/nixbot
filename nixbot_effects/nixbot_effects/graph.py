@@ -3,7 +3,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 from .errors import EffectError
 
@@ -18,6 +19,17 @@ class EffectMeta:
 
     after: tuple[str, ...] = ()
     lock: str | None = None
+
+
+@dataclass(frozen=True)
+class EventEffectMeta:
+    """What nixbot needs to match and schedule one onEvent effect
+    without evaluating Nix again."""
+
+    when: dict[str, Any] = field(default_factory=dict)
+    # May contain `{pr}`, expanded per delivery.
+    lock: str | None = None
+    checkout: bool = False
 
 
 def validate_deps(meta: dict[str, EffectMeta]) -> None:

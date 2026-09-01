@@ -15,12 +15,15 @@ from pathlib import Path
 
 from nixbot_effects.eval import options_from_flake_ref
 from nixbot_effects.graph import render_tree
+from nixbot_effects.match import KINDS, skip_reason
 
 from nixbot_effects import (
     EffectsOptions,
     list_effects,
+    list_event_effects,
     list_scheduled_effects,
     run_effect,
+    run_event_effect,
     run_scheduled_effect,
 )
 
@@ -81,12 +84,18 @@ async def list_command(args: argparse.Namespace) -> None:
     options = _options_from_args(args)
     if args.flake_ref:
         options = await options_from_flake_ref(args.flake_ref, options)
-    effects = await list_effects(options)
-    json.dump(
-        {name: asdict(meta) for name, meta in effects.items()},
-        fp=sys.stdout,
-        indent=2,
-    )
+    if args.event:
+        payload = json.loads(args.payload.read_text()) if args.payload else None
+        out = {}
+        for name, meta in (await list_event_effects(options, args.event)).items():
+            out[name] = asdict(meta)
+            if payload is not None:
+                out[name]["skipReason"] = skip_reason(meta.when, payload)
+    else:
+        out = {
+            name: asdict(meta) for name, meta in (await list_effects(options)).items()
+        }
+    json.dump(out, fp=sys.stdout, indent=2)
     print()
 
 
@@ -112,6 +121,12 @@ async def run_command(args: argparse.Namespace) -> None:
     effect, options = await _split_flake_ref(
         args.effect, options, f"nbo effects run {args.effect}#<effect-name>"
     )
+    if args.event:
+        if args.payload is None:
+            sys.exit("error: --event requires --payload FILE")
+        payload = json.loads(args.payload.read_text())
+        await run_event_effect(options, args.event, effect, payload)
+        return
     await run_effect(options, effect)
 
 
@@ -136,6 +151,21 @@ def _key_value(option: str) -> tuple[str, str]:
         msg = f"expected KEY=VALUE, got {option!r}"
         raise argparse.ArgumentTypeError(msg)
     return (key, value)
+
+
+def _add_event_flags(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--event",
+        choices=KINDS,
+        metavar="KIND",
+        help=f"use onEvent.KIND instead of onPush ({', '.join(KINDS)})",
+    )
+    parser.add_argument(
+        "--payload",
+        type=Path,
+        metavar="FILE",
+        help="event payload JSON (list: show skip reasons, run: required)",
+    )
 
 
 def _add_common_flags(parser: argparse.ArgumentParser) -> None:
@@ -251,7 +281,9 @@ def register(sub: argparse._SubParsersAction) -> None:
   nbo effects graph                 the dependency DAG as an ASCII tree
   nbo effects run default.deploy    run one effect in the local sandbox
   nbo effects run github:org/repo/branch#default.deploy   without a checkout
-  nbo effects run-scheduled github:org/repo#nightly flake-update""",
+  nbo effects run-scheduled github:org/repo#nightly flake-update
+  nbo effects list --event pull_request --payload pr.json   onEvent effects with skip reasons
+  nbo effects run --event comment --payload c.json plan""",
     )
     effects.set_defaults(func=cmd_effects, needs_client=False)
     esub = effects.add_subparsers(dest="effects_command", required=True)
@@ -261,6 +293,7 @@ def register(sub: argparse._SubParsersAction) -> None:
         help="List available effects (optionally from a flake reference)",
     )
     _add_common_flags(list_parser)
+    _add_event_flags(list_parser)
     list_parser.set_defaults(effects_func=list_command)
     list_parser.add_argument(
         "flake_ref",
@@ -285,6 +318,7 @@ def register(sub: argparse._SubParsersAction) -> None:
         help="Run an effect (supports flakeref#effect syntax)",
     )
     _add_common_flags(run_parser)
+    _add_event_flags(run_parser)
     run_parser.set_defaults(effects_func=run_command)
     run_parser.add_argument(
         "effect",

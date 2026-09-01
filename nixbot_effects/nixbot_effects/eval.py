@@ -10,7 +10,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .errors import EffectError
-from .graph import EffectMeta, validate_deps
+from .graph import EffectMeta, EventEffectMeta, validate_deps
+from .match import KINDS, validate_when
 from .proc import stream_command
 
 if TYPE_CHECKING:
@@ -144,6 +145,17 @@ async def scheduled_effect_function(opts: EffectsOptions) -> str:
     return await _effects_expr(opts, "hci.onSchedule or {}")
 
 
+def _check_kind(kind: str) -> None:
+    if kind not in KINDS:
+        msg = f"unknown event kind {kind!r}, expected one of {', '.join(KINDS)}"
+        raise EffectError(msg)
+
+
+async def event_effect_function(opts: EffectsOptions, kind: str) -> str:
+    _check_kind(kind)
+    return await _effects_expr(opts, f"hci.onEvent.{kind} or {{}}")
+
+
 async def _nix_eval_json(expr: str, opts: EffectsOptions) -> Any:  # noqa: ANN401
     out = await stream_command(
         nix_command("eval", "--json", "--expr", expr),
@@ -152,6 +164,36 @@ async def _nix_eval_json(expr: str, opts: EffectsOptions) -> Any:  # noqa: ANN40
         debug=opts.debug,
     )
     return json.loads(out)
+
+
+def _walk_expr(root: str) -> str:
+    """Nix expression listing every effect under attrset `root` as
+    `{ "<dotted.path>" = { after, lock, when, checkout }; }`."""
+    return f"""
+        let
+          root = {root};
+          isEffect = v: v ? isEffect || v ? effectScript || v ? run
+            || v ? dependencies || (v.type or null) == "derivation";
+          dep = name: a:
+            if builtins.isList a then builtins.concatStringsSep "." a
+            else throw "effect '${{name}}': 'after' entries must be attribute paths (lists of strings), job first";
+          meta = name: e:
+            let d = e.run or e; in {{
+              after = map (dep name) (d.after or []);
+              lock = d.lock or null;
+              when = d.when or {{}};
+              checkout = (d.__nixbot_effect_checkout or false) == true;
+            }};
+          walk = prefix: v:
+            let name = builtins.concatStringsSep "." prefix; in
+            if !builtins.isAttrs v || v ? _type then []
+            else if isEffect v then [ {{ inherit name; value = meta name v; }} ]
+            else if v.recurseForDerivations or true then builtins.concatLists
+              (map (n: walk (prefix ++ [ n ]) v.${{n}}) (builtins.attrNames v))
+            else [];
+        in builtins.listToAttrs (builtins.concatLists
+          (map (n: walk [ n ] root.${{n}}) (builtins.attrNames root)))
+        """
 
 
 async def list_effects(opts: EffectsOptions) -> dict[str, EffectMeta]:
@@ -164,35 +206,28 @@ async def list_effects(opts: EffectsOptions) -> dict[str, EffectMeta]:
     returned as dotted names. Metadata comes from the effect or its `run`
     wrapper (hercules-ci's runIf).
     """
-    expr = f"""
-        let
-          jobs = {await effect_function(opts)};
-          isEffect = v: v ? isEffect || v ? effectScript || v ? run
-            || v ? dependencies || (v.type or null) == "derivation";
-          dep = name: a:
-            if builtins.isList a then builtins.concatStringsSep "." a
-            else throw "effect '${{name}}': 'after' entries must be attribute paths (lists of strings), job first";
-          meta = name: e:
-            let d = e.run or e; in {{
-              after = map (dep name) (d.after or []);
-              lock = d.lock or null;
-            }};
-          walk = prefix: v:
-            let name = builtins.concatStringsSep "." prefix; in
-            if !builtins.isAttrs v || v ? _type then []
-            else if isEffect v then [ {{ inherit name; value = meta name v; }} ]
-            else if v.recurseForDerivations or true then builtins.concatLists
-              (map (n: walk (prefix ++ [ n ]) v.${{n}}) (builtins.attrNames v))
-            else [];
-        in builtins.listToAttrs (builtins.concatLists
-          (map (job: walk [ job ] jobs.${{job}}) (builtins.attrNames jobs)))
-        """
+    expr = _walk_expr(f"({await effect_function(opts)})")
     effects = {
         name: EffectMeta(after=tuple(info["after"]), lock=info["lock"])
         for name, info in (await _nix_eval_json(expr, opts)).items()
     }
     # A bad DAG (cycle, unknown dependency) fails discovery right here.
     validate_deps(effects)
+    return effects
+
+
+async def list_event_effects(
+    opts: EffectsOptions, kind: str
+) -> dict[str, EventEffectMeta]:
+    """onEvent.<kind> effects with their `when`, lock and checkout flag.
+    Names are dotted attribute paths below the kind."""
+    expr = _walk_expr(f"({await event_effect_function(opts, kind)})")
+    effects = {}
+    for name, info in (await _nix_eval_json(expr, opts)).items():
+        validate_when(name, info["when"])
+        effects[name] = EventEffectMeta(
+            when=info["when"], lock=info["lock"], checkout=info["checkout"]
+        )
     return effects
 
 
@@ -263,6 +298,16 @@ async def instantiate_effects(
 ) -> tuple[str, bool]:
     return await _select_effect(
         f"let e = ({await effect_function(opts)}).{effect}; in", opts, gcroot
+    )
+
+
+async def instantiate_event_effect(
+    kind: str, effect: str, opts: EffectsOptions, gcroot: Path
+) -> tuple[str, bool]:
+    return await _select_effect(
+        f"let e = ({await event_effect_function(opts, kind)}).{effect}; in",
+        opts,
+        gcroot,
     )
 
 
