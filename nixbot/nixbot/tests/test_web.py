@@ -33,6 +33,7 @@ from nixbot.executor import (
 )
 from nixbot.logstore import LogContainerWriter
 from nixbot.web import events as events_module
+from nixbot.web import logs as logs_mod
 from nixbot.web.auth_routes import SESSION_COOKIE, create_auth_router
 from nixbot.web.events import EventBroker
 from nixbot.web.logs import (
@@ -173,6 +174,9 @@ def test_build_page(client: WebHarness) -> None:
     assert "x86_64-linux.ok" not in text
     assert "2 succeeded" in text
     assert "attrs?group=succeeded" in text
+    assert "· took " in text
+    # Build 3 is still building: its duration is not final.
+    assert "running for" in client.get("/repos/github/acme/widget/builds/3").text
     # Groups scroll internally so the summaries below stay reachable.
     assert text.count('class="attr-scroll"') >= 2
     # Search queries the server, not just the loaded rows.
@@ -878,15 +882,17 @@ def test_structured_log_window_caps_huge_derivation(
     assert "line11999" in capped
     assert "line05000" not in capped  # elided middle
     # The marker auto-loads the gap in bounded chunks.
-    assert 'hx-trigger="revealed"' in capped
-    assert "start=2000&end=4000" in capped
+    assert 'hx-trigger="intersect once"' in capped
+    assert "start=2000&end=9000" in capped  # the whole gap
 
-    chunk = client.get(f"{base}/drv/0?start=2000&end=4000").text
+    # One bounded chunk per request, then a marker for the rest.
+    chunk = client.get(f"{base}/drv/0?start=2000&end=9000").text
     assert 'id="d0-L2001"' in chunk
     assert "line02000" in chunk
     assert 'id="d0-L4000"' in chunk
     assert "line03999" in chunk
-    assert "start=4000" in chunk  # next marker for the remaining gap
+    assert "line04000" not in chunk
+    assert "start=4000&end=9000" in chunk
 
 
 def test_attr_named_dot_txt_not_shadowed_by_raw_route(
@@ -1227,12 +1233,15 @@ def test_openapi_docs(client: WebHarness) -> None:
 # --- live logs ---------------------------------------------------------
 
 
-def test_structured_live_stream(client: WebHarness, tmp_path: Path) -> None:
+def test_structured_live_stream(
+    client: WebHarness, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A running attribute with a capture streams per-derivation deltas;
     the viewer wires the structured client to that stream."""
     ctx = client.ctx
     ctx.state_dir = tmp_path
     registry = client.app.state.log_registry
+    monkeypatch.setattr(logs_mod, "LIVE_TAIL", 3)
 
     async def run() -> tuple[str, str]:
         build_id = await ctx.pool.fetchval("SELECT id FROM builds WHERE number = 3")
@@ -1240,6 +1249,8 @@ def test_structured_live_stream(client: WebHarness, tmp_path: Path) -> None:
         cap = StructuredCapture(clock=lambda: 1.0)
         writer.capture = cap
         cap.start_build(1, "/nix/store/aaa-qtbase-5.0.drv")
+        for i in range(1, 6):
+            cap.log_line(1, f"CC early{i}.o")
         cap.log_line(1, "CC main.o")
         registry.register(build_id, "x86_64-linux.ok", writer)
         try:
@@ -1265,7 +1276,7 @@ def test_structured_live_stream(client: WebHarness, tmp_path: Path) -> None:
 
     viewer, stream = client.loop.run_until_complete(run())
     assert "const LIVE = true" in viewer
-    assert "format=structured" in viewer  # data-stream on #drv-list
+    assert "data-base=" in viewer  # #drv-list follows the stream
     # Live page groups cards by status like the finished view.
     assert 'id="failed-cards"' in viewer
     assert 'id="building-cards"' in viewer
@@ -1276,7 +1287,11 @@ def test_structured_live_stream(client: WebHarness, tmp_path: Path) -> None:
     assert "event: state" in stream
     assert '"name":"qtbase-5.0"' in stream  # snapshot burst
     # Rows are rendered server-side (ANSI applied), not shipped as raw text.
-    assert "d1-L1" in stream
+    # The snapshot carries only the tail (#168), numbered absolutely.
+    state_line = next(ln for ln in stream.splitlines() if '"card"' in ln)
+    assert "CC early3.o" not in state_line
+    assert "d1-L4" in state_line
+    assert "drv/1?start=0&end=3" in state_line  # loads them on scroll-up
     assert '"text"' not in stream
     # The phase divider and the line queued behind it coalesce into one
     # rendered delta.

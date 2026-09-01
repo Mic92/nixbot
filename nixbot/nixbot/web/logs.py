@@ -11,7 +11,7 @@ import asyncio
 import functools
 import html
 import json
-from typing import TYPE_CHECKING, Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple, Protocol
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import (
@@ -290,45 +290,53 @@ _RENDER_CAP = _RENDER_HEAD + _RENDER_TAIL
 _RENDER_CHUNK = 2000
 
 
-def _chunk_marker(idx: int, base: str, start: int, end: int) -> str:
-    """A marker that auto-loads lines [start, end) (0-based) once scrolled
-    into view, one bounded chunk at a time. htmx swaps the fetched rows
-    (and the next marker, if any) over it."""
-    nxt = min(start + _RENDER_CHUNK, end)
+def chunk_marker(idx: int, base: str, start: int, end: int) -> str:
+    """A marker standing in for lines [start, end) (0-based). Scrolled
+    into view it fetches that range; the server renders one bounded
+    chunk and a fresh marker for the remainder."""
     return (
         f'<div class="log-elided" role="separator"'
-        f' hx-get="{base}/drv/{idx}?start={start}&end={nxt}"'
-        f' hx-trigger="revealed" hx-target="this" hx-swap="outerHTML">'
+        f' hx-get="{base}/drv/{idx}?start={start}&end={end}"'
+        f' hx-trigger="intersect once" hx-target="this" hx-swap="outerHTML">'
         f"loading {end - start:,} hidden lines…</div>"
     )
 
 
+class _DrvLines(Protocol):
+    """Finished container reader or live capture writer."""
+
+    def __len__(self) -> int: ...
+    def entry(self, i: int) -> dict: ...
+    def lines(self, i: int) -> list[str]: ...
+
+
 def render_drv_window(
-    reader: LogContainerReader,
+    reader: _DrvLines,
     idx: int,
     base: str,
     start: int | None = None,
     end: int | None = None,
 ) -> str:
     """A derivation's log as anchored rows. The initial view (no range)
-    is capped to a head+tail window with a load-more marker spanning the
-    gap. A range request renders lines [start, end) plus another marker
-    if more of the gap remains before the tail."""
+    is capped to a head+tail window with a marker spanning the gap. A
+    range request renders the first chunk of [start, end) plus a marker
+    for what remains of it."""
     lines = reader.lines(idx)
     ph = _phase_at(reader.entry(idx)["ph"])
     n = len(lines)
-    gap_end = n - _RENDER_TAIL  # tail starts here. Never render past it
     if start is None:
         if n <= _RENDER_CAP:
             return render_rows(idx, 1, lines, phases=ph)[0]
+        gap_end = n - _RENDER_TAIL
         head = render_rows(idx, 1, lines[:_RENDER_HEAD], phases=ph)[0]
         tail = render_rows(idx, gap_end + 1, lines[gap_end:], phases=ph)[0]
-        return head + _chunk_marker(idx, base, _RENDER_HEAD, gap_end) + tail
+        return head + chunk_marker(idx, base, _RENDER_HEAD, gap_end) + tail
     start = max(0, start)
-    end = min(end if end is not None else start + _RENDER_CHUNK, gap_end)
-    rows = render_rows(idx, start + 1, lines[start:end], phases=ph)[0]
-    if end < gap_end:
-        rows += _chunk_marker(idx, base, end, gap_end)
+    end = min(end if end is not None else n, n)
+    chunk_end = min(start + _RENDER_CHUNK, end)
+    rows = render_rows(idx, start + 1, lines[start:chunk_end], phases=ph)[0]
+    if chunk_end < end:
+        rows += chunk_marker(idx, base, chunk_end, end)
     return rows
 
 
@@ -832,8 +840,11 @@ class _LogRoutes:
     ) -> HTMLResponse:
         """One derivation's log as anchored HTML rows. ?start&end pulls a
         bounded slice of the elided middle for the load-more marker."""
-        _, _, path = await self._resolve(request, forge, owner, name, number, attr)
-        reader = await _load_container(path)
+        _, build, path = await self._resolve(request, forge, owner, name, number, attr)
+        capture = self._capture(build, attr)
+        reader: _DrvLines | None = (
+            capture.container if capture is not None else await _load_container(path)
+        )
         if reader is None or not (0 <= idx < len(reader)):
             raise HTTPException(status_code=404)
         base = request.url.path.rsplit("/drv/", 1)[0]
@@ -1043,6 +1054,7 @@ class _LogRoutes:
             toc=toc,
             live=live,
             live_structured=live_structured,
+            live_tail=LIVE_TAIL,
             waiting=waiting,
             unavailable=unavailable,
             prev_number=prev_number,
@@ -1207,6 +1219,10 @@ def _coalesce_lines(deltas: Iterable[dict]) -> list[dict]:
     return out
 
 
+# The live view follows the tail. The finished page has the full log.
+LIVE_TAIL = 5000
+
+
 class _LiveRenderer:
     """Renders card shells (drv_card macro) and rows for the live stream,
     carrying each derivation's trailing SGR style into the next batch."""
@@ -1224,17 +1240,20 @@ class _LiveRenderer:
 
     def state(self, state: list[dict]) -> list[dict]:
         for e in state:
+            lines = e.pop("lines")
+            skipped = max(0, len(lines) - LIVE_TAIL)
             e["html"], self._styles[e["idx"]] = render_rows(
-                e["idx"], 1, e.pop("lines"), phases=_phase_at(e["ph"])
+                e["idx"], skipped + 1, lines[skipped:], phases=_phase_at(e["ph"])
             )
+            if skipped:
+                e["html"] = chunk_marker(e["idx"], self._base, 0, skipped) + e["html"]
             e["card"] = self.card(e)
         return state
 
     def delta(self, delta: dict) -> dict:
         if delta["t"] == "drv":
-            delta["card"] = self.card(
-                {**delta, "status": "running", "n": 0, "ph": [], "t0": None}
-            )
+            delta["status"] = "running"
+            delta["card"] = self.card({**delta, "n": 0, "ph": [], "t0": None})
         elif delta["t"] == "line":
             idx = delta["idx"]
             delta["html"], self._styles[idx] = render_rows(

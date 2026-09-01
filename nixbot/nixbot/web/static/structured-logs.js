@@ -7,10 +7,8 @@
 "use strict";
 
 /**
- * @typedef {{idx:number,status:string,html?:string,card?:string}} Drv
- * @typedef {{t:string,idx:number,status?:string,html?:string,card?:string}} Delta
+ * @typedef {{t?:string,idx:number,status?:string,html?:string,card?:string}} Delta
  */
-
 (() => {
   /** @param {string} id @returns {HTMLElement|null} */
   const $ = (id) => document.getElementById(id);
@@ -21,7 +19,7 @@
     return el;
   };
   const list = must("drv-list");
-  const STREAM = list.dataset.stream; // set only while the build runs
+  const LOG_BASE = list.dataset.base; // set only while the build runs
 
   /** @param {ParentNode} el @param {string} sel @returns {HTMLElement} */
   const pick = (el, sel) => {
@@ -55,11 +53,8 @@
     }
   });
 
-  if (STREAM) return runLive();
+  if (LOG_BASE) return runLive();
 
-  // Track cards whose rows are loaded so a jump fires now or waits.
-  /** @type {WeakSet<HTMLElement>} */
-  const loaded = new WeakSet();
   const succeeded =
     /** @type {HTMLDetailsElement|null} */ ($("succeeded-panel"));
   /** @type {{card:HTMLElement, idx:number, line:number|null}|null} */
@@ -83,7 +78,6 @@
     vp.removeAttribute("aria-busy");
     const card = /** @type {HTMLElement|null} */ (vp.closest(".log-card"));
     if (!card) return;
-    loaded.add(card);
     if (pending && pending.card === card) {
       jump(card, pending.idx, pending.line);
       pending = null;
@@ -101,8 +95,9 @@
     if (!card) return;
     if (succeeded && succeeded.contains(card)) succeeded.open = true;
     card.open = true; // triggers the htmx fetch if not yet loaded
-    if (loaded.has(card)) jump(card, idx, line);
-    else pending = { card, idx, line }; // afterSwap completes the jump
+    if (pick(card, ".log-lines").hasAttribute("aria-busy")) {
+      pending = { card, idx, line }; // afterSwap completes the jump
+    } else jump(card, idx, line);
   }
 
   // Search results are server-rendered. The client only jumps into a
@@ -121,8 +116,8 @@
   // A #d{idx}-L{n} permalink can't scroll on its own: the row is fetched
   // lazily, so on load (and on hashchange) resolve it through openAt.
   function jumpToHash() {
-    const m = /^#d(\d+)-L(\d+)$/.exec(location.hash);
-    if (m) openAt(Number(m[1]), Number(m[2]));
+    const match = /^#d(\d+)-L(\d+)$/.exec(location.hash);
+    if (match) openAt(Number(match[1]), Number(match[2]));
   }
   globalThis.addEventListener("hashchange", jumpToHash);
   // Wait for htmx to wire its toggle triggers (on DOMContentLoaded);
@@ -136,132 +131,131 @@
   // in arrival order, the running one following its tail. The
   // terminal-status reload swaps to the polished container page.
   function runLive() {
-    /** @typedef {{el: HTMLDetailsElement, vp: HTMLElement, status: string}} Card */
+    /** @typedef {{el: HTMLDetailsElement, viewport: HTMLElement}} Card */
     /** @type {Map<number, Card>} */
     const cards = new Map();
+    /** @param {Element|null} el */
+    const processHtmx = (el) =>
+      /** @type {any} */ (globalThis).htmx.process(el);
     /** @param {string} s */
-    const iconState = (s) =>
-      s === "failed" ? "failed" : s === "running" ? "running" : "succeeded";
-
-    // Cards live in the status groups the template renders (Failures /
-    // Building / Succeeded panel), mirroring the finished page.
-    /** @param {string} s @returns {HTMLElement} */
-    const groupFor = (s) =>
-      must(
-        s === "failed"
-          ? "failed-cards"
-          : s === "running"
-          ? "building-cards"
-          : "succeeded-list",
-      );
+    const statusGroup = (s) =>
+      s === "failed" || s === "running" ? s : "succeeded";
+    const groups = [...list.querySelectorAll(".live-group")].map((group) => ({
+      el: /** @type {HTMLElement} */ (group),
+      cards: pick(group, ".group-cards"),
+    }));
 
     function updateGroups() {
-      for (const id of ["failed", "building", "succeeded"]) {
-        const group = must(`group-${id}`);
-        const n = pick(group, ".group-cards").childElementCount;
-        group.hidden = n === 0;
-        for (const c of group.querySelectorAll(".count")) {
-          c.textContent = `${n}`;
+      for (const group of groups) {
+        const n = group.cards.childElementCount;
+        group.el.hidden = n === 0;
+        for (const count of group.el.querySelectorAll(".count")) {
+          count.textContent = `${n}`;
         }
       }
     }
 
-    /** Insert the server-rendered card shell (same drv_card macro as the
-     * finished page).
-     * @param {number} idx @param {string} status @param {string} html */
-    function addCard(idx, status, html) {
-      const target = groupFor(status);
-      target.insertAdjacentHTML("beforeend", html);
-      const el = /** @type {HTMLDetailsElement} */ (target.lastElementChild);
-      const c = { el, vp: pick(el, ".log-lines"), status };
-      cards.set(idx, c);
-      setStatus(c, status);
-      return c;
-    }
-
-    /** @param {Card} c @param {string} status */
-    function setStatus(c, status) {
-      c.status = status;
-      pick(c.el, ".status-icon").className = "status-icon " + iconState(status);
-      c.el.classList.toggle("ok", status !== "failed");
-      pick(c.el, ".meta-status").textContent = status === "running"
+    /** @param {Card} card @param {string} status */
+    function setStatus(card, status) {
+      const group = statusGroup(status);
+      pick(card.el, ".status-icon").className = `status-icon ${group}`;
+      card.el.classList.toggle("ok", group !== "failed");
+      pick(card.el, ".meta-status").textContent = group === "running"
         ? "building…"
         : status;
-      const target = groupFor(status);
-      if (c.el.parentElement !== target) target.appendChild(c.el);
+      const target = groups.find((g) => g.el.dataset.status === group)?.cards;
+      if (target && card.el.parentElement !== target) {
+        target.appendChild(card.el);
+      }
       updateGroups();
     }
 
     // Flushed once per frame: a per-line insert + scrollHeight read is a
     // forced layout per line (Mic92/nixbot#98).
-    /** @type {Map<Card, string[]>} */
+    /** @type {Map<number, string[]>} */
     const pendingRows = new Map();
     let flushScheduled = false;
-    // The finished page has the full log. Live only needs the tail.
-    const MAX_LIVE_ROWS = 5000;
+    const MAX_LIVE_ROWS = Number(list.dataset.tail);
+
+    /** Keep the last MAX_LIVE_ROWS; a marker loads the rest on scroll-up.
+     * @param {number} idx @param {Card} card */
+    function trim(idx, card) {
+      const excess = card.viewport.childElementCount - MAX_LIVE_ROWS;
+      if (excess <= 0) return;
+      const first = card.viewport.children[excess];
+      const lineno = /^d\d+-L(\d+)$/.exec(first.id);
+      if (!lineno) return;
+      const range = document.createRange();
+      range.setStartBefore(/** @type {Node} */ (card.viewport.firstChild));
+      range.setEndBefore(first);
+      range.deleteContents();
+      const hidden = Number(lineno[1]) - 1;
+      card.viewport.insertAdjacentHTML(
+        "afterbegin",
+        `<div class="log-elided" role="separator" hx-get="${LOG_BASE}/drv/${idx}?start=0&end=${hidden}" hx-trigger="intersect once" hx-target="this" hx-swap="outerHTML">loading ${
+          hidden.toLocaleString("en")
+        } hidden lines…</div>`,
+      );
+    }
 
     function flush() {
       flushScheduled = false;
-      for (const [c, chunks] of pendingRows) {
-        // Follow the tail only when already at the bottom, so scrolling up
-        // to read pauses following and scrolling back resumes it.
-        const atBottom =
-          c.vp.scrollHeight - c.vp.scrollTop - c.vp.clientHeight < 40;
-        c.vp.insertAdjacentHTML("beforeend", chunks.join(""));
-        const excess = c.vp.childElementCount - MAX_LIVE_ROWS;
-        if (excess > 0) {
-          const range = document.createRange();
-          range.setStartBefore(/** @type {Node} */ (c.vp.firstChild));
-          range.setEndAfter(/** @type {Node} */ (c.vp.children[excess - 1]));
-          range.deleteContents();
+      for (const [idx, chunks] of pendingRows) {
+        const card = cards.get(idx);
+        if (!card) continue;
+        // Scrolling up pauses following and trimming.
+        const atBottom = card.viewport.scrollHeight - card.viewport.scrollTop -
+            card.viewport.clientHeight < 40;
+        card.viewport.insertAdjacentHTML("beforeend", chunks.join(""));
+        if (atBottom) {
+          trim(idx, card);
+          if (card.el.open) {
+            card.viewport.scrollTop = card.viewport.scrollHeight;
+          }
         }
-        if (c.el.open && atBottom) c.vp.scrollTop = c.vp.scrollHeight;
+        processHtmx(card.viewport);
       }
       pendingRows.clear();
     }
 
-    /** @param {Card|undefined} c @param {string|undefined} html */
-    function addRows(c, html) {
-      if (!c || !html) return;
-      const chunks = pendingRows.get(c);
-      if (chunks) chunks.push(html);
-      else pendingRows.set(c, [html]);
-      if (!flushScheduled) {
-        flushScheduled = true;
-        requestAnimationFrame(flush);
-      }
-    }
-
-    /** @param {Delta} delta */
+    /** A state entry or delta: card shell, status change and/or rows.
+     * @param {Delta} delta */
     function apply(delta) {
-      const c = cards.get(delta.idx);
-      if (delta.t === "drv") {
-        addCard(delta.idx, "running", delta.card ?? "");
-      } else if (delta.t === "line") {
-        addRows(c, delta.html);
-      } else if (delta.t === "status" && c && delta.status) {
-        flush();
-        setStatus(c, delta.status);
-        if (delta.status !== "running") c.el.open = delta.status === "failed";
+      let card = cards.get(delta.idx);
+      if (!card && delta.card) {
+        list.insertAdjacentHTML("beforeend", delta.card);
+        const el = /** @type {HTMLDetailsElement} */ (list.lastElementChild);
+        card = { el, viewport: pick(el, ".log-lines") };
+        cards.set(delta.idx, card);
       }
-    }
-
-    /** @param {Drv[]} state */
-    function reset(state) {
-      for (const c of cards.values()) c.el.remove();
-      cards.clear();
-      pendingRows.clear();
-      updateGroups();
-      for (const e of state) {
-        addRows(addCard(e.idx, e.status, e.card ?? ""), e.html);
+      if (!card) return;
+      if (delta.status) {
+        flush();
+        setStatus(card, delta.status);
+        if (delta.t === "status" && delta.status !== "running") {
+          card.el.open = delta.status === "failed";
+        }
+      }
+      if (delta.html) {
+        const chunks = pendingRows.get(delta.idx);
+        if (chunks) chunks.push(delta.html);
+        else pendingRows.set(delta.idx, [delta.html]);
+        if (!flushScheduled) {
+          flushScheduled = true;
+          requestAnimationFrame(flush);
+        }
       }
     }
 
     let errors = 0;
-    const src = new EventSource(/** @type {string} */ (STREAM));
+    const src = new EventSource(`${LOG_BASE}/stream?format=structured`);
     src.addEventListener("state", (ev) => {
       errors = 0;
-      reset(JSON.parse(ev.data));
+      for (const card of cards.values()) card.el.remove();
+      cards.clear();
+      pendingRows.clear();
+      updateGroups();
+      for (const delta of JSON.parse(ev.data)) apply(delta);
     });
     src.addEventListener("delta", (ev) => apply(JSON.parse(ev.data)));
     src.addEventListener("done", () => src.close());
