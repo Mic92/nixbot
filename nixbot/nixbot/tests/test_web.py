@@ -174,6 +174,9 @@ def test_build_page(client: WebHarness) -> None:
     assert "x86_64-linux.ok" not in text
     assert "2 succeeded" in text
     assert "attrs?group=succeeded" in text
+    assert "· took " in text
+    # Build 3 is still building: its duration is not final.
+    assert "running for" in client.get("/repos/github/acme/widget/builds/3").text
     # Groups scroll internally so the summaries below stay reachable.
     assert text.count('class="attr-scroll"') >= 2
     # Search queries the server, not just the loaded rows.

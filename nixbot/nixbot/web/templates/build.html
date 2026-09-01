@@ -54,7 +54,7 @@
             · commit {{ commit_link(project, build.commit_sha) }}
             · <time datetime="{{ build.created_at.isoformat() }}"
        title="{{ build.created_at }}">{{ build.created_at | timeago }}</time>
-            · took {{ build | duration }}
+            · {{ "running for" if build.status in RUNNING_STATUSES else "took" }} {{ build | duration }}
           </p>
         </div>
         <div class="controls">
