@@ -19,7 +19,7 @@
     return el;
   };
   const list = must("drv-list");
-  const BASE = list.dataset.base; // set only while the build runs
+  const LOG_BASE = list.dataset.base; // set only while the build runs
 
   /** @param {ParentNode} el @param {string} sel @returns {HTMLElement} */
   const pick = (el, sel) => {
@@ -53,7 +53,7 @@
     }
   });
 
-  if (BASE) return runLive();
+  if (LOG_BASE) return runLive();
 
   const succeeded =
     /** @type {HTMLDetailsElement|null} */ ($("succeeded-panel"));
@@ -116,8 +116,8 @@
   // A #d{idx}-L{n} permalink can't scroll on its own: the row is fetched
   // lazily, so on load (and on hashchange) resolve it through openAt.
   function jumpToHash() {
-    const m = /^#d(\d+)-L(\d+)$/.exec(location.hash);
-    if (m) openAt(Number(m[1]), Number(m[2]));
+    const match = /^#d(\d+)-L(\d+)$/.exec(location.hash);
+    if (match) openAt(Number(match[1]), Number(match[2]));
   }
   globalThis.addEventListener("hashchange", jumpToHash);
   // Wait for htmx to wire its toggle triggers (on DOMContentLoaded);
@@ -131,36 +131,42 @@
   // in arrival order, the running one following its tail. The
   // terminal-status reload swaps to the polished container page.
   function runLive() {
-    /** @typedef {{el: HTMLDetailsElement, vp: HTMLElement}} Card */
+    /** @typedef {{el: HTMLDetailsElement, viewport: HTMLElement}} Card */
     /** @type {Map<number, Card>} */
     const cards = new Map();
     /** @param {Element|null} el */
-    const hx = (el) => /** @type {any} */ (globalThis).htmx.process(el);
+    const processHtmx = (el) =>
+      /** @type {any} */ (globalThis).htmx.process(el);
     /** @param {string} s */
-    const kind = (s) => s === "failed" || s === "running" ? s : "succeeded";
-    const groups = [...list.querySelectorAll(".live-group")].map((g) => ({
-      el: /** @type {HTMLElement} */ (g),
-      cards: pick(g, ".group-cards"),
+    const statusGroup = (s) =>
+      s === "failed" || s === "running" ? s : "succeeded";
+    const groups = [...list.querySelectorAll(".live-group")].map((group) => ({
+      el: /** @type {HTMLElement} */ (group),
+      cards: pick(group, ".group-cards"),
     }));
 
     function updateGroups() {
-      for (const g of groups) {
-        const n = g.cards.childElementCount;
-        g.el.hidden = n === 0;
-        for (const c of g.el.querySelectorAll(".count")) c.textContent = `${n}`;
+      for (const group of groups) {
+        const n = group.cards.childElementCount;
+        group.el.hidden = n === 0;
+        for (const count of group.el.querySelectorAll(".count")) {
+          count.textContent = `${n}`;
+        }
       }
     }
 
-    /** @param {Card} c @param {string} status */
-    function setStatus(c, status) {
-      const k = kind(status);
-      pick(c.el, ".status-icon").className = `status-icon ${k}`;
-      c.el.classList.toggle("ok", k !== "failed");
-      pick(c.el, ".meta-status").textContent = k === "running"
+    /** @param {Card} card @param {string} status */
+    function setStatus(card, status) {
+      const group = statusGroup(status);
+      pick(card.el, ".status-icon").className = `status-icon ${group}`;
+      card.el.classList.toggle("ok", group !== "failed");
+      pick(card.el, ".meta-status").textContent = group === "running"
         ? "building…"
         : status;
-      const g = groups.find((g) => g.el.dataset.status === k);
-      if (g && c.el.parentElement !== g.cards) g.cards.appendChild(c.el);
+      const target = groups.find((g) => g.el.dataset.status === group)?.cards;
+      if (target && card.el.parentElement !== target) {
+        target.appendChild(card.el);
+      }
       updateGroups();
     }
 
@@ -172,21 +178,21 @@
     const MAX_LIVE_ROWS = Number(list.dataset.tail);
 
     /** Keep the last MAX_LIVE_ROWS; a marker loads the rest on scroll-up.
-     * @param {number} idx @param {Card} c */
-    function trim(idx, c) {
-      const excess = c.vp.childElementCount - MAX_LIVE_ROWS;
+     * @param {number} idx @param {Card} card */
+    function trim(idx, card) {
+      const excess = card.viewport.childElementCount - MAX_LIVE_ROWS;
       if (excess <= 0) return;
-      const first = c.vp.children[excess];
-      const m = /^d\d+-L(\d+)$/.exec(first.id);
-      if (!m) return;
+      const first = card.viewport.children[excess];
+      const lineno = /^d\d+-L(\d+)$/.exec(first.id);
+      if (!lineno) return;
       const range = document.createRange();
-      range.setStartBefore(/** @type {Node} */ (c.vp.firstChild));
+      range.setStartBefore(/** @type {Node} */ (card.viewport.firstChild));
       range.setEndBefore(first);
       range.deleteContents();
-      const hidden = Number(m[1]) - 1;
-      c.vp.insertAdjacentHTML(
+      const hidden = Number(lineno[1]) - 1;
+      card.viewport.insertAdjacentHTML(
         "afterbegin",
-        `<div class="log-elided" role="separator" hx-get="${BASE}/drv/${idx}?start=0&end=${hidden}" hx-trigger="intersect once" hx-target="this" hx-swap="outerHTML">loading ${
+        `<div class="log-elided" role="separator" hx-get="${LOG_BASE}/drv/${idx}?start=0&end=${hidden}" hx-trigger="intersect once" hx-target="this" hx-swap="outerHTML">loading ${
           hidden.toLocaleString("en")
         } hidden lines…</div>`,
       );
@@ -195,43 +201,45 @@
     function flush() {
       flushScheduled = false;
       for (const [idx, chunks] of pendingRows) {
-        const c = cards.get(idx);
-        if (!c) continue;
+        const card = cards.get(idx);
+        if (!card) continue;
         // Scrolling up pauses following and trimming.
-        const atBottom =
-          c.vp.scrollHeight - c.vp.scrollTop - c.vp.clientHeight < 40;
-        c.vp.insertAdjacentHTML("beforeend", chunks.join(""));
+        const atBottom = card.viewport.scrollHeight - card.viewport.scrollTop -
+            card.viewport.clientHeight < 40;
+        card.viewport.insertAdjacentHTML("beforeend", chunks.join(""));
         if (atBottom) {
-          trim(idx, c);
-          if (c.el.open) c.vp.scrollTop = c.vp.scrollHeight;
+          trim(idx, card);
+          if (card.el.open) {
+            card.viewport.scrollTop = card.viewport.scrollHeight;
+          }
         }
-        hx(c.vp);
+        processHtmx(card.viewport);
       }
       pendingRows.clear();
     }
 
     /** A state entry or delta: card shell, status change and/or rows.
-     * @param {Delta} d */
-    function apply(d) {
-      let c = cards.get(d.idx);
-      if (!c && d.card) {
-        list.insertAdjacentHTML("beforeend", d.card);
+     * @param {Delta} delta */
+    function apply(delta) {
+      let card = cards.get(delta.idx);
+      if (!card && delta.card) {
+        list.insertAdjacentHTML("beforeend", delta.card);
         const el = /** @type {HTMLDetailsElement} */ (list.lastElementChild);
-        c = { el, vp: pick(el, ".log-lines") };
-        cards.set(d.idx, c);
+        card = { el, viewport: pick(el, ".log-lines") };
+        cards.set(delta.idx, card);
       }
-      if (!c) return;
-      if (d.status) {
+      if (!card) return;
+      if (delta.status) {
         flush();
-        setStatus(c, d.status);
-        if (d.t === "status" && d.status !== "running") {
-          c.el.open = d.status === "failed";
+        setStatus(card, delta.status);
+        if (delta.t === "status" && delta.status !== "running") {
+          card.el.open = delta.status === "failed";
         }
       }
-      if (d.html) {
-        const chunks = pendingRows.get(d.idx);
-        if (chunks) chunks.push(d.html);
-        else pendingRows.set(d.idx, [d.html]);
+      if (delta.html) {
+        const chunks = pendingRows.get(delta.idx);
+        if (chunks) chunks.push(delta.html);
+        else pendingRows.set(delta.idx, [delta.html]);
         if (!flushScheduled) {
           flushScheduled = true;
           requestAnimationFrame(flush);
@@ -240,14 +248,14 @@
     }
 
     let errors = 0;
-    const src = new EventSource(`${BASE}/stream?format=structured`);
+    const src = new EventSource(`${LOG_BASE}/stream?format=structured`);
     src.addEventListener("state", (ev) => {
       errors = 0;
-      for (const c of cards.values()) c.el.remove();
+      for (const card of cards.values()) card.el.remove();
       cards.clear();
       pendingRows.clear();
       updateGroups();
-      for (const d of JSON.parse(ev.data)) apply(d);
+      for (const delta of JSON.parse(ev.data)) apply(delta);
     });
     src.addEventListener("delta", (ev) => apply(JSON.parse(ev.data)));
     src.addEventListener("done", () => src.close());
