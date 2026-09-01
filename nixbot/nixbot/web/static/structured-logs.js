@@ -72,7 +72,7 @@
     el?.scrollIntoView({ block: "center" });
   }
 
-  document.body.addEventListener("htmx:afterSwap", (e) => {
+  document.body.addEventListener("htmx:after:settle", (e) => {
     const vp = /** @type {HTMLElement} */ (e.target);
     if (!vp.classList?.contains("log-lines")) return;
     vp.removeAttribute("aria-busy");

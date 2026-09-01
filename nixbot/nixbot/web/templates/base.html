@@ -6,6 +6,7 @@
     <meta name="description"
           content="nixbot: continuous integration for Nix projects">
     <meta name="keywords" content="nix, ci, builds, nixbot">
+    <meta name="htmx-config" content='{"noSwap":[204,304,"4xx","5xx"]}'>
     <title>
       {% block title %}
         nixbot
@@ -77,8 +78,7 @@
       <a href="https://github.com/Mic92/nixbot" target="_blank" rel="noopener">github.com/Mic92/nixbot</a>
     </footer>
     <script src="/static/vendor/htmx.min.js?v={{ static_v }}"></script>
-    <script src="/static/vendor/sse.min.js?v={{ static_v }}"></script>
-    <script src="/static/vendor/idiomorph-ext.min.js?v={{ static_v }}"></script>
+    <script src="/static/vendor/hx-sse.min.js?v={{ static_v }}"></script>
     <script>
       document.body.addEventListener("click", async (e) => {
         const btn = e.target.closest?.(".copy-btn");
@@ -102,23 +102,21 @@
         if (li) li.classList.toggle("expanded");
       });
       const groupState = new Map();
-      document.body.addEventListener("toggle", (e) => {
-        const g = e.target.closest?.("details.attr-group");
-        if (g) groupState.set(g.dataset.group, g.open);
-      }, true);
-      document.body.addEventListener("htmx:afterSwap", (e) => {
+      /* click, not toggle: htmx's settle phase strips and restores
+         attributes on swapped-in elements, which fires toggle too. */
+      document.body.addEventListener("click", (e) => {
+        const g = e.target.closest?.("details.attr-group > summary")?.parentElement;
+        if (g) groupState.set(g.dataset.group, !g.open);
+      });
+      document.body.addEventListener("htmx:after:settle", (e) => {
         for (const g of document.querySelectorAll("details.attr-group")) {
           const saved = groupState.get(g.dataset.group);
           if (saved !== undefined) g.open = saved;
-          /* idiomorph swaps in the lazy placeholder without htmx
-             processing. Without this the intersect trigger never
-             arms and the group stays on "loading". */
-          htmx.process(g);
         }
         /* SSE morphs render the unfiltered groups. Refire an active
            search. Guarded on #main so the search swap can't loop. */
         const filter = document.querySelector("#attr-filter");
-        if (e.detail.target.id === "main" && filter?.value) {
+        if (e.target.id === "main" && filter?.value) {
           htmx.trigger(filter, "search");
         }
       });
