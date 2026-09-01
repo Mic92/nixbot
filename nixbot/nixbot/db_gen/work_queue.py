@@ -68,8 +68,8 @@ WHERE id = (
                    AND (r.created_at, r.id) < (w.created_at, w.id)))
       )
       AND NOT (w.kind = 'effect' AND EXISTS (
-        SELECT 1 FROM build_effects e
-        JOIN build_effects d ON d.build_id = e.build_id
+        SELECT 1 FROM effect_runs e
+        JOIN effect_runs d ON d.build_id = e.build_id
             AND d.name IN (SELECT jsonb_array_elements_text(e.deps))
         WHERE e.build_id = (w.payload->>'build_id')::bigint
           AND e.name = w.payload->>'name'

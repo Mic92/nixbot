@@ -65,10 +65,9 @@ RECENT_BUFFER_SIZE = 4096
 FRAME_FLUSH_THRESHOLD = 64 * 1024
 
 
-# Log path is derived from (build_id, name), not stored. Names come from
-# untrusted flakes: percent-encode so a log cannot escape its build
-# directory, and keep effects in a subdirectory so an attribute named
-# "effect-X" cannot collide with an effect log.
+# Log path is derived, not stored. Attribute names come from untrusted
+# flakes: percent-encode so a log cannot escape its build directory.
+# Effect runs of every kind are keyed by their row id.
 
 
 def build_log_dir(state_dir: Path, build_id: int) -> Path:
@@ -79,18 +78,8 @@ def attribute_log_path(state_dir: Path, build_id: int, attr: str) -> Path:
     return build_log_dir(state_dir, build_id) / f"{quote(attr, safe='')}.zst"
 
 
-def effect_log_path(state_dir: Path, build_id: int, name: str) -> Path:
-    return (
-        build_log_dir(state_dir, build_id) / "effects" / f"{quote(name, safe='')}.zst"
-    )
-
-
-def log_path_for_key(state_dir: Path, build_id: int, key: str) -> Path:
-    """Path for a log-registry key: "effect:<name>" for effects, the
-    attribute name otherwise."""
-    if key.startswith("effect:"):
-        return effect_log_path(state_dir, build_id, key.removeprefix("effect:"))
-    return attribute_log_path(state_dir, build_id, key)
+def effect_run_log_path(state_dir: Path, run_id: int) -> Path:
+    return state_dir / "logs" / "effects" / f"{run_id}.zst"
 
 
 async def iter_lines(

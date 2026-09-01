@@ -50,8 +50,8 @@ async def postgres_dsn(postgres_dsn: str) -> str:
             failed,
         )
         await pool.execute(
-            "INSERT INTO build_effects (build_id, name, status) "
-            "VALUES ($1, 'deploy', 'failed')",
+            "INSERT INTO effect_runs (project_id, kind, build_id, name, status) "
+            "VALUES ((SELECT project_id FROM builds WHERE id = $1), 'push', $1, 'deploy', 'failed')",
             failed,
         )
     return postgres_dsn

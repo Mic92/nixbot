@@ -247,18 +247,26 @@ class ScheduledEffectsStore:
                 self.pool,
                 project_id=due.project_id,
                 schedule_name=due.schedule_name,
-                effect=due.effect,
+                name=due.effect,
             )
         )
 
     async def finish_run(
-        self, run_id: int, *, success: bool, error: str | None = None
+        self,
+        run_id: int,
+        *,
+        success: bool,
+        error: str | None = None,
+        log_size: int = 0,
+        log_truncated: bool = False,
     ) -> None:
         await q.finish_scheduled_run(
             self.pool,
             id_=run_id,
             status="succeeded" if success else "failed",
             error=error,
+            log_size=log_size,
+            log_truncated=log_truncated,
         )
 
     async def latest_runs_for_project(self, project_id: int) -> list[dict]:

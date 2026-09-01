@@ -402,9 +402,15 @@ class WebHarness:
         url: str,
         user: User | None = None,
         headers: dict[str, str] | None = None,
+        *,
+        follow_redirects: bool = False,
     ) -> httpx.Response:
         request_headers = cookie_header(self._cookies(user)) | (headers or {})
-        return self.run(self.http.get(url, headers=request_headers))
+        return self.run(
+            self.http.get(
+                url, headers=request_headers, follow_redirects=follow_redirects
+            )
+        )
 
     def post(
         self,

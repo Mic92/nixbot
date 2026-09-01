@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 
 from .effects import EffectsContext, effects_context, run_scheduled_effect
 from .effects_run import effect_checkout
-from .executor import LogWriter
+from .executor import failure_excerpt
 from .repos import repo_info
 from .schedules import (
     DueEffect,
@@ -25,6 +25,7 @@ from .workload_identity import EffectIdentity
 
 if TYPE_CHECKING:
     from .events import RepoInfo
+    from .executor import LogWriter
     from .service import CIService
 
 logger = logging.getLogger(__name__)
@@ -116,18 +117,26 @@ async def run_scheduled(
     # Manual runs pre-create the row. The sweep loop does not.
     if run_id is None:
         run_id = await store.start_run(due)
-    try:
-        success = await _run_scheduled_inner(s, due, info, run_id)
-        await store.finish_run(run_id, success=success)
-    except Exception as e:
-        # Spawned task: an exception would only surface as "Task
-        # exception was never retrieved" and leave the row running.
-        logger.exception("scheduled effect crashed", extra={"run_id": run_id})
-        await store.finish_run(run_id, success=False, error=str(e))
+    async with s.orchestrator.open_effect_log(run_id) as log:
+        try:
+            success = await _run_scheduled_inner(s, due, info, log)
+            error = None if success else (failure_excerpt(log.tail_lines()) or None)
+        except Exception as e:
+            # Spawned task: an exception would only surface as "Task
+            # exception was never retrieved" and leave the row running.
+            logger.exception("scheduled effect crashed", extra={"run_id": run_id})
+            success, error = False, str(e)
+    await store.finish_run(
+        run_id,
+        success=success,
+        error=error,
+        log_size=log.bytes_seen,
+        log_truncated=log.truncated,
+    )
 
 
 async def _run_scheduled_inner(
-    s: CIService, due: DueEffect, info: RepoInfo, run_id: int
+    s: CIService, due: DueEffect, info: RepoInfo, log: LogWriter
 ) -> bool:
     credentials = await s.credentials_provider(info.forge).get(info.clone_url)
     await s.orchestrator.repos.fetch(
@@ -150,14 +159,6 @@ async def _run_scheduled_inner(
             schedule=due.schedule_name,
         ),
     )
-    log_dir = s.config.state_dir / "logs" / "scheduled"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log = LogWriter(
-        path=log_dir / f"{run_id}.zst",
-        size_limit=s.config.log_size_limit,
-    )
-    # Shared registry so the web SSE route can stream this run live.
-    s.orchestrator.log_registry.register_scheduled(run_id, log)
     try:
         rev = await worktree.rev_parse("HEAD")
         async with effect_checkout(
@@ -181,6 +182,4 @@ async def _run_scheduled_inner(
             )
     finally:
         s.orchestrator.task_tokens.revoke(task_token)
-        await log.close()
-        s.orchestrator.log_registry.unregister_scheduled(run_id)
         await s.orchestrator.repos.remove_worktree(worktree)

@@ -176,10 +176,10 @@ UPDATE builds SET eval_warnings = $2::jsonb WHERE id = $1
 
 SET_BUILD_STATUS: typing.Final[str] = """-- name: SetBuildStatus :exec
 WITH failed_effects AS (
-    UPDATE build_effects SET status = 'failed',
+    UPDATE effect_runs SET status = 'failed',
         error = 'build did not succeed', finished_at = now()
-    WHERE build_effects.build_id = $4::bigint
-      AND build_effects.status = 'pending'
+    WHERE effect_runs.build_id = $4::bigint
+      AND effect_runs.status = 'pending'
       AND $1::text IN ('failed', 'cancelled')
 )
 UPDATE builds
@@ -290,40 +290,46 @@ WHERE NOT $14::boolean
     OR build_attributes.status IN ('pending', 'building')
 """
 
-START_EFFECT: typing.Final[str] = """-- name: StartEffect :exec
-INSERT INTO build_effects (build_id, name, status) VALUES ($1, $2, $3)
-ON CONFLICT (build_id, name) DO UPDATE SET
-    status = $3, error = NULL, log_size = 0,
+START_EFFECT: typing.Final[str] = """-- name: StartEffect :one
+INSERT INTO effect_runs (project_id, kind, build_id, name, status)
+SELECT b.project_id, 'push', b.id, $1::text, $2::text
+FROM builds b WHERE b.id = $3::bigint
+ON CONFLICT (build_id, kind, name) DO UPDATE SET
+    status = EXCLUDED.status, error = NULL, log_size = 0,
     log_truncated = FALSE, started_at = now(), finished_at = NULL
+RETURNING id
 """
 
 START_PENDING_EFFECTS: typing.Final[str] = """-- name: StartPendingEffects :exec
-INSERT INTO build_effects (build_id, name, status, deps)
-SELECT $1::bigint, u.name, 'pending', u.deps::jsonb
-FROM (SELECT unnest($2::text[]) AS name,
-             unnest($3::text[]) AS deps) AS u
-ON CONFLICT (build_id, name) DO UPDATE SET
+INSERT INTO effect_runs (project_id, kind, build_id, name, status, deps)
+SELECT b.project_id, 'push', b.id, u.name, 'pending', u.deps::jsonb
+FROM builds b,
+     (SELECT unnest($1::text[]) AS name,
+             unnest($2::text[]) AS deps) AS u
+WHERE b.id = $3::bigint
+ON CONFLICT (build_id, kind, name) DO UPDATE SET
     status = 'pending', error = NULL, log_size = 0,
     log_truncated = FALSE, started_at = now(), finished_at = NULL,
     deps = EXCLUDED.deps
 """
 
 RECORD_SKIPPED_EFFECTS: typing.Final[str] = """-- name: RecordSkippedEffects :exec
-INSERT INTO build_effects (build_id, name, status, finished_at)
-SELECT $1::bigint, u.name, 'skipped', now()
-FROM unnest($2::text[]) AS u(name)
-ON CONFLICT (build_id, name) DO NOTHING
+INSERT INTO effect_runs (project_id, kind, build_id, name, status, finished_at)
+SELECT b.project_id, 'push', b.id, u.name, 'skipped', now()
+FROM builds b, unnest($1::text[]) AS u(name)
+WHERE b.id = $2::bigint
+ON CONFLICT (build_id, kind, name) DO NOTHING
 """
 
 EFFECT_DEP_STATUSES: typing.Final[str] = """-- name: EffectDepStatuses :many
-SELECT d.name, d.status FROM build_effects e
-JOIN build_effects d ON d.build_id = e.build_id
+SELECT d.name, d.status FROM effect_runs e
+JOIN effect_runs d ON d.build_id = e.build_id
     AND d.name IN (SELECT jsonb_array_elements_text(e.deps))
 WHERE e.build_id = $1 AND e.name = $2
 """
 
 FINISH_EFFECT: typing.Final[str] = """-- name: FinishEffect :exec
-UPDATE build_effects SET
+UPDATE effect_runs SET
     status = $3, error = $6,
     log_size = $4, log_truncated = $5, finished_at = now()
 WHERE build_id = $1 AND name = $2
@@ -342,12 +348,12 @@ SELECT
         WHEN bool_or(status = 'succeeded') THEN 'succeeded'
         ELSE 'skipped'
     END::text AS status
-FROM build_effects WHERE build_id = $1
+FROM effect_runs WHERE build_id = $1
 HAVING count(*) > 0
 """
 
 EFFECTS_FOR_BUILD: typing.Final[str] = """-- name: EffectsForBuild :many
-SELECT id, build_id, name, status, error, log_size, log_truncated, started_at, finished_at, deps FROM build_effects WHERE build_id = $1 ORDER BY name
+SELECT id, project_id, kind, build_id, schedule_name, name, status, error, deps, log_size, log_truncated, started_at, finished_at FROM effect_runs WHERE build_id = $1 ORDER BY name
 """
 
 ATTRIBUTE_STATUSES: typing.Final[str] = """-- name: AttributeStatuses :many
@@ -697,39 +703,42 @@ async def complete_attribute(
     await conn.execute(COMPLETE_ATTRIBUTE, build_id, attr, system, drv_path, status, error, cached, outputs, log_size, log_truncated, eval_warnings, eval_wall_ms, eval_alloc_bytes, if_unfinished)
 
 
-async def start_effect(conn: ConnectionLike, *, build_id: int, name: str, status: str) -> None:
-    await conn.execute(START_EFFECT, build_id, name, status)
+async def start_effect(conn: ConnectionLike, *, name: str, status: str, build_id: int) -> int | None:
+    row = await conn.fetchrow(START_EFFECT, name, status, build_id)
+    if row is None:
+        return None
+    return row[0]
 
 
-async def start_pending_effects(conn: ConnectionLike, *, build_id: int, names: collections.abc.Sequence[str], deps: collections.abc.Sequence[str]) -> None:
-    await conn.execute(START_PENDING_EFFECTS, build_id, names, deps)
+async def start_pending_effects(conn: ConnectionLike, *, names: collections.abc.Sequence[str], deps: collections.abc.Sequence[str], build_id: int) -> None:
+    await conn.execute(START_PENDING_EFFECTS, names, deps, build_id)
 
 
-async def record_skipped_effects(conn: ConnectionLike, *, build_id: int, names: collections.abc.Sequence[str]) -> None:
-    await conn.execute(RECORD_SKIPPED_EFFECTS, build_id, names)
+async def record_skipped_effects(conn: ConnectionLike, *, names: collections.abc.Sequence[str], build_id: int) -> None:
+    await conn.execute(RECORD_SKIPPED_EFFECTS, names, build_id)
 
 
-def effect_dep_statuses(conn: ConnectionLike, *, build_id: int, name: str) -> QueryResults[EffectDepStatusesRow]:
+def effect_dep_statuses(conn: ConnectionLike, *, build_id: int | None, name: str) -> QueryResults[EffectDepStatusesRow]:
     def _decode_hook(row: asyncpg.Record) -> EffectDepStatusesRow:
         return EffectDepStatusesRow(name=row[0], status=row[1])
 
     return QueryResults(conn, EFFECT_DEP_STATUSES, _decode_hook, build_id, name)
 
 
-async def finish_effect(conn: ConnectionLike, *, build_id: int, name: str, status: str, log_size: int, log_truncated: bool, error: str | None) -> None:
+async def finish_effect(conn: ConnectionLike, *, build_id: int | None, name: str, status: str, log_size: int, log_truncated: bool, error: str | None) -> None:
     await conn.execute(FINISH_EFFECT, build_id, name, status, log_size, log_truncated, error)
 
 
-async def effects_summary(conn: ConnectionLike, *, build_id: int) -> EffectsSummaryRow | None:
+async def effects_summary(conn: ConnectionLike, *, build_id: int | None) -> EffectsSummaryRow | None:
     row = await conn.fetchrow(EFFECTS_SUMMARY, build_id)
     if row is None:
         return None
     return EffectsSummaryRow(failed=row[0], succeeded=row[1], status=row[2])
 
 
-def effects_for_build(conn: ConnectionLike, *, build_id: int) -> QueryResults[models.BuildEffect]:
-    def _decode_hook(row: asyncpg.Record) -> models.BuildEffect:
-        return models.BuildEffect(id_=row[0], build_id=row[1], name=row[2], status=row[3], error=row[4], log_size=row[5], log_truncated=row[6], started_at=row[7], finished_at=row[8], deps=row[9])
+def effects_for_build(conn: ConnectionLike, *, build_id: int | None) -> QueryResults[models.EffectRun]:
+    def _decode_hook(row: asyncpg.Record) -> models.EffectRun:
+        return models.EffectRun(id_=row[0], project_id=row[1], kind=row[2], build_id=row[3], schedule_name=row[4], name=row[5], status=row[6], error=row[7], deps=row[8], log_size=row[9], log_truncated=row[10], started_at=row[11], finished_at=row[12])
 
     return QueryResults(conn, EFFECTS_FOR_BUILD, _decode_hook, build_id)
 

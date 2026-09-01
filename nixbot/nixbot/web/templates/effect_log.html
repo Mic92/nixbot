@@ -1,7 +1,11 @@
 {% extends "base.html" %}
 {% from "_macros.html" import status_icon %}
-{% set label = run.schedule_name if run.schedule_name == run.effect else run.schedule_name ~ " · " ~ run.effect %}
-{% set history_url = repo_path(project) ~ "/schedules/runs?schedule=" ~ (run.schedule_name | urlencode) ~ "&effect=" ~ (run.effect | urlencode) %}
+{% if run.kind == "schedule" %}
+  {% set label = run.schedule_name if run.schedule_name == run.effect else run.schedule_name ~ " · " ~ run.effect %}
+{% else %}
+  {% set label = run.effect %}
+{% endif %}
+{% set run_url = repo_path(project) ~ "/effects/runs/" ~ run.id %}
 {% block title %}
   {{ label }} run
 {% endblock title %}
@@ -13,13 +17,29 @@
           {{ status_icon(run.status) }}
           <code>{{ label }}</code>
           <small>
-            run #{{ run.id }}
-            · <a href="{{ repo_path(project) }}/schedules/runs/{{ run.id }}.txt">raw</a>
-            · <a href="{{ history_url }}">history</a>
+            {% if build %}
+              effect of <a href="{{ build_path(project, build.number) }}">build #{{ build.number }}</a>
+            {% else %}
+              run #{{ run.id }}
+            {% endif %}
+            · <a href="{{ run_url }}.txt">raw</a>
+            {% if run.kind == "schedule" %}
+              {% set history_url = repo_path(project) ~ "/schedules/runs?schedule=" ~ (run.schedule_name | urlencode) ~ "&effect=" ~ (run.effect | urlencode) %}
+              · <a href="{{ history_url }}">history</a>
+            {% endif %}
             · <a href="{{ repo_path(project) }}">{{ project.owner }}/{{ project.name }}</a>
           </small>
         </h2>
+        <div class="controls">
+          {% if build and can_control and build.status == "succeeded" and run.status not in ("pending", "running") %}
+            <form method="post"
+                  action="{{ build_path(project, build.number) }}/effects/restart?name={{ run.effect | urlencode }}">
+              <button>restart</button>
+            </form>
+          {% endif %}
+        </div>
       </div>
+      {% if run.error %}<pre class="error">{{ run.error }}</pre>{% endif %}
       {% if live %}
         <label>
           <input type="checkbox" id="follow" checked>
@@ -46,23 +66,22 @@
     /* Started but no writer/log yet: reload until it appears, since the
        running->running INSERT raised no further event to react to. */
     if (WAITING) setTimeout(() => location.reload(), 2000);
-    /* Status changes for this run (INSERT running / terminal UPDATE)
-       arrive on the shared events channel. Reload to re-render the
-       header dot and, once finished, the server-side static log. */
+    /* Status changes for this run arrive on the shared events channel.
+       Reload to re-render the header dot and, once finished, the
+       server-side static log. */
     const events = new EventSource("/events?project={{ project.id }}");
     events.addEventListener("status", (ev) => {
       let e;
       try { e = JSON.parse(ev.data); } catch { return; }
       if (e.run_id !== RUN_ID) return;
-      if (!LIVE || !["running"].includes(e.status)) location.reload();
+      if (!LIVE || e.status !== "running") location.reload();
     });
     if (LIVE) {
       const follow = document.getElementById("follow");
       const atBottom = () =>
         log.scrollHeight - log.scrollTop - log.clientHeight < 4;
       log.addEventListener("scroll", () => { follow.checked = atBottom(); });
-      const source = new EventSource(
-        "{{ repo_path(project) }}/schedules/runs/{{ run.id }}/stream");
+      const source = new EventSource("{{ run_url }}/stream");
       let errors = 0;
       source.onopen = () => { errors = 0; log.textContent = ""; };
       source.onerror = () => {

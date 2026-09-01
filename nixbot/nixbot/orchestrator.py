@@ -34,6 +34,7 @@ from .canceller import (
     has_skip_ci_marker,
 )
 from .db import BuildStatus
+from .db_gen import maintenance as q
 from .effects_state import TaskTokens
 from .events import (
     BuildResult,
@@ -47,8 +48,7 @@ from .executor import (
     LogWriter,
     attribute_log_path,
     build_log_dir,
-    effect_log_path,
-    log_path_for_key,
+    effect_run_log_path,
 )
 from .gitrepo import MergeConflictError, pr_refspec
 from .repo_config import CONFIG_FILENAMES
@@ -165,28 +165,28 @@ class Orchestrator:
     def _log_dir(self, build_id: int) -> Path:
         return build_log_dir(self.config.state_dir, build_id)
 
-    def reset_build_logs(self, build_id: int, attr: str | None) -> None:
+    async def reset_build_logs(self, build_id: int, attr: str | None) -> None:
         """Drop the previous run's log files when a build is reset to
         pending. A full restart (attr None) also re-runs effects, so it
-        clears the whole build log directory. A single-attribute restart
-        removes only that attribute's log."""
+        clears the whole build log directory and the effect logs. A
+        single-attribute restart removes only that attribute's log."""
         if attr is None:
             shutil.rmtree(self._log_dir(build_id), ignore_errors=True)
+            await self.reset_effect_logs(build_id)
         else:
             attribute_log_path(self.config.state_dir, build_id, attr).unlink(
                 missing_ok=True
             )
 
-    def reset_effect_logs(self, build_id: int, names: list[str] | None = None) -> None:
+    async def reset_effect_logs(
+        self, build_id: int, names: list[str] | None = None
+    ) -> None:
         """Drop effect log files when a build's effects are reset.
         `names` limits the cleanup to those effects."""
-        if names is None:
-            shutil.rmtree(self._log_dir(build_id) / "effects", ignore_errors=True)
-            return
-        for name in names:
-            effect_log_path(self.config.state_dir, build_id, name).unlink(
-                missing_ok=True
-            )
+        for run_id in await q.build_effect_run_ids(
+            self.pool, build_id=build_id, names=names
+        ):
+            effect_run_log_path(self.config.state_dir, run_id).unlink(missing_ok=True)
 
     def gcroots_dir(self, build: BuildRecord) -> Path:
         return self.config.state_dir / "eval-gcroots" / str(build.id_)
@@ -460,17 +460,29 @@ class Orchestrator:
         await effects_run.post_effects_summary(self, event, build)
 
     @asynccontextmanager
-    async def open_log(self, build_id: int, key: str) -> AsyncIterator[LogWriter]:
+    async def open_log(self, build_id: int, attr: str) -> AsyncIterator[LogWriter]:
         """LogWriter registered for live streaming. Closed and
-        unregistered on exit. Shared by attribute and effect runs."""
-        path = log_path_for_key(self.config.state_dir, build_id, key)
+        unregistered on exit."""
+        path = attribute_log_path(self.config.state_dir, build_id, attr)
         writer = LogWriter(path=path, size_limit=self.config.log_size_limit)
-        self.log_registry.register(build_id, key, writer)
+        self.log_registry.register(build_id, attr, writer)
         try:
             yield writer
         finally:
             await writer.close()
-            self.log_registry.unregister(build_id, key)
+            self.log_registry.unregister(build_id, attr)
+
+    @asynccontextmanager
+    async def open_effect_log(self, run_id: int) -> AsyncIterator[LogWriter]:
+        """Same for an effect run of any kind, keyed by its row id."""
+        path = effect_run_log_path(self.config.state_dir, run_id)
+        writer = LogWriter(path=path, size_limit=self.config.log_size_limit)
+        self.log_registry.register_effect(run_id, writer)
+        try:
+            yield writer
+        finally:
+            await writer.close()
+            self.log_registry.unregister_effect(run_id)
 
     async def finish_linked(
         self,

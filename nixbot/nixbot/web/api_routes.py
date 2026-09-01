@@ -116,6 +116,8 @@ class Attribute(BaseModel):
 
 
 class Effect(BaseModel):
+    id: int
+    kind: str
     name: str
     status: str
     error: str | None

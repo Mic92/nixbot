@@ -27,7 +27,7 @@ from nixbot.db import BuildStatus
 from nixbot.db_gen import builds as builds_q
 from nixbot.effects import EffectMeta, EffectsContext
 from nixbot.events import BuildResult, ChangeEvent, EvalReport, RepoInfo
-from nixbot.executor import attribute_log_path, effect_log_path
+from nixbot.executor import attribute_log_path, effect_run_log_path
 from nixbot.gcroots import GcrootRegistrationError
 from nixbot.gitrepo import FetchCredentials, RepoManager
 from nixbot.memory import EvalWorkerConfig
@@ -340,7 +340,7 @@ def run_effect_build(
 
 async def effect_statuses(pool: asyncpg.Pool, build_id: int) -> dict[str, str]:
     rows = await pool.fetch(
-        "SELECT name, status FROM build_effects WHERE build_id = $1", build_id
+        "SELECT name, status FROM effect_runs WHERE build_id = $1", build_id
     )
     return {r["name"]: r["status"] for r in rows}
 
@@ -1226,8 +1226,8 @@ async def test_rerun_effects_runs_effects_again(
     )
     # A stale row from an effect no longer in the flake.
     await pool.execute(
-        "INSERT INTO build_effects (build_id, name, status) "
-        "VALUES ($1, 'removed', 'failed')",
+        "INSERT INTO effect_runs (project_id, kind, build_id, name, status) "
+        "VALUES ((SELECT project_id FROM builds WHERE id = $1), 'push', $1, 'removed', 'failed')",
         build.id_,
     )
     await orchestrator.rerun_effects(project, build)
@@ -1238,7 +1238,7 @@ async def test_rerun_effects_runs_effects_again(
         "SELECT count(*) FROM work_queue WHERE kind = 'refresh-schedules'"
     )
     rows = await pool.fetch(
-        "SELECT name, status FROM build_effects WHERE build_id = $1",
+        "SELECT name, status FROM effect_runs WHERE build_id = $1",
         build.id_,
     )
     assert [(r["name"], r["status"]) for r in rows] == [("deploy", "succeeded")]
@@ -1284,7 +1284,7 @@ async def test_rerun_effects_cancels_hung_effect(
     await drain_effect_items(orchestrator, project, pool)
     assert ran2 == ["deploy"]
     status = await pool.fetchval(
-        "SELECT status FROM build_effects WHERE build_id = $1 AND name = 'deploy'",
+        "SELECT status FROM effect_runs WHERE build_id = $1 AND name = 'deploy'",
         build.id_,
     )
     assert status == "succeeded"
@@ -1329,7 +1329,7 @@ async def test_rerun_single_effect(
     statuses = {
         r["name"]: r["status"]
         for r in await pool.fetch(
-            "SELECT name, status FROM build_effects WHERE build_id = $1", build.id_
+            "SELECT name, status FROM effect_runs WHERE build_id = $1", build.id_
         )
     }
     assert statuses == {
@@ -1338,7 +1338,7 @@ async def test_rerun_single_effect(
         "other": "succeeded",
     }
     other_finished = await pool.fetchval(
-        "SELECT finished_at FROM build_effects WHERE build_id = $1 AND name = 'other'",
+        "SELECT finished_at FROM effect_runs WHERE build_id = $1 AND name = 'other'",
         build.id_,
     )
 
@@ -1350,7 +1350,7 @@ async def test_rerun_single_effect(
     statuses = {
         r["name"]: r["status"]
         for r in await pool.fetch(
-            "SELECT name, status FROM build_effects WHERE build_id = $1", build.id_
+            "SELECT name, status FROM effect_runs WHERE build_id = $1", build.id_
         )
     }
     assert statuses == {
@@ -1360,7 +1360,7 @@ async def test_rerun_single_effect(
     }
     assert (
         await pool.fetchval(
-            "SELECT finished_at FROM build_effects "
+            "SELECT finished_at FROM effect_runs "
             "WHERE build_id = $1 AND name = 'other'",
             build.id_,
         )
@@ -1512,7 +1512,7 @@ async def test_effect_items_resume_only_pending(
     # Crash mid-run: the sweep settles the row. The requeued
     # item must skip it.
     await pool.execute(
-        "UPDATE build_effects SET status = 'running' WHERE build_id = $1",
+        "UPDATE effect_runs SET status = 'running' WHERE build_id = $1",
         build.id_,
     )
     await fail_interrupted_effects(pool, datetime.now(UTC) + timedelta(minutes=1))
@@ -1520,7 +1520,7 @@ async def test_effect_items_resume_only_pending(
     assert ran == ["deploy"]
     # Crash before the run: the pending row resumes.
     await pool.execute(
-        "UPDATE build_effects SET status = 'pending' WHERE build_id = $1",
+        "UPDATE effect_runs SET status = 'pending' WHERE build_id = $1",
         build.id_,
     )
     await orchestrator.run_effect_item(project, build, "deploy")
@@ -1557,7 +1557,7 @@ async def test_effect_crash_settles_the_row(
     await drain_effect_items(orchestrator, project, pool)
     assert build is not None
     row = await pool.fetchrow(
-        "SELECT status, finished_at FROM build_effects WHERE build_id = $1",
+        "SELECT status, finished_at FROM effect_runs WHERE build_id = $1",
         build.id_,
     )
     assert row is not None
@@ -1616,7 +1616,7 @@ async def test_concurrent_effects_use_independent_worktrees(
     rows = {
         r["name"]: r["status"]
         for r in await pool.fetch(
-            "SELECT name, status FROM build_effects WHERE build_id = $1", build.id_
+            "SELECT name, status FROM effect_runs WHERE build_id = $1", build.id_
         )
     }
     assert rows == {"deploy-alaska": "succeeded", "deploy-kk": "succeeded"}
@@ -1694,7 +1694,7 @@ async def test_effect_item_not_claimable_until_dep_settles(
     assert second.payload["name"] == "deploy"
     await orchestrator.run_effect_item(project, build, "deploy")
     row = await pool.fetchrow(
-        "SELECT status FROM build_effects WHERE build_id = $1 AND name = 'deploy'",
+        "SELECT status FROM effect_runs WHERE build_id = $1 AND name = 'deploy'",
         build.id_,
     )
     assert row["status"] == "dependency_failed"
@@ -1726,7 +1726,7 @@ async def test_effect_dep_failure_skips_dependent(
     rows = {
         r["name"]: (r["status"], r["error"])
         for r in await pool.fetch(
-            "SELECT name, status, error FROM build_effects WHERE build_id = $1",
+            "SELECT name, status, error FROM effect_runs WHERE build_id = $1",
             build.id_,
         )
     }
@@ -1813,7 +1813,7 @@ async def test_effect_dep_cycle_fails_discovery(
     assert await build_status(pool, build.id_) == BuildStatus.SUCCEEDED
     assert (
         await pool.fetchval(
-            "SELECT count(*) FROM build_effects WHERE build_id = $1", build.id_
+            "SELECT count(*) FROM effect_runs WHERE build_id = $1", build.id_
         )
         == 0
     )
@@ -2181,7 +2181,10 @@ async def test_effect_log_does_not_collide_with_attribute_log(
     await drain_effect_items(orchestrator, project, pool)
     state_dir = orchestrator.config.state_dir
     attr_log = attribute_log_path(state_dir, build.id_, "effect-deploy")
-    effect_log = effect_log_path(state_dir, build.id_, "deploy")
+    run_id = await pool.fetchval(
+        "SELECT id FROM effect_runs WHERE build_id = $1 AND name = 'deploy'", build.id_
+    )
+    effect_log = effect_run_log_path(state_dir, run_id)
     assert attr_log != effect_log
     assert attr_log.exists()
     assert effect_log.exists()

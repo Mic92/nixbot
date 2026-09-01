@@ -119,7 +119,7 @@
               </td>
               <td class="muted attr-status">
                 {% if s.run %}
-                  <a href="{{ repo_path(project) }}/schedules/runs/{{ s.run.id }}">
+                  <a href="{{ repo_path(project) }}/effects/runs/{{ s.run.id }}">
                     <time datetime="{{ s.run.started_at.isoformat() }}"
                           title="{{ s.run.started_at }}">{{ s.run.started_at | timeago }}</time>
                   </a>

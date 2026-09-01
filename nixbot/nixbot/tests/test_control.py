@@ -131,8 +131,8 @@ async def seed(dsn: str) -> None:
             build_id,
         )
         await pool.execute(
-            "INSERT INTO build_effects (build_id, name, status) "
-            "VALUES ($1, 'deploy', 'failed')",
+            "INSERT INTO effect_runs (project_id, kind, build_id, name, status) "
+            "VALUES ((SELECT project_id FROM builds WHERE id = $1), 'push', $1, 'deploy', 'failed')",
             build_id,
         )
         # Queue for the mass-cancel tests: two pending, one running.
@@ -882,8 +882,8 @@ async def test_effect_item_setup_failure_settles_row(
             pool, project_id, commit_sha="c5", tree_hash="t5", status="succeeded"
         )
         await pool.execute(
-            "INSERT INTO build_effects (build_id, name, status) "
-            "VALUES ($1, 'deploy', 'pending')",
+            "INSERT INTO effect_runs (project_id, kind, build_id, name, status) "
+            "VALUES ((SELECT project_id FROM builds WHERE id = $1), 'push', $1, 'deploy', 'pending')",
             build_id,
         )
         await service.enqueue_work(
@@ -891,7 +891,7 @@ async def test_effect_item_setup_failure_settles_row(
         )
         await service.drain_work()
         row = await pool.fetchrow(
-            "SELECT status, error FROM build_effects WHERE build_id = $1",
+            "SELECT status, error FROM effect_runs WHERE build_id = $1",
             build_id,
         )
         assert row["status"] == "failed"
@@ -959,8 +959,8 @@ async def test_recovery_reports_interrupted_effects(
         )
         # started_at before the service start so the sweep claims it.
         await pool.execute(
-            "INSERT INTO build_effects (build_id, name, status, started_at) "
-            "VALUES ($1, 'deploy', 'running', now() - interval '1 hour')",
+            "INSERT INTO effect_runs (project_id, kind, build_id, name, status, started_at) "
+            "VALUES ((SELECT project_id FROM builds WHERE id = $1), 'push', $1, 'deploy', 'running', now() - interval '1 hour')",
             build_id,
         )
 
@@ -1058,8 +1058,9 @@ async def test_restart_resets_effects(postgres_dsn: str, tmp_path: Path) -> None
             effects_started=True,
         )
         await pool.execute(
-            "INSERT INTO build_effects (build_id, name, status, finished_at, "
-            "log_size) VALUES ($1, 'deploy', 'failed', now(), 42)",
+            "INSERT INTO effect_runs (project_id, kind, build_id, name, status,"
+            " finished_at, log_size) SELECT project_id, 'push', id, 'deploy',"
+            " 'failed', now(), 42 FROM builds WHERE id = $1",
             build_id,
         )
 
@@ -1071,7 +1072,7 @@ async def test_restart_resets_effects(postgres_dsn: str, tmp_path: Path) -> None
         # Stale log cleared by the reset. The failed rerun
         # (unfetchable URL) settled the row.
         row = await pool.fetchrow(
-            "SELECT status, error, log_size FROM build_effects WHERE build_id = $1",
+            "SELECT status, error, log_size FROM effect_runs WHERE build_id = $1",
             build_id,
         )
         assert dict(row) == {

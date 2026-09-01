@@ -86,10 +86,10 @@ UPDATE builds SET eval_warnings = sqlc.arg(warnings)::jsonb WHERE id = $1;
 -- the same statement: they only get queue items when the build
 -- succeeds; after a failed rebuild nothing else owns them.
 WITH failed_effects AS (
-    UPDATE build_effects SET status = 'failed',
+    UPDATE effect_runs SET status = 'failed',
         error = 'build did not succeed', finished_at = now()
-    WHERE build_effects.build_id = sqlc.arg(id)::bigint
-      AND build_effects.status = 'pending'
+    WHERE effect_runs.build_id = sqlc.arg(id)::bigint
+      AND effect_runs.status = 'pending'
       AND sqlc.arg(status)::text IN ('failed', 'cancelled')
 )
 UPDATE builds
@@ -198,40 +198,46 @@ ON CONFLICT (build_id, attr) DO UPDATE SET
 WHERE NOT sqlc.arg(if_unfinished)::boolean
     OR build_attributes.status IN ('pending', 'building');
 
--- name: StartEffect :exec
-INSERT INTO build_effects (build_id, name, status) VALUES ($1, $2, $3)
-ON CONFLICT (build_id, name) DO UPDATE SET
-    status = $3, error = NULL, log_size = 0,
-    log_truncated = FALSE, started_at = now(), finished_at = NULL;
+-- name: StartEffect :one
+INSERT INTO effect_runs (project_id, kind, build_id, name, status)
+SELECT b.project_id, 'push', b.id, sqlc.arg(name)::text, sqlc.arg(status)::text
+FROM builds b WHERE b.id = sqlc.arg(build_id)::bigint
+ON CONFLICT (build_id, kind, name) DO UPDATE SET
+    status = EXCLUDED.status, error = NULL, log_size = 0,
+    log_truncated = FALSE, started_at = now(), finished_at = NULL
+RETURNING id;
 
 -- name: StartPendingEffects :exec
 -- Batch variant for enqueueing one build's discovered effects.
 -- deps carries each effect's `after` list as a JSON array.
-INSERT INTO build_effects (build_id, name, status, deps)
-SELECT sqlc.arg(build_id)::bigint, u.name, 'pending', u.deps::jsonb
-FROM (SELECT unnest(sqlc.arg(names)::text[]) AS name,
+INSERT INTO effect_runs (project_id, kind, build_id, name, status, deps)
+SELECT b.project_id, 'push', b.id, u.name, 'pending', u.deps::jsonb
+FROM builds b,
+     (SELECT unnest(sqlc.arg(names)::text[]) AS name,
              unnest(sqlc.arg(deps)::text[]) AS deps) AS u
-ON CONFLICT (build_id, name) DO UPDATE SET
+WHERE b.id = sqlc.arg(build_id)::bigint
+ON CONFLICT (build_id, kind, name) DO UPDATE SET
     status = 'pending', error = NULL, log_size = 0,
     log_truncated = FALSE, started_at = now(), finished_at = NULL,
     deps = EXCLUDED.deps;
 
 -- name: RecordSkippedEffects :exec
 -- DO NOTHING: rows from a real run (build reused by a gated ref) stay.
-INSERT INTO build_effects (build_id, name, status, finished_at)
-SELECT sqlc.arg(build_id)::bigint, u.name, 'skipped', now()
-FROM unnest(sqlc.arg(names)::text[]) AS u(name)
-ON CONFLICT (build_id, name) DO NOTHING;
+INSERT INTO effect_runs (project_id, kind, build_id, name, status, finished_at)
+SELECT b.project_id, 'push', b.id, u.name, 'skipped', now()
+FROM builds b, unnest(sqlc.arg(names)::text[]) AS u(name)
+WHERE b.id = sqlc.arg(build_id)::bigint
+ON CONFLICT (build_id, kind, name) DO NOTHING;
 
 -- name: EffectDepStatuses :many
 -- Statuses of the effects this effect declared in `after`.
-SELECT d.name, d.status FROM build_effects e
-JOIN build_effects d ON d.build_id = e.build_id
+SELECT d.name, d.status FROM effect_runs e
+JOIN effect_runs d ON d.build_id = e.build_id
     AND d.name IN (SELECT jsonb_array_elements_text(e.deps))
 WHERE e.build_id = $1 AND e.name = $2;
 
 -- name: FinishEffect :exec
-UPDATE build_effects SET
+UPDATE effect_runs SET
     status = $3, error = sqlc.narg(error),
     log_size = $4, log_truncated = $5, finished_at = now()
 WHERE build_id = $1 AND name = $2;
@@ -251,11 +257,11 @@ SELECT
         WHEN bool_or(status = 'succeeded') THEN 'succeeded'
         ELSE 'skipped'
     END::text AS status
-FROM build_effects WHERE build_id = $1
+FROM effect_runs WHERE build_id = $1
 HAVING count(*) > 0;
 
 -- name: EffectsForBuild :many
-SELECT * FROM build_effects WHERE build_id = $1 ORDER BY name;
+SELECT * FROM effect_runs WHERE build_id = $1 ORDER BY name;
 
 -- name: AttributeStatuses :many
 SELECT attr, status FROM build_attributes WHERE build_id = $1;

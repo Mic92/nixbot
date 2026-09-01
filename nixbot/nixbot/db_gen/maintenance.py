@@ -14,6 +14,7 @@ __all__: collections.abc.Sequence[str] = (
     "all_build_ids",
     "attribute_known",
     "attributes_for_builds",
+    "build_effect_run_ids",
     "cancel_attribute",
     "cancel_build",
     "cleanup_old_rows",
@@ -24,7 +25,6 @@ __all__: collections.abc.Sequence[str] = (
     "drop_removed_effects",
     "effect_status",
     "fail_interrupted_effects",
-    "fail_interrupted_scheduled_runs",
     "find_unfinished_builds",
     "project_has_builds",
     "reset_build_for_restart",
@@ -63,7 +63,7 @@ class AttributesForBuildsRow:
 
 @dataclasses.dataclass()
 class FailInterruptedEffectsRow:
-    build_id: int
+    build_id: int | None
     name: str
 
 
@@ -100,7 +100,7 @@ WITH cleared_failures AS (
     WHERE build_id = $2::bigint
       AND ($1::text IS NULL OR attr = $1)
 ), reset_effect_rows AS (
-    UPDATE build_effects SET status = 'pending', error = NULL,
+    UPDATE effect_runs SET status = 'pending', error = NULL,
         finished_at = NULL, log_size = 0, log_truncated = FALSE
     WHERE build_id = $2::bigint
       AND $1::text IS NULL
@@ -116,7 +116,7 @@ RESET_EFFECTS_STATE: typing.Final[str] = """-- name: ResetEffectsState :exec
 WITH flag AS (
     UPDATE builds SET effects_started = FALSE WHERE id = $1
 )
-UPDATE build_effects SET status = 'pending', error = NULL,
+UPDATE effect_runs SET status = 'pending', error = NULL,
     finished_at = NULL, log_size = 0,
     log_truncated = FALSE
 WHERE build_id = $1
@@ -176,16 +176,10 @@ FROM build_attributes WHERE build_id = ANY($1::bigint[])
 """
 
 FAIL_INTERRUPTED_EFFECTS: typing.Final[str] = """-- name: FailInterruptedEffects :many
-UPDATE build_effects SET status = 'failed',
+UPDATE effect_runs SET status = 'failed',
     error = 'interrupted by a service restart', finished_at = now()
 WHERE status = 'running' AND started_at < $1
 RETURNING build_id, name
-"""
-
-FAIL_INTERRUPTED_SCHEDULED_RUNS: typing.Final[str] = """-- name: FailInterruptedScheduledRuns :exec
-UPDATE scheduled_effect_runs SET status = 'failed',
-    error = 'interrupted by a service restart', finished_at = now()
-WHERE status = 'running' AND started_at < $1
 """
 
 CLEANUP_OLD_ROWS: typing.Final[str] = """-- name: CleanupOldRows :many
@@ -198,10 +192,10 @@ WITH del_builds AS (
       AND status IN ('succeeded', 'failed', 'cancelled')
     RETURNING builds.id
 ), del_runs AS (
-    DELETE FROM scheduled_effect_runs
-    WHERE finished_at IS NOT NULL
+    DELETE FROM effect_runs
+    WHERE build_id IS NULL AND finished_at IS NOT NULL
       AND finished_at < now() - make_interval(days => $1::int)
-    RETURNING scheduled_effect_runs.id
+    RETURNING effect_runs.id
 ), pruned_statuses AS (
     DELETE FROM failed_statuses
     WHERE to_timestamp(timestamp)
@@ -217,7 +211,10 @@ WITH del_builds AS (
 )
 SELECT 'build' AS kind, del_builds.id FROM del_builds
 UNION ALL
-SELECT 'scheduled_run' AS kind, del_runs.id FROM del_runs
+SELECT 'effect_run' AS kind, del_runs.id FROM del_runs
+UNION ALL
+SELECT 'effect_run' AS kind, r.id FROM effect_runs r
+WHERE r.build_id IN (SELECT del_builds.id FROM del_builds)
 """
 
 ALL_BUILD_IDS: typing.Final[str] = """-- name: AllBuildIds :many
@@ -252,12 +249,17 @@ SELECT cancelled.status_generation FROM cancelled
 """
 
 DROP_REMOVED_EFFECTS: typing.Final[str] = """-- name: DropRemovedEffects :exec
-DELETE FROM build_effects WHERE build_id = $1
+DELETE FROM effect_runs WHERE build_id = $1
 AND NOT (name = ANY($2::text[]))
 """
 
 EFFECT_STATUS: typing.Final[str] = """-- name: EffectStatus :one
-SELECT status FROM build_effects WHERE build_id = $1 AND name = $2
+SELECT status FROM effect_runs WHERE build_id = $1 AND kind = 'push' AND name = $2
+"""
+
+BUILD_EFFECT_RUN_IDS: typing.Final[str] = """-- name: BuildEffectRunIds :many
+SELECT id FROM effect_runs WHERE build_id = $1
+  AND ($2::text[] IS NULL OR name = ANY($2::text[]))
 """
 
 SUCCEEDED_ATTRIBUTE_OUTPUTS: typing.Final[str] = """-- name: SucceededAttributeOutputs :many
@@ -332,7 +334,7 @@ async def reset_build_for_restart(conn: ConnectionLike, *, attr: str | None, bui
     await conn.execute(RESET_BUILD_FOR_RESTART, attr, build_id)
 
 
-async def reset_effects_state(conn: ConnectionLike, *, build_id: int, names: collections.abc.Sequence[str] | None) -> None:
+async def reset_effects_state(conn: ConnectionLike, *, build_id: int | None, names: collections.abc.Sequence[str] | None) -> None:
     await conn.execute(RESET_EFFECTS_STATE, build_id, names)
 
 
@@ -406,10 +408,6 @@ def fail_interrupted_effects(conn: ConnectionLike, *, started_before: datetime.d
     return QueryResults(conn, FAIL_INTERRUPTED_EFFECTS, _decode_hook, started_before)
 
 
-async def fail_interrupted_scheduled_runs(conn: ConnectionLike, *, started_before: datetime.datetime) -> None:
-    await conn.execute(FAIL_INTERRUPTED_SCHEDULED_RUNS, started_before)
-
-
 def cleanup_old_rows(conn: ConnectionLike, *, retention_days: int) -> QueryResults[CleanupOldRowsRow]:
     def _decode_hook(row: asyncpg.Record) -> CleanupOldRowsRow:
         return CleanupOldRowsRow(kind=row[0], id_=row[1])
@@ -437,15 +435,19 @@ async def cancel_build(conn: ConnectionLike, *, id_: int) -> int | None:
     return row[0]
 
 
-async def drop_removed_effects(conn: ConnectionLike, *, build_id: int, names: collections.abc.Sequence[str]) -> None:
+async def drop_removed_effects(conn: ConnectionLike, *, build_id: int | None, names: collections.abc.Sequence[str]) -> None:
     await conn.execute(DROP_REMOVED_EFFECTS, build_id, names)
 
 
-async def effect_status(conn: ConnectionLike, *, build_id: int, name: str) -> str | None:
+async def effect_status(conn: ConnectionLike, *, build_id: int | None, name: str) -> str | None:
     row = await conn.fetchrow(EFFECT_STATUS, build_id, name)
     if row is None:
         return None
     return row[0]
+
+
+def build_effect_run_ids(conn: ConnectionLike, *, build_id: int | None, names: collections.abc.Sequence[str] | None) -> QueryResults[int]:
+    return QueryResults(conn, BUILD_EFFECT_RUN_IDS, operator.itemgetter(0), build_id, names)
 
 
 def succeeded_attribute_outputs(conn: ConnectionLike, *, build_id: int) -> QueryResults[SucceededAttributeOutputsRow]:

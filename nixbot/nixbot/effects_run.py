@@ -346,11 +346,15 @@ async def _run_one_effect(
 ) -> None:
     """One effect with its own row and log."""
     # A rerun resets the existing effect row.
-    await builds_q.start_effect(o.pool, build_id=build.id_, name=name, status="running")
+    run_id = await builds_q.start_effect(
+        o.pool, build_id=build.id_, name=name, status="running"
+    )
+    if run_id is None:  # build row gone
+        return
     # A green commit status on a failed deploy hides the failure. Report
     # per-effect status so the forge reflects the real outcome.
     await o.reporter.effect_started(event, build, name)
-    async with o.open_log(build.id_, f"effect:{name}") as writer:
+    async with o.open_effect_log(run_id) as writer:
         try:
             success = await run_effect(ctx, name, writer.write)
         except Exception as e:
