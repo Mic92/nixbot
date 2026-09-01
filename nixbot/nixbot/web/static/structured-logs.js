@@ -236,7 +236,9 @@
     function apply(delta) {
       const c = cards.get(delta.idx);
       if (delta.t === "drv") {
-        addCard(delta.idx, "running", delta.card ?? "");
+        // Repeated for each activity on an already known derivation.
+        if (c) setStatus(c, "running");
+        else addCard(delta.idx, "running", delta.card ?? "");
       } else if (delta.t === "line") {
         addRows(c, delta.html);
       } else if (delta.t === "status" && c && delta.status) {

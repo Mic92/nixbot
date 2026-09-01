@@ -152,3 +152,31 @@ def test_log_page_keeps_up_with_a_line_burst(page: Page, server: TestServer) -> 
         cdp.detach()
         cap.close()
         server.registry.unregister(build_id, ATTR)
+
+
+def test_repeated_activity_keeps_one_card(page: Page, server: TestServer) -> None:
+    """nix starts several activities for one derivation. Mic92/nixbot#168
+    had a card per activity with the rows in only one of them."""
+    build_id = server.run(_build_id(server, 3))
+    writer = LogWriter(path=server.state_dir / "live" / f"{ATTR}-dup.zst")
+    cap = StructuredCapture()
+    writer.capture = cap
+    server.registry.register(build_id, ATTR, writer)
+    drv = "/nix/store/aaa-linux-config-7.1.10.drv"
+
+    async def second_activity() -> None:
+        cap.start_build(2, drv)
+        cap.log_line(2, "from the second activity")
+
+    try:
+        cap.start_build(1, drv)
+        cap.log_line(1, "from the first activity")
+        page.goto(f"/repos/github/acme/widget/builds/3/logs/{ATTR}")
+        cards = page.locator(".log-card", has_text="linux-config-7.1.10")
+        cards.get_by_text("from the first activity").wait_for(timeout=15_000)
+        server.run(second_activity())
+        cards.get_by_text("from the second activity").wait_for(timeout=15_000)
+        assert cards.count() == 1
+    finally:
+        cap.close()
+        server.registry.unregister(build_id, ATTR)

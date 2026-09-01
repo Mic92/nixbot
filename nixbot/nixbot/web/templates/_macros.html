@@ -95,7 +95,7 @@
           </span>
         </summary>
         <div class="card-body">
-          {% if d.n == 0 and d.status != "running" %}
+          {% if not live and d.n == 0 and d.status != "running" %}
             <p class="log-empty">no output</p>
           {% else %}
             <div class="log-lines" aria-busy="true"></div>
