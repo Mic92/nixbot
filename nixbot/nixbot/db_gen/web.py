@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 __all__: collections.abc.Sequence[str] = (
+    "AttributeEvalStatsRow",
     "MetricsAttributeCountsRow",
     "MetricsBuildCountsRow",
     "MetricsBuildDurationRow",
@@ -20,6 +21,7 @@ __all__: collections.abc.Sequence[str] = (
     "WebRecentBuildsRow",
     "WebRepoOverviewRow",
     "attribute_error",
+    "attribute_eval_stats",
     "attribute_status",
     "metrics_attribute_counts",
     "metrics_build_counts",
@@ -187,6 +189,12 @@ class WebQueueRow:
     forge: str
     url: str
     queue_position: int
+
+
+@dataclasses.dataclass()
+class AttributeEvalStatsRow:
+    eval_wall_ms: int | None
+    eval_alloc_bytes: int | None
 
 
 @dataclasses.dataclass()
@@ -397,6 +405,11 @@ ORDER BY b.status = 'pending', b.id
 
 ATTRIBUTE_STATUS: typing.Final[str] = """-- name: AttributeStatus :one
 SELECT status FROM build_attributes WHERE build_id = $1 AND attr = $2
+"""
+
+ATTRIBUTE_EVAL_STATS: typing.Final[str] = """-- name: AttributeEvalStats :one
+SELECT eval_wall_ms, eval_alloc_bytes FROM build_attributes
+WHERE build_id = $1 AND attr = $2
 """
 
 ATTRIBUTE_ERROR: typing.Final[str] = """-- name: AttributeError :one
@@ -786,6 +799,13 @@ async def attribute_status(conn: ConnectionLike, *, build_id: int, attr: str) ->
     if row is None:
         return None
     return row[0]
+
+
+async def attribute_eval_stats(conn: ConnectionLike, *, build_id: int, attr: str) -> AttributeEvalStatsRow | None:
+    row = await conn.fetchrow(ATTRIBUTE_EVAL_STATS, build_id, attr)
+    if row is None:
+        return None
+    return AttributeEvalStatsRow(eval_wall_ms=row[0], eval_alloc_bytes=row[1])
 
 
 async def attribute_error(conn: ConnectionLike, *, build_id: int, attr: str) -> str | None:

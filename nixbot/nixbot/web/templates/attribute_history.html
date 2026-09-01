@@ -17,6 +17,7 @@
             <th scope="col">branch</th>
             <th scope="col">status</th>
             <th scope="col">commit</th>
+            <th scope="col">eval</th>
             <th scope="col">when</th>
           </tr>
           {% for h in history %}
@@ -27,11 +28,15 @@
               <td>{{ h.branch }}</td>
               <td>{{ status_pill(h.status) }}</td>
               <td>{{ commit_link(project, h.commit_sha) }}</td>
+              <td class="muted"
+                  {% if h.eval_alloc_bytes is not none %} title="{{ h.eval_alloc_bytes | human_bytes }} allocated"{% endif %}>
+                {{ h.eval_wall_ms | eval_ms if h.eval_wall_ms is not none else "" }}
+              </td>
               <td>{{ ago(h.build_created_at) }}</td>
             </tr>
           {% else %}
             <tr>
-              <td colspan="5" class="empty-state">no history</td>
+              <td colspan="6" class="empty-state">no history</td>
             </tr>
           {% endfor %}
         </table>

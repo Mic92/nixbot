@@ -8,6 +8,7 @@ executor's LogWriter fans out to any number of SSE subscribers.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import functools
 import html
 import json
@@ -991,6 +992,7 @@ class _LogRoutes:
         )
         # Effect statuses live in build_effects, not attributes.
         is_effect = attr.startswith("effect:")
+        eval_stats = None
         if is_effect:
             attr_status = await maint_gen.effect_status(
                 self.ctx.pool,
@@ -999,6 +1001,9 @@ class _LogRoutes:
             )
         else:
             attr_status = await gen.attribute_status(
+                self.ctx.pool, build_id=build["id"], attr=attr
+            )
+            eval_stats = await gen.attribute_eval_stats(
                 self.ctx.pool, build_id=build["id"], attr=attr
             )
         # Live pages render no snapshot: the stream replays full
@@ -1048,6 +1053,7 @@ class _LogRoutes:
             project=project,
             build=build,
             attr_status=attr_status,
+            eval_stats=dataclasses.asdict(eval_stats) if eval_stats else {},
             is_effect=is_effect,
             attr=attr,
             content=content,

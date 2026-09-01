@@ -2271,14 +2271,20 @@ def test_build_eval_stats_surface(client: WebHarness) -> None:
             "UPDATE build_attributes a SET eval_wall_ms = 412,"
             " eval_alloc_bytes = 50331648 FROM builds b"
             " WHERE a.build_id = b.id AND b.number = 2"
-            " AND a.attr = 'x86_64-linux.bad'"
+            " AND a.attr = 'x86_64-linux.evalfail'"
         )
 
     client.loop.run_until_complete(seed())
-    text = client.get("/repos/github/acme/widget/builds/2").text
+    base = "/repos/github/acme/widget"
+    text = client.get(f"{base}/builds/2").text
     assert "· eval 38s" in text
-    assert "· eval" not in client.get("/repos/github/acme/widget/builds/1").text
-    detail = client.get("/api/repos/github/acme/widget/builds/2").json()
+    assert 'title="eval 412 ms · 48.0 MiB allocated"' in text
+    assert "· eval" not in client.get(f"{base}/builds/1").text
+    log_page = client.get(f"{base}/builds/2/logs/x86_64-linux.evalfail").text
+    assert "eval 412 ms · 48.0 MiB allocated" in log_page
+    history = client.get(f"{base}/attrs/x86_64-linux.evalfail").text
+    assert "412 ms" in history
+    detail = client.get(f"/api{base}/builds/2").json()
     assert detail["build"]["eval_duration_ms"] == 38400
-    broken = next(a for a in detail["attributes"] if a["attr"] == "x86_64-linux.bad")
-    assert (broken["eval_wall_ms"], broken["eval_alloc_bytes"]) == (412, 50331648)
+    row = next(a for a in detail["attributes"] if a["attr"] == "x86_64-linux.evalfail")
+    assert (row["eval_wall_ms"], row["eval_alloc_bytes"]) == (412, 50331648)

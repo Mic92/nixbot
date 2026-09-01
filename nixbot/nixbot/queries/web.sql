@@ -173,6 +173,10 @@ ORDER BY b.status = 'pending', b.id;
 -- name: AttributeStatus :one
 SELECT status FROM build_attributes WHERE build_id = $1 AND attr = $2;
 
+-- name: AttributeEvalStats :one
+SELECT eval_wall_ms, eval_alloc_bytes FROM build_attributes
+WHERE build_id = $1 AND attr = $2;
+
 -- name: AttributeError :one
 SELECT error FROM build_attributes WHERE build_id = $1 AND attr = $2;
 
