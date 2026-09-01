@@ -237,6 +237,9 @@ async def test_eval_runner_integration(tmp_path: Path) -> None:
     job = result.jobs[0]
     assert job.attr == "checks.x86_64-linux.ok"  # type: ignore[union-attr]
     assert any("eval warning here" in line for line in seen)
+    assert result.duration_ms > 0
+    assert job.stats is not None
+    assert job.stats.alloc_bytes > 0
 
     # Dotted attribute config selects the nested path.
     result = await EvalRunner().run(

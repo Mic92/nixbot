@@ -58,18 +58,24 @@ RETURNING *;
 -- name: RecordAttributes :exec
 -- Streaming inserts while the eval runs. Rows only grow or refresh
 -- here, they shrink solely in CommitEvalResult.
-INSERT INTO build_attributes (build_id, attr, system, drv_path, outputs, eval_warnings, status)
-SELECT sqlc.arg(build_id)::bigint, u.attr, u.system, u.drv_path, u.outputs, NULLIF(u.eval_warnings, 'null'::jsonb), 'pending'
+INSERT INTO build_attributes (build_id, attr, system, drv_path, outputs,
+    eval_warnings, eval_wall_ms, eval_alloc_bytes, status)
+SELECT sqlc.arg(build_id)::bigint, u.attr, u.system, u.drv_path, u.outputs,
+    NULLIF(u.eval_warnings, 'null'::jsonb), NULLIF(u.eval_wall_ms, -1), NULLIF(u.eval_alloc_bytes, -1), 'pending'
 FROM (SELECT unnest(sqlc.arg(attrs)::text[]) AS attr,
              unnest(sqlc.arg(systems)::text[]) AS system,
              unnest(sqlc.arg(drv_paths)::text[]) AS drv_path,
              unnest(sqlc.arg(outputs)::jsonb[]) AS outputs,
-             unnest(sqlc.arg(eval_warnings)::jsonb[]) AS eval_warnings) u
+             unnest(sqlc.arg(eval_warnings)::jsonb[]) AS eval_warnings,
+             unnest(sqlc.arg(eval_wall_ms)::int[]) AS eval_wall_ms,
+             unnest(sqlc.arg(eval_alloc_bytes)::bigint[]) AS eval_alloc_bytes) u
 ON CONFLICT (build_id, attr) DO UPDATE SET
     system = EXCLUDED.system,
     drv_path = EXCLUDED.drv_path,
     outputs = EXCLUDED.outputs,
-    eval_warnings = EXCLUDED.eval_warnings
+    eval_warnings = EXCLUDED.eval_warnings,
+    eval_wall_ms = EXCLUDED.eval_wall_ms,
+    eval_alloc_bytes = EXCLUDED.eval_alloc_bytes
 WHERE build_attributes.status IN ('pending', 'building');
 
 -- name: SetEvalWarnings :exec
@@ -93,6 +99,9 @@ SET status = sqlc.arg(status),
     error = CASE
         WHEN sqlc.arg(status) = 'pending' THEN NULL
         ELSE COALESCE(sqlc.narg(error), error)
+    END,
+    eval_duration_ms = CASE
+        WHEN sqlc.arg(status) = 'pending' THEN NULL ELSE eval_duration_ms
     END,
     eval_warnings = CASE
         WHEN sqlc.arg(status) = 'pending' THEN NULL ELSE eval_warnings
@@ -158,11 +167,19 @@ RETURNING attr;
 -- rows are left untouched (the upsert returns no row).
 INSERT INTO build_attributes
     (build_id, attr, system, drv_path, outputs, status, error,
-     cached, log_size, log_truncated, finished_at)
+     cached, log_size, log_truncated, finished_at,
+     eval_warnings, eval_wall_ms, eval_alloc_bytes)
 VALUES ($1, $2, $3, $4, sqlc.narg(outputs)::jsonb, $5, $6, $7,
-        sqlc.arg(log_size)::bigint, sqlc.arg(log_truncated)::boolean, now())
+        sqlc.arg(log_size)::bigint, sqlc.arg(log_truncated)::boolean, now(),
+        sqlc.narg(eval_warnings)::jsonb, sqlc.narg(eval_wall_ms)::int,
+        sqlc.narg(eval_alloc_bytes)::bigint)
 ON CONFLICT (build_id, attr) DO UPDATE SET
     status = EXCLUDED.status,
+    -- Eval data is only known by failed_eval inserts. Build
+    -- completions pass NULL and must keep what the eval recorded.
+    eval_warnings = COALESCE(EXCLUDED.eval_warnings, build_attributes.eval_warnings),
+    eval_wall_ms = COALESCE(EXCLUDED.eval_wall_ms, build_attributes.eval_wall_ms),
+    eval_alloc_bytes = COALESCE(EXCLUDED.eval_alloc_bytes, build_attributes.eval_alloc_bytes),
     -- Eval recorded the full outputs map (multi-output drvs);
     -- merge the freshly-known "out" path into it instead of
     -- replacing it, and never NULL an existing map when no out

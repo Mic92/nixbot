@@ -72,6 +72,7 @@ class FakeEvalRunner:
     # Deliver jobs via on_jobs before raising, like the incremental
     # eval stream that fails mid-way.
     stream_jobs: bool = False
+    duration_ms: int = 1500
 
     async def run(
         self,
@@ -95,7 +96,7 @@ class FakeEvalRunner:
         if callable(on_stderr_line):
             for warning in self.warnings:
                 await on_stderr_line(f"warning: {warning}")
-        return EvalResult(jobs=list(self.jobs))
+        return EvalResult(jobs=list(self.jobs), duration_ms=self.duration_ms)
 
 
 @dataclass
@@ -369,6 +370,12 @@ async def build_status(pool: asyncpg.Pool, build_id: int) -> str:
     return await pool.fetchval("SELECT status FROM builds WHERE id = $1", build_id)
 
 
+async def eval_duration(pool: asyncpg.Pool, build_id: int) -> int | None:
+    return await pool.fetchval(
+        "SELECT eval_duration_ms FROM builds WHERE id = $1", build_id
+    )
+
+
 # --- tests --------------------------------------------------------------------
 
 
@@ -496,6 +503,8 @@ async def test_eval_reuse_from_cancelled_build(
         "a": "succeeded",
         "b": "succeeded",
     }
+    # This build did not evaluate, so it has no eval duration.
+    assert await eval_duration(pool, build2.id_) is None
 
 
 async def test_eval_reuse_skipped_when_drvs_gone(
@@ -508,6 +517,7 @@ async def test_eval_reuse_skipped_when_drvs_gone(
     )
     assert eval_runner.calls == 2  # re-evaluated
     assert await build_status(pool, build2.id_) == BuildStatus.SUCCEEDED
+    assert await eval_duration(pool, build2.id_) == eval_runner.duration_ms
 
 
 async def test_main_push_promotes_reused_pr_build(

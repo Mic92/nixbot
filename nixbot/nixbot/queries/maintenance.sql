@@ -65,25 +65,33 @@ WHERE build_id = $1 AND status IN ('pending', 'building');
 -- rows, prunes rows the eval no longer produced, publishes via
 -- eval_completed, atomically.
 WITH new_rows AS (
-    INSERT INTO build_attributes (build_id, attr, system, drv_path, outputs, eval_warnings, status)
-    SELECT sqlc.arg(build_id)::bigint, u.attr, u.system, u.drv_path, u.outputs, NULLIF(u.eval_warnings, 'null'::jsonb), 'pending'
+    INSERT INTO build_attributes (build_id, attr, system, drv_path, outputs,
+        eval_warnings, eval_wall_ms, eval_alloc_bytes, status)
+    SELECT sqlc.arg(build_id)::bigint, u.attr, u.system, u.drv_path, u.outputs,
+        NULLIF(u.eval_warnings, 'null'::jsonb), NULLIF(u.eval_wall_ms, -1), NULLIF(u.eval_alloc_bytes, -1), 'pending'
     FROM (SELECT unnest(sqlc.arg(attrs)::text[]) AS attr,
                  unnest(sqlc.arg(systems)::text[]) AS system,
                  unnest(sqlc.arg(drv_paths)::text[]) AS drv_path,
                  unnest(sqlc.arg(outputs)::jsonb[]) AS outputs,
-                 unnest(sqlc.arg(eval_warnings)::jsonb[]) AS eval_warnings) u
+                 unnest(sqlc.arg(eval_warnings)::jsonb[]) AS eval_warnings,
+                 unnest(sqlc.arg(eval_wall_ms)::int[]) AS eval_wall_ms,
+                 unnest(sqlc.arg(eval_alloc_bytes)::bigint[]) AS eval_alloc_bytes) u
     ON CONFLICT (build_id, attr) DO UPDATE SET
         system = EXCLUDED.system,
         drv_path = EXCLUDED.drv_path,
         outputs = EXCLUDED.outputs,
-        eval_warnings = EXCLUDED.eval_warnings
+        eval_warnings = EXCLUDED.eval_warnings,
+        eval_wall_ms = EXCLUDED.eval_wall_ms,
+        eval_alloc_bytes = EXCLUDED.eval_alloc_bytes
     WHERE build_attributes.status IN ('pending', 'building')
 ), pruned AS (
     DELETE FROM build_attributes WHERE build_id = sqlc.arg(build_id)
     AND attr != ALL(sqlc.arg(attrs)::text[])
     AND (status IN ('pending', 'building') OR drv_path IS NULL)
 )
-UPDATE builds SET eval_completed = TRUE WHERE builds.id = sqlc.arg(build_id);
+UPDATE builds SET eval_completed = TRUE,
+    eval_duration_ms = sqlc.narg(eval_duration_ms)::bigint
+WHERE builds.id = sqlc.arg(build_id);
 
 -- name: DeleteAttributesByName :exec
 DELETE FROM build_attributes WHERE build_id = $1

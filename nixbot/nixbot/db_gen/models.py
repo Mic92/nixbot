@@ -42,6 +42,7 @@ class Build:
     effects_commit_sha: str | None
     effects_branch: str | None
     effects_pr_number: int | None
+    eval_duration_ms: int | None
 
 
 @dataclasses.dataclass()
@@ -60,6 +61,8 @@ class BuildAttribute:
     log_size: int
     log_truncated: bool
     eval_warnings: str | None
+    eval_wall_ms: int | None
+    eval_alloc_bytes: int | None
 
 
 @dataclasses.dataclass()

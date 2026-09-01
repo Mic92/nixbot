@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import json
 import logging
 import shutil
@@ -54,16 +55,30 @@ logger = logging.getLogger(__name__)
 LIVE_WARNINGS_FLUSH_INTERVAL = 2.0
 
 
-def _job_columns(
-    jobs: Sequence[NixEvalJob],
-) -> tuple[list[str], list[str], list[str], list[str], list[str]]:
+@dataclasses.dataclass
+class _JobColumns:
+    attrs: list[str]
+    systems: list[str]
+    drv_paths: list[str]
+    outputs: list[str]
+    eval_warnings: list[str]
+    # -1 stands for NULL so the arrays stay int-typed for asyncpg.
+    eval_wall_ms: list[int]
+    eval_alloc_bytes: list[int]
+
+
+def _job_columns(jobs: Sequence[NixEvalJob]) -> _JobColumns:
     successes = [job for job in jobs if isinstance(job, NixEvalJobSuccess)]
-    return (
-        [job.attr for job in successes],
-        [job.system for job in successes],
-        [job.drv_path for job in successes],
-        [json.dumps(job.outputs) for job in successes],
-        [json.dumps(job.warnings or None) for job in successes],
+    return _JobColumns(
+        attrs=[job.attr for job in successes],
+        systems=[job.system for job in successes],
+        drv_paths=[job.drv_path for job in successes],
+        outputs=[json.dumps(job.outputs) for job in successes],
+        eval_warnings=[json.dumps(job.warnings or None) for job in successes],
+        eval_wall_ms=[job.stats.wall_ms if job.stats else -1 for job in successes],
+        eval_alloc_bytes=[
+            job.stats.alloc_bytes if job.stats else -1 for job in successes
+        ],
     )
 
 
@@ -72,34 +87,27 @@ async def record_attributes(
 ) -> None:
     """Persist eval results as pending rows so crash recovery can
     resume without a re-eval."""
-    attrs, systems, drv_paths, outputs, warnings = _job_columns(jobs)
-    if not attrs:
+    cols = _job_columns(jobs)
+    if not cols.attrs:
         return
-    await q.record_attributes(
-        pool,
-        build_id=build_id,
-        attrs=attrs,
-        systems=systems,
-        drv_paths=drv_paths,
-        outputs=outputs,
-        eval_warnings=warnings,
-    )
+    await q.record_attributes(pool, build_id=build_id, **dataclasses.asdict(cols))
 
 
 async def commit_eval_result(
-    pool: asyncpg.Pool, build_id: int, jobs: Sequence[NixEvalJob]
+    pool: asyncpg.Pool,
+    build_id: int,
+    jobs: Sequence[NixEvalJob],
+    duration_ms: int | None = None,
 ) -> None:
     """Publish a completed eval: the only operation that may shrink
-    the attribute set."""
-    attrs, systems, drv_paths, outputs, warnings = _job_columns(jobs)
+    the attribute set. duration_ms is None when the jobs were not
+    produced by this build (eval reuse)."""
+    cols = _job_columns(jobs)
     await mq.commit_eval_result(
         pool,
         build_id=build_id,
-        attrs=attrs,
-        systems=systems,
-        drv_paths=drv_paths,
-        outputs=outputs,
-        eval_warnings=warnings,
+        eval_duration_ms=duration_ms,
+        **dataclasses.asdict(cols),
     )
 
 
@@ -243,7 +251,7 @@ async def _record_eval_success(
     o: Orchestrator,
     event: ChangeEvent,
     build: BuildRecord,
-    jobs: Sequence[NixEvalJob],
+    result: EvalResult,
     live_warnings: LiveWarningAggregator,
 ) -> None:
     """Persist a completed evaluation and report it to the forge."""
@@ -251,10 +259,10 @@ async def _record_eval_success(
     # pending forever.
     buildable = [
         job
-        for job in jobs
+        for job in result.jobs
         if isinstance(job, NixEvalJobSuccess) and job.system in o.config.build_systems
     ]
-    await commit_eval_result(o.pool, build.id_, buildable)
+    await commit_eval_result(o.pool, build.id_, buildable, result.duration_ms)
     await o.reporter.eval_finished(
         event,
         build,
@@ -407,7 +415,7 @@ async def _run_build_inner(
                     o.pool, id_=build.id_, warnings=json.dumps(live_warnings.snapshot())
                 )
         await db.set_build_status(o.pool, build.id_, BuildStatus.BUILDING)
-        await _record_eval_success(o, event, build, eval_result.jobs, live_warnings)
+        await _record_eval_success(o, event, build, eval_result, live_warnings)
 
         # Re-send the complete eval result: the scheduler dedupes
         # by attr, so this only schedules jobs a streamed batch

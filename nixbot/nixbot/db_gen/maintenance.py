@@ -130,25 +130,33 @@ WHERE build_id = $1 AND status IN ('pending', 'building')
 
 COMMIT_EVAL_RESULT: typing.Final[str] = """-- name: CommitEvalResult :exec
 WITH new_rows AS (
-    INSERT INTO build_attributes (build_id, attr, system, drv_path, outputs, eval_warnings, status)
-    SELECT $1::bigint, u.attr, u.system, u.drv_path, u.outputs, NULLIF(u.eval_warnings, 'null'::jsonb), 'pending'
-    FROM (SELECT unnest($2::text[]) AS attr,
-                 unnest($3::text[]) AS system,
-                 unnest($4::text[]) AS drv_path,
-                 unnest($5::jsonb[]) AS outputs,
-                 unnest($6::jsonb[]) AS eval_warnings) u
+    INSERT INTO build_attributes (build_id, attr, system, drv_path, outputs,
+        eval_warnings, eval_wall_ms, eval_alloc_bytes, status)
+    SELECT $2::bigint, u.attr, u.system, u.drv_path, u.outputs,
+        NULLIF(u.eval_warnings, 'null'::jsonb), NULLIF(u.eval_wall_ms, -1), NULLIF(u.eval_alloc_bytes, -1), 'pending'
+    FROM (SELECT unnest($3::text[]) AS attr,
+                 unnest($4::text[]) AS system,
+                 unnest($5::text[]) AS drv_path,
+                 unnest($6::jsonb[]) AS outputs,
+                 unnest($7::jsonb[]) AS eval_warnings,
+                 unnest($8::int[]) AS eval_wall_ms,
+                 unnest($9::bigint[]) AS eval_alloc_bytes) u
     ON CONFLICT (build_id, attr) DO UPDATE SET
         system = EXCLUDED.system,
         drv_path = EXCLUDED.drv_path,
         outputs = EXCLUDED.outputs,
-        eval_warnings = EXCLUDED.eval_warnings
+        eval_warnings = EXCLUDED.eval_warnings,
+        eval_wall_ms = EXCLUDED.eval_wall_ms,
+        eval_alloc_bytes = EXCLUDED.eval_alloc_bytes
     WHERE build_attributes.status IN ('pending', 'building')
 ), pruned AS (
-    DELETE FROM build_attributes WHERE build_id = $1
-    AND attr != ALL($2::text[])
+    DELETE FROM build_attributes WHERE build_id = $2
+    AND attr != ALL($3::text[])
     AND (status IN ('pending', 'building') OR drv_path IS NULL)
 )
-UPDATE builds SET eval_completed = TRUE WHERE builds.id = $1
+UPDATE builds SET eval_completed = TRUE,
+    eval_duration_ms = $1::bigint
+WHERE builds.id = $2
 """
 
 DELETE_ATTRIBUTES_BY_NAME: typing.Final[str] = """-- name: DeleteAttributesByName :exec
@@ -157,7 +165,7 @@ AND attr = ANY($2::text[])
 """
 
 FIND_UNFINISHED_BUILDS: typing.Final[str] = """-- name: FindUnfinishedBuilds :many
-SELECT id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number FROM builds WHERE status = ANY($1::text[])
+SELECT id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms FROM builds WHERE status = ANY($1::text[])
 AND ($2::bigint IS NULL OR id = $2)
 ORDER BY id
 """
@@ -335,8 +343,20 @@ async def count_unfinished_attributes(conn: ConnectionLike, *, build_id: int) ->
     return row[0]
 
 
-async def commit_eval_result(conn: ConnectionLike, *, build_id: int, attrs: collections.abc.Sequence[str], systems: collections.abc.Sequence[str], drv_paths: collections.abc.Sequence[str], outputs: collections.abc.Sequence[str], eval_warnings: collections.abc.Sequence[str]) -> None:
-    await conn.execute(COMMIT_EVAL_RESULT, build_id, attrs, systems, drv_paths, outputs, eval_warnings)
+async def commit_eval_result(
+    conn: ConnectionLike,
+    *,
+    eval_duration_ms: int | None,
+    build_id: int,
+    attrs: collections.abc.Sequence[str],
+    systems: collections.abc.Sequence[str],
+    drv_paths: collections.abc.Sequence[str],
+    outputs: collections.abc.Sequence[str],
+    eval_warnings: collections.abc.Sequence[str],
+    eval_wall_ms: collections.abc.Sequence[int],
+    eval_alloc_bytes: collections.abc.Sequence[int],
+) -> None:
+    await conn.execute(COMMIT_EVAL_RESULT, eval_duration_ms, build_id, attrs, systems, drv_paths, outputs, eval_warnings, eval_wall_ms, eval_alloc_bytes)
 
 
 async def delete_attributes_by_name(conn: ConnectionLike, *, build_id: int, attrs: collections.abc.Sequence[str]) -> None:
@@ -366,6 +386,7 @@ def find_unfinished_builds(conn: ConnectionLike, *, statuses: collections.abc.Se
             effects_commit_sha=row[17],
             effects_branch=row[18],
             effects_pr_number=row[19],
+            eval_duration_ms=row[20],
         )
 
     return QueryResults(conn, FIND_UNFINISHED_BUILDS, _decode_hook, statuses, build_id)

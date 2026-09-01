@@ -14,6 +14,16 @@ class CacheStatus(StrEnum):
     not_built = "notBuilt"
 
 
+class EvalStats(BaseModel):
+    """Per-attribute cost from nix-eval-jobs > 2.35.2. Shared values are
+    billed to the first attribute that forces them."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    wall_ms: int = Field(validation_alias="wallMs")
+    alloc_bytes: int = Field(validation_alias="allocBytes")
+
+
 class NixEvalJobError(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -22,6 +32,7 @@ class NixEvalJobError(BaseModel):
     attr_path: list[str] = Field(validation_alias="attrPath")
     warnings: list[str] = Field(default_factory=list)
     traces: list[str] = Field(default_factory=list)
+    stats: EvalStats | None = None
 
 
 class NixEvalJobSuccess(BaseModel):
@@ -40,6 +51,7 @@ class NixEvalJobSuccess(BaseModel):
     # this attribute (nix-eval-jobs > 2.35.2).
     warnings: list[str] = Field(default_factory=list)
     traces: list[str] = Field(default_factory=list)
+    stats: EvalStats | None = None
     # nix-eval-jobs emits null output paths for impure and some
     # content-addressed derivations: it cannot know their store paths
     # without actually building them. Accept None so the whole eval step
