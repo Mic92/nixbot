@@ -20,6 +20,7 @@ from .db_gen import builds as builds_q
 from .db_gen import maintenance as q
 from .effects_run import post_effects_summary
 from .events import BuildResult, EvalReport
+from .gcroots import GcrootRegistrationError
 from .gitrepo import GitError, run_git
 
 if TYPE_CHECKING:
@@ -204,7 +205,15 @@ async def post_process_skipped(
         # Forge-scoped paths: the same owner/repo on two forges
         # must not share gc-roots or outputs files.
         if branches.do_register_gcroot(repo.default_branch, event.branch):
-            await o.register_gcroot(o.config.gcroots_dir, repo.key, attr, out_path)
+            try:
+                await o.register_gcroot(o.config.gcroots_dir, repo.key, attr, out_path)
+            except GcrootRegistrationError as e:
+                # A recorded output may be gone (remote-built, GC'd). Not
+                # worth failing the reuse or the remaining attrs over.
+                logger.warning(
+                    "gcroot not registered",
+                    extra={"attr": attr, "out_path": out_path, "error": str(e)[:200]},
+                )
         if o.config.outputs_path is not None and branches.do_update_outputs(
             repo.default_branch, event.branch
         ):

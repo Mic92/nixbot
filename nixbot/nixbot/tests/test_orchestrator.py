@@ -28,6 +28,7 @@ from nixbot.db_gen import builds as builds_q
 from nixbot.effects import EffectMeta, EffectsContext
 from nixbot.events import BuildResult, ChangeEvent, EvalReport, RepoInfo
 from nixbot.executor import attribute_log_path, effect_log_path
+from nixbot.gcroots import GcrootRegistrationError
 from nixbot.gitrepo import FetchCredentials, RepoManager
 from nixbot.memory import EvalWorkerConfig
 from nixbot.models import CacheStatus
@@ -2291,3 +2292,38 @@ async def test_reuse_post_process_error_still_reports_status(
     finished = [e for e in reporter.events if e[0] == "finished"]
     assert finished
     assert finished[-1][2] == BuildStatus.SUCCEEDED
+
+
+async def test_reuse_with_missing_output_still_post_processes(
+    make_env: EnvFactory, upstream: Path, pool: asyncpg.Pool
+) -> None:
+    """An output that is gone from the local store (remote-built,
+    GC'd) must not abort the reuse: the rest of post-processing
+    (schedules, events) still happens."""
+    add_commit(upstream, "reuse-gone")
+    sha = git(upstream, "rev-parse", "HEAD")
+    orchestrator, _reporter, project = await make_env(
+        FakeEvalRunner([mk_job("a"), mk_job("b")]),
+        FakeExecutor(),
+        name="reuse-gone",
+    )
+    assert await orchestrator.handle_change_event(
+        ChangeEvent(repo=project, branch="main", commit_sha=sha)
+    )
+    registered: list[str] = []
+
+    async def gone(gcroots_dir: Path, proj: str, attr: str, out: str) -> None:
+        if attr == "a":
+            msg = "don't know how to build these paths"
+            raise GcrootRegistrationError(msg)
+        registered.append(attr)
+
+    orchestrator.register_gcroot = gone
+    await pool.execute("DELETE FROM work_queue WHERE kind = 'refresh-schedules'")
+    assert await orchestrator.handle_change_event(
+        ChangeEvent(repo=project, branch="main", commit_sha=sha)
+    )
+    assert registered == ["b"]
+    assert await pool.fetchval(
+        "SELECT count(*) FROM work_queue WHERE kind = 'refresh-schedules'"
+    )
