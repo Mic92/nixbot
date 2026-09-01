@@ -21,15 +21,22 @@ from nixbot.config import (
     PullBasedRepository,
     resolve_credential_path,
 )
+from nixbot.db_gen import builds as builds_q
 from nixbot.events import BuildResult, NullStatusReporter
 from nixbot.forge import DiscoveredRepo
 from nixbot.schedule_runner import scheduled_worktree_id
 from nixbot.schedules import DueEffect, ScheduleWhen
 from nixbot.status import CheckRunStore
 from nixbot.webhooks import ChangeRequest, CheckRerequested, PrClosed
-from nixbot.work_queue import WorkQueue
 
-from .support import FakeGitlab, git, insert_build, insert_project, make_config
+from .support import (
+    FakeGitlab,
+    git,
+    insert_build,
+    insert_project,
+    make_config,
+    mk_job,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
@@ -332,10 +339,6 @@ async def test_restart_eval_failed_build_reevaluates(
 
     service.orchestrator.run_build = fake_run_build  # type: ignore[method-assign]
     await service.restart_build(build_id)
-    # The reset is synchronous: the build row is the source of
-    # truth before any worker runs (issue #28).
-    status = await pool.fetchval("SELECT status FROM builds WHERE id = $1", build_id)
-    assert status == "pending"
     await service.drain_work()
     await asyncio.gather(*service._tasks)  # noqa: SLF001
 
@@ -425,12 +428,12 @@ async def test_restart_failed_eval_attribute_reevaluates(
 
     reevals = capture_run_build(service)
     await service.restart_build(build_id)
-    status = await pool.fetchval("SELECT status FROM builds WHERE id = $1", build_id)
-    assert status == "pending"
     await service.drain_work()
     await asyncio.gather(*service._tasks)  # noqa: SLF001
 
     assert reevals == [build_id]
+    status = await pool.fetchval("SELECT status FROM builds WHERE id = $1", build_id)
+    assert status == "pending"
     # The stale row survives until a successful eval commits its
     # result. Interrupted re-evals must never lose rows.
     count = await pool.fetchval(
@@ -566,10 +569,9 @@ async def test_restart_while_unwinding_waits_then_runs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Restart clicked while the old run is still unwinding (e.g.
-    right after a cancel) resets state immediately. The rerun must
-    requeue until the slot clears, not be dropped silently."""
+    right after a cancel) must neither reset rows under that run nor
+    drop the rerun: it waits for the run to release the build."""
     repo, sha = git_repo
-    monkeypatch.setattr("nixbot.restart_dispatch.UNWIND_RETRY_SECONDS", 0.0)
 
     pool = service.pool
     project_id = await seed_project(pool, str(repo))
@@ -599,28 +601,96 @@ async def test_restart_while_unwinding_waits_then_runs(
     # Simulate the cancelled run still unwinding.
     service.orchestrator.cancel_events[build_id] = asyncio.Event()
     await service.restart_build(build_id)
-    # Reset already applied. The UI sees pending without a worker.
+    drain = asyncio.create_task(service.drain_work())
+    await asyncio.sleep(0.05)
+    assert not drain.done()
+    assert rescheduled == []
+    assert (
+        await pool.fetchval("SELECT status FROM builds WHERE id = $1", build_id)
+        == "cancelled"
+    )
+
+    # Old run finished. The waiting rerun now resets and goes through.
+    service.orchestrator.release_run(build_id)
+    await drain
+    await asyncio.gather(*service._tasks)  # noqa: SLF001
+    assert rescheduled == [build_id]
     assert (
         await pool.fetchval("SELECT status FROM builds WHERE id = $1", build_id)
         == "pending"
     )
 
-    queue = WorkQueue(pool)
-    item = await queue.claim_next()
-    assert item is not None
-    assert item.kind == "rerun"
-    await service._execute_work(queue, item)  # noqa: SLF001
-    assert rescheduled == []  # deferred, not executed
-    pending = await pool.fetchval(
-        "SELECT count(*) FROM work_queue WHERE kind = 'rerun' AND status = 'pending'"
-    )
-    assert pending == 1  # the intent survived
 
-    # Old run finished. The queued rerun now goes through.
-    del service.orchestrator.cancel_events[build_id]
-    await service.drain_work()
+async def test_restart_attribute_while_build_running(
+    service: CIService, git_repo: tuple[Path, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Restarting one attribute of a build that is still running must
+    not reset rows under the live run. Otherwise the run finishes onto
+    the reset rows: nothing re-executes and the build ends terminal
+    with started_at NULL ("took \u2014" in the UI)."""
+    from nixbot.repos import repo_info  # noqa: PLC0415
+
+    from .test_orchestrator import FakeExecutor  # noqa: PLC0415
+
+    repo, sha = git_repo
+
+    async def all_valid(paths: list[str]) -> set[str]:
+        return set(paths)
+
+    monkeypatch.setattr("nixbot.restart_dispatch.check_store_paths", all_valid)
+
+    pool = service.pool
+    project_id = await seed_project(pool, str(repo))
+    build_id = await insert_build(
+        pool, project_id, commit_sha=sha, status="pending", eval_completed=True
+    )
+    await pool.execute(
+        "INSERT INTO build_attributes (build_id, attr, system, status, drv_path) "
+        "VALUES ($1, 'a', 'x86_64-linux', 'pending', '/nix/store/a.drv'), "
+        "($1, 'b', 'x86_64-linux', 'pending', '/nix/store/b.drv')",
+        build_id,
+    )
+    executor = FakeExecutor(gate=asyncio.Event())
+    service.orchestrator.executor = executor
+    project = await service.repo_store.by_id(project_id)
+    assert project is not None
+    build = await builds_q.get_build(pool, id_=build_id)
+    assert build is not None
+
+    run = asyncio.create_task(
+        service.orchestrator.rerun_pending_attributes(
+            repo_info(project), build, [mk_job("a"), mk_job("b")]
+        )
+    )
+    await asyncio.wait_for(executor.started.wait(), timeout=10)
+
+    await service.restart_attribute(build_id, "a")
+    drain = asyncio.create_task(service.drain_work())
+    # The restart must not have touched rows owned by the live run.
+    assert (
+        await pool.fetchval("SELECT status FROM builds WHERE id = $1", build_id)
+        == "building"
+    )
+    assert executor.gate is not None
+    executor.gate.set()
+    await run
+    await drain
     await asyncio.gather(*service._tasks)  # noqa: SLF001
-    assert rescheduled == [build_id]
+
+    row = await pool.fetchrow(
+        "SELECT status, started_at, finished_at FROM builds WHERE id = $1", build_id
+    )
+    assert row["status"] == "succeeded"
+    assert row["started_at"] is not None
+    assert row["finished_at"] >= row["started_at"]
+    attr = await pool.fetchrow(
+        "SELECT status, started_at FROM build_attributes "
+        "WHERE build_id = $1 AND attr = 'a'",
+        build_id,
+    )
+    assert (attr["status"], attr["started_at"] is not None) == ("succeeded", True)
+    # 'a' ran in the original run and again for the restart.
+    assert sorted(executor.built) == ["a", "a", "b"]
 
 
 # --- cancel of a non-running build ---------------------------------------

@@ -362,22 +362,19 @@ class CIService:
         await self._restart(build_id, attr=attr)
 
     async def _restart(self, build_id: int, *, attr: str | None) -> None:
-        # Reset synchronously so the build row is the source of truth
-        # for the UI/recovery. The queue item is only a wake-up. Drop
-        # the previous run's logs here too, so the pending row does not
-        # show stale output until the rebuild starts.
-        await q.reset_build_for_restart(self.pool, build_id=build_id, attr=attr)
-        self.orchestrator.reset_build_logs(build_id, attr)
-        # Flip the forge checks to pending now. The async rerun only
-        # posts the terminal status, possibly much later.
-        build = await builds_q.get_build(self.pool, id_=build_id)
-        project = (
-            await self.repo_store.by_id(build.project_id) if build is not None else None
+        # Cancel a live run. The work item resets once it released the build.
+        cancel = (
+            self.orchestrator.cancel_events.get(build_id)
+            if attr is None
+            else self.orchestrator.attr_cancel_events.get((build_id, attr))
         )
-        if build is not None and project is not None:
-            event = event_for_build(repo_info(project), build)
-            await self.orchestrator.reporter.build_restarted(event, build, attr)
-        await self.enqueue_work("rerun", f"build-{build_id}", {"build_id": build_id})
+        if cancel is not None:
+            cancel.set()
+        await self.enqueue_work(
+            "rerun",
+            f"build-{build_id}",
+            {"build_id": build_id, "restart": True, "attr": attr},
+        )
 
     async def restart_effects(self, build_id: int, name: str | None = None) -> None:
         # Per-build dedup key: single-effect and full reruns serialize.
@@ -459,10 +456,12 @@ class CIService:
         if item.kind == "change":
             await self._process_change(ChangeRequest(**payload))
         elif item.kind == "rerun":
-            # Resume pending attributes (restart and crash recovery).
-            if await restart_dispatch.rerun(self, payload["build_id"]):
-                # Previous run still unwinding. Retry, don't drop.
-                await self.enqueue_work("rerun", item.dedup_key, payload)
+            await restart_dispatch.rerun(
+                self,
+                payload["build_id"],
+                restart=payload.get("restart", False),
+                attr=payload.get("attr"),
+            )
         elif item.kind == "effects":
             await restart_dispatch.restart_effects(
                 self, payload["build_id"], payload.get("name")

@@ -146,9 +146,21 @@ class Orchestrator:
     linked_events: dict[int, list[ChangeEvent]] = field(default_factory=dict)
     # Caps concurrent evaluations to bound memory use.
     eval_slots: asyncio.Semaphore = field(init=False)
+    # Pulsed on every release_run().
+    _run_released: asyncio.Event = field(default_factory=asyncio.Event)
 
     def __post_init__(self) -> None:
         self.eval_slots = asyncio.Semaphore(self.config.eval_concurrency)
+
+    def release_run(self, build_id: int) -> None:
+        self.cancel_events.pop(build_id, None)
+        released, self._run_released = self._run_released, asyncio.Event()
+        released.set()
+
+    async def wait_idle(self, build_id: int) -> None:
+        """Return once no run owns build_id (holds its cancel_events slot)."""
+        while build_id in self.cancel_events:
+            await self._run_released.wait()
 
     def _log_dir(self, build_id: int) -> Path:
         return build_log_dir(self.config.state_dir, build_id)
@@ -339,7 +351,7 @@ class Orchestrator:
         )
         if outcome == RegisterOutcome.STALE:
             if rebuild:
-                self.cancel_events.pop(build.id_, None)
+                self.release_run(build.id_)
             if created:
                 await db.set_build_status(self.pool, build.id_, BuildStatus.CANCELLED)
                 await self.reporter.build_finished(
@@ -355,7 +367,7 @@ class Orchestrator:
             await self.run_build(event, build, worktree_path, credentials)
         finally:
             self.canceller.complete(build.id_)
-            self.cancel_events.pop(build.id_, None)
+            self.release_run(build.id_)
             self.linked_events.pop(build.id_, None)
 
     async def run_build(
