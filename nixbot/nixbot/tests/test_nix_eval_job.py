@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from nixbot.models import NixEvalJobModel, NixEvalJobSuccess
+from nixbot.models import EvalStats, NixEvalJobError, NixEvalJobModel, NixEvalJobSuccess
 
 
 def test_impure_job_with_null_out_parses() -> None:
@@ -31,3 +31,17 @@ def test_impure_job_with_null_out_parses() -> None:
     assert job.outputs == {"out": None}
     # Downstream code does `job.outputs["out"] or None`. Ensure that still works.
     assert (job.outputs["out"] or None) is None
+
+
+def test_stats_parse() -> None:
+    raw = {
+        "attr": "a",
+        "attrPath": ["a"],
+        "error": "boom",
+        "stats": {"wallMs": 412, "allocBytes": 7632},
+    }
+    job = NixEvalJobModel.validate_python(raw)
+    assert isinstance(job, NixEvalJobError)
+    assert job.stats == EvalStats(wall_ms=412, alloc_bytes=7632)
+    del raw["stats"]
+    assert NixEvalJobModel.validate_python(raw).stats is None

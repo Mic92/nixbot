@@ -22,7 +22,7 @@ import json
 from typing import TYPE_CHECKING
 
 from .db_gen import builds as q
-from .models import CacheStatus, NixEvalJobSuccess
+from .models import CacheStatus, NixEvalJobError, NixEvalJobSuccess
 from .sql_util import expect
 
 if TYPE_CHECKING:
@@ -154,6 +154,11 @@ async def complete_attribute(  # noqa: PLR0913
     metadata together (crash-recovery invariant). With
     if_unfinished, already-terminal rows are left untouched (early
     results must not overwrite settled attributes)."""
+    # failed_eval rows never went through RecordAttributes, so their
+    # eval data arrives here. Successes already have it.
+    job = result.job
+    warnings = job.warnings if isinstance(job, NixEvalJobError) else None
+    stats = job.stats if isinstance(job, NixEvalJobError) else None
     await q.complete_attribute(
         pool,
         build_id=build_id,
@@ -168,11 +173,14 @@ async def complete_attribute(  # noqa: PLR0913
         cached=result.status.value == "skipped_local"
         or (
             result.status.value == "succeeded"
-            and isinstance(result.job, NixEvalJobSuccess)
-            and result.job.cache_status == CacheStatus.cached
+            and isinstance(job, NixEvalJobSuccess)
+            and job.cache_status == CacheStatus.cached
         ),
         log_size=log_size,
         log_truncated=log_truncated,
+        eval_warnings=json.dumps(warnings) if warnings else None,
+        eval_wall_ms=stats.wall_ms if stats else None,
+        eval_alloc_bytes=stats.alloc_bytes if stats else None,
         if_unfinished=if_unfinished,
     )
 

@@ -15,9 +15,10 @@ from nixbot import build_run, db
 from nixbot import migrations as migrations_mod
 from nixbot.build_scheduler import AttributeResult, AttributeStatus
 from nixbot.db_gen import builds as builds_q
+from nixbot.db_gen import maintenance as maintenance_q
 from nixbot.failed_builds import PostgresFailedBuildCache
 from nixbot.migrations import apply_migrations, load_migrations
-from nixbot.models import CacheStatus
+from nixbot.models import CacheStatus, EvalStats, NixEvalJobError
 from nixbot.status import CheckRunStore, FailedStatusStore
 
 from .support import attribute_statuses, db_pool, insert_build, insert_project, mk_job
@@ -683,3 +684,60 @@ async def test_failed_build_cache_scoped_per_project(pool: asyncpg.Pool) -> None
     entry = await PostgresFailedBuildCache(pool, p1).check(drv)
     assert entry is not None
     assert entry.url == "http://ci/one/1"
+
+
+async def test_eval_stats_lifecycle(pool: asyncpg.Pool) -> None:
+    """Per-attr stats survive build completion. failed_eval inserts
+    carry warnings and stats. Build duration follows eval_completed."""
+    project_id = await insert_project(pool, "eval-stats")
+    build, _ = await db.get_or_create_build(pool, project_id, "tree-es", "sha", "main")
+    stats = EvalStats(wall_ms=412, alloc_bytes=48 << 20)
+    job = mk_job("a").model_copy(update={"stats": stats})
+    await build_run.record_attributes(pool, build.id_, [job, mk_job("b")])
+    await build_run.commit_eval_result(pool, build.id_, [job, mk_job("b")], 38_000)
+    await db.complete_attribute(
+        pool,
+        build.id_,
+        AttributeResult(attr="a", status=AttributeStatus.succeeded, job=job),
+    )
+    broken = NixEvalJobError(
+        error="boom",
+        attr="c",
+        attr_path=["c"],
+        warnings=["c warns"],
+        stats=EvalStats(wall_ms=7, alloc_bytes=9),
+    )
+    await db.complete_attribute(
+        pool,
+        build.id_,
+        AttributeResult(
+            attr="c", status=AttributeStatus.failed_eval, job=broken, error="boom"
+        ),
+    )
+
+    rows = {
+        r["attr"]: (r["eval_wall_ms"], r["eval_alloc_bytes"], r["eval_warnings"])
+        for r in await pool.fetch(
+            "SELECT attr, eval_wall_ms, eval_alloc_bytes, eval_warnings"
+            " FROM build_attributes WHERE build_id = $1",
+            build.id_,
+        )
+    }
+    assert rows["a"] == (412, 48 << 20, None)
+    assert rows["b"] == (None, None, None)
+    assert rows["c"][:2] == (7, 9)
+    assert json.loads(rows["c"][2]) == ["c warns"]
+
+    async def duration() -> tuple[bool, int | None]:
+        row = await pool.fetchrow(
+            "SELECT eval_completed, eval_duration_ms FROM builds WHERE id = $1",
+            build.id_,
+        )
+        assert row is not None
+        return row["eval_completed"], row["eval_duration_ms"]
+
+    assert await duration() == (True, 38_000)
+    await maintenance_q.reset_build_for_restart(pool, build_id=build.id_, attr=None)
+    assert await duration() == (True, 38_000)
+    await db.set_build_status(pool, build.id_, db.BuildStatus.PENDING)
+    assert await duration() == (False, None)

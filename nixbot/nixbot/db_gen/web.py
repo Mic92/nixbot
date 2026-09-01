@@ -107,6 +107,7 @@ class WebRecentBuildsRow:
     effects_commit_sha: str | None
     effects_branch: str | None
     effects_pr_number: int | None
+    eval_duration_ms: int | None
     owner: str
     project_name: str
     forge: str
@@ -142,6 +143,8 @@ class WebAttributeHistoryRow:
     log_size: int
     log_truncated: bool
     eval_warnings: str | None
+    eval_wall_ms: int | None
+    eval_alloc_bytes: int | None
     build_number: int
     branch: str
     commit_sha: str
@@ -176,6 +179,7 @@ class WebQueueRow:
     effects_commit_sha: str | None
     effects_branch: str | None
     effects_pr_number: int | None
+    eval_duration_ms: int | None
     owner: str
     project_name: str
     forge: str
@@ -232,7 +236,7 @@ SELECT p.id, p.forge, p.forge_repo_id, p.owner, p.name, p.default_branch, p.url,
        h.history, m.median_secs, m.pass_rate
 FROM projects p
 LEFT JOIN LATERAL (
-    SELECT id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number FROM builds b WHERE b.project_id = p.id
+    SELECT id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms FROM builds b WHERE b.project_id = p.id
       AND b.pr_number IS NULL AND b.branch = p.default_branch
     ORDER BY b.number DESC LIMIT 1
 ) lb ON true
@@ -278,7 +282,7 @@ ORDER BY p.owner, p.name
 """
 
 WEB_RECENT_BUILDS: typing.Final[str] = """-- name: WebRecentBuilds :many
-SELECT b.id, b.project_id, b.number, b.tree_hash, b.commit_sha, b.branch, b.pr_number, b.pr_author, b.status, b.status_generation, b.effects_started, b.error, b.created_at, b.started_at, b.finished_at, b.eval_warnings, b.eval_completed, b.effects_commit_sha, b.effects_branch, b.effects_pr_number, p.owner, p.name AS project_name, p.forge, p.url
+SELECT b.id, b.project_id, b.number, b.tree_hash, b.commit_sha, b.branch, b.pr_number, b.pr_author, b.status, b.status_generation, b.effects_started, b.error, b.created_at, b.started_at, b.finished_at, b.eval_warnings, b.eval_completed, b.effects_commit_sha, b.effects_branch, b.effects_pr_number, b.eval_duration_ms, p.owner, p.name AS project_name, p.forge, p.url
 FROM builds b JOIN projects p ON p.id = b.project_id
 WHERE ($1::bigint[] IS NULL OR b.project_id = ANY($1))
   AND ($2::bigint IS NULL OR b.id < $2)
@@ -286,7 +290,7 @@ ORDER BY b.id DESC LIMIT $3::bigint
 """
 
 WEB_BUILDS_FOR_REPO: typing.Final[str] = """-- name: WebBuildsForRepo :many
-SELECT id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number FROM builds
+SELECT id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms FROM builds
 WHERE project_id = $1
   AND ($2::text IS NULL OR status = $2)
   AND ($3::text IS NULL OR branch = $3)
@@ -298,7 +302,7 @@ ORDER BY number DESC LIMIT $8 OFFSET $7
 """
 
 WEB_BUILD_BY_NUMBER: typing.Final[str] = """-- name: WebBuildByNumber :one
-SELECT id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number FROM builds WHERE project_id = $1 AND number = $2
+SELECT id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms FROM builds WHERE project_id = $1 AND number = $2
 """
 
 WEB_NEIGHBOR_NUMBERS: typing.Final[str] = """-- name: WebNeighborNumbers :one
@@ -308,7 +312,7 @@ FROM builds WHERE project_id = $1
 """
 
 WEB_ATTRIBUTES: typing.Final[str] = """-- name: WebAttributes :many
-SELECT a.id, a.build_id, a.attr, a.system, a.drv_path, a.outputs, a.status, a.cached, a.error, a.started_at, a.finished_at, a.log_size, a.log_truncated, a.eval_warnings FROM build_attributes a
+SELECT a.id, a.build_id, a.attr, a.system, a.drv_path, a.outputs, a.status, a.cached, a.error, a.started_at, a.finished_at, a.log_size, a.log_truncated, a.eval_warnings, a.eval_wall_ms, a.eval_alloc_bytes FROM build_attributes a
 WHERE a.build_id = $1
 ORDER BY CASE
     WHEN a.status IN ('failed', 'failed_eval', 'dependency_failed',
@@ -321,7 +325,7 @@ END, a.attr
 """
 
 WEB_ATTRIBUTES_FINISHED_AFTER: typing.Final[str] = """-- name: WebAttributesFinishedAfter :many
-SELECT a.id, a.build_id, a.attr, a.system, a.drv_path, a.outputs, a.status, a.cached, a.error, a.started_at, a.finished_at, a.log_size, a.log_truncated, a.eval_warnings FROM build_attributes a
+SELECT a.id, a.build_id, a.attr, a.system, a.drv_path, a.outputs, a.status, a.cached, a.error, a.started_at, a.finished_at, a.log_size, a.log_truncated, a.eval_warnings, a.eval_wall_ms, a.eval_alloc_bytes FROM build_attributes a
 WHERE a.build_id = $1 AND a.finished_at IS NOT NULL
   AND ($2::timestamptz IS NULL
        OR (a.finished_at, a.id) > ($2::timestamptz,
@@ -345,7 +349,7 @@ GROUP BY status
 """
 
 WEB_ATTRIBUTE_PAGE: typing.Final[str] = """-- name: WebAttributePage :many
-SELECT a.id, a.build_id, a.attr, a.system, a.drv_path, a.outputs, a.status, a.cached, a.error, a.started_at, a.finished_at, a.log_size, a.log_truncated, a.eval_warnings FROM build_attributes a
+SELECT a.id, a.build_id, a.attr, a.system, a.drv_path, a.outputs, a.status, a.cached, a.error, a.started_at, a.finished_at, a.log_size, a.log_truncated, a.eval_warnings, a.eval_wall_ms, a.eval_alloc_bytes FROM build_attributes a
 WHERE a.build_id = $1 AND a.status = ANY($2::text[])
   AND ($3::text IS NULL OR a.attr ILIKE $3)
 ORDER BY (a.eval_warnings IS NULL), a.attr
@@ -353,7 +357,7 @@ LIMIT $5::bigint OFFSET $4::bigint
 """
 
 WEB_ATTRIBUTE_HISTORY: typing.Final[str] = """-- name: WebAttributeHistory :many
-SELECT a.id, a.build_id, a.attr, a.system, a.drv_path, a.outputs, a.status, a.cached, a.error, a.started_at, a.finished_at, a.log_size, a.log_truncated, a.eval_warnings, b.number AS build_number, b.branch, b.commit_sha,
+SELECT a.id, a.build_id, a.attr, a.system, a.drv_path, a.outputs, a.status, a.cached, a.error, a.started_at, a.finished_at, a.log_size, a.log_truncated, a.eval_warnings, a.eval_wall_ms, a.eval_alloc_bytes, b.number AS build_number, b.branch, b.commit_sha,
        b.created_at AS build_created_at
 FROM build_attributes a
 JOIN builds b ON b.id = a.build_id
@@ -370,7 +374,7 @@ WHERE b.project_id = $1 AND a.attr = $2
 """
 
 WEB_QUEUE: typing.Final[str] = """-- name: WebQueue :many
-SELECT b.id, b.project_id, b.number, b.tree_hash, b.commit_sha, b.branch, b.pr_number, b.pr_author, b.status, b.status_generation, b.effects_started, b.error, b.created_at, b.started_at, b.finished_at, b.eval_warnings, b.eval_completed, b.effects_commit_sha, b.effects_branch, b.effects_pr_number, p.owner, p.name AS project_name, p.forge, p.url,
+SELECT b.id, b.project_id, b.number, b.tree_hash, b.commit_sha, b.branch, b.pr_number, b.pr_author, b.status, b.status_generation, b.effects_started, b.error, b.created_at, b.started_at, b.finished_at, b.eval_warnings, b.eval_completed, b.effects_commit_sha, b.effects_branch, b.effects_pr_number, b.eval_duration_ms, p.owner, p.name AS project_name, p.forge, p.url,
        q.queue_position
 FROM builds b
 JOIN projects p ON p.id = b.project_id
@@ -534,10 +538,11 @@ def web_recent_builds(conn: ConnectionLike, *, project_ids: collections.abc.Sequ
             effects_commit_sha=row[17],
             effects_branch=row[18],
             effects_pr_number=row[19],
-            owner=row[20],
-            project_name=row[21],
-            forge=row[22],
-            url=row[23],
+            eval_duration_ms=row[20],
+            owner=row[21],
+            project_name=row[22],
+            forge=row[23],
+            url=row[24],
         )
 
     return QueryResults(conn, WEB_RECENT_BUILDS, _decode_hook, project_ids, before, limit_)
@@ -566,6 +571,7 @@ def web_builds_for_repo(conn: ConnectionLike, *, project_id: int, status: str | 
             effects_commit_sha=row[17],
             effects_branch=row[18],
             effects_pr_number=row[19],
+            eval_duration_ms=row[20],
         )
 
     return QueryResults(conn, WEB_BUILDS_FOR_REPO, _decode_hook, project_id, status, branch, pr_number, commit_prefix, before, offset, limit)
@@ -596,6 +602,7 @@ async def web_build_by_number(conn: ConnectionLike, *, project_id: int, number: 
         effects_commit_sha=row[17],
         effects_branch=row[18],
         effects_pr_number=row[19],
+        eval_duration_ms=row[20],
     )
 
 
@@ -608,14 +615,48 @@ async def web_neighbor_numbers(conn: ConnectionLike, *, project_id: int, number:
 
 def web_attributes(conn: ConnectionLike, *, build_id: int) -> QueryResults[models.BuildAttribute]:
     def _decode_hook(row: asyncpg.Record) -> models.BuildAttribute:
-        return models.BuildAttribute(id_=row[0], build_id=row[1], attr=row[2], system=row[3], drv_path=row[4], outputs=row[5], status=row[6], cached=row[7], error=row[8], started_at=row[9], finished_at=row[10], log_size=row[11], log_truncated=row[12], eval_warnings=row[13])
+        return models.BuildAttribute(
+            id_=row[0],
+            build_id=row[1],
+            attr=row[2],
+            system=row[3],
+            drv_path=row[4],
+            outputs=row[5],
+            status=row[6],
+            cached=row[7],
+            error=row[8],
+            started_at=row[9],
+            finished_at=row[10],
+            log_size=row[11],
+            log_truncated=row[12],
+            eval_warnings=row[13],
+            eval_wall_ms=row[14],
+            eval_alloc_bytes=row[15],
+        )
 
     return QueryResults(conn, WEB_ATTRIBUTES, _decode_hook, build_id)
 
 
 def web_attributes_finished_after(conn: ConnectionLike, *, build_id: int, after: datetime.datetime | None, after_id: int) -> QueryResults[models.BuildAttribute]:
     def _decode_hook(row: asyncpg.Record) -> models.BuildAttribute:
-        return models.BuildAttribute(id_=row[0], build_id=row[1], attr=row[2], system=row[3], drv_path=row[4], outputs=row[5], status=row[6], cached=row[7], error=row[8], started_at=row[9], finished_at=row[10], log_size=row[11], log_truncated=row[12], eval_warnings=row[13])
+        return models.BuildAttribute(
+            id_=row[0],
+            build_id=row[1],
+            attr=row[2],
+            system=row[3],
+            drv_path=row[4],
+            outputs=row[5],
+            status=row[6],
+            cached=row[7],
+            error=row[8],
+            started_at=row[9],
+            finished_at=row[10],
+            log_size=row[11],
+            log_truncated=row[12],
+            eval_warnings=row[13],
+            eval_wall_ms=row[14],
+            eval_alloc_bytes=row[15],
+        )
 
     return QueryResults(conn, WEB_ATTRIBUTES_FINISHED_AFTER, _decode_hook, build_id, after, after_id)
 
@@ -636,7 +677,24 @@ def web_attribute_counts(conn: ConnectionLike, *, build_id: int, pattern: str | 
 
 def web_attribute_page(conn: ConnectionLike, *, build_id: int, statuses: collections.abc.Sequence[str], pattern: str | None, offset_: int, limit_: int) -> QueryResults[models.BuildAttribute]:
     def _decode_hook(row: asyncpg.Record) -> models.BuildAttribute:
-        return models.BuildAttribute(id_=row[0], build_id=row[1], attr=row[2], system=row[3], drv_path=row[4], outputs=row[5], status=row[6], cached=row[7], error=row[8], started_at=row[9], finished_at=row[10], log_size=row[11], log_truncated=row[12], eval_warnings=row[13])
+        return models.BuildAttribute(
+            id_=row[0],
+            build_id=row[1],
+            attr=row[2],
+            system=row[3],
+            drv_path=row[4],
+            outputs=row[5],
+            status=row[6],
+            cached=row[7],
+            error=row[8],
+            started_at=row[9],
+            finished_at=row[10],
+            log_size=row[11],
+            log_truncated=row[12],
+            eval_warnings=row[13],
+            eval_wall_ms=row[14],
+            eval_alloc_bytes=row[15],
+        )
 
     return QueryResults(conn, WEB_ATTRIBUTE_PAGE, _decode_hook, build_id, statuses, pattern, offset_, limit_)
 
@@ -658,10 +716,12 @@ def web_attribute_history(conn: ConnectionLike, *, project_id: int, attr: str, l
             log_size=row[11],
             log_truncated=row[12],
             eval_warnings=row[13],
-            build_number=row[14],
-            branch=row[15],
-            commit_sha=row[16],
-            build_created_at=row[17],
+            eval_wall_ms=row[14],
+            eval_alloc_bytes=row[15],
+            build_number=row[16],
+            branch=row[17],
+            commit_sha=row[18],
+            build_created_at=row[19],
         )
 
     return QueryResults(conn, WEB_ATTRIBUTE_HISTORY, _decode_hook, project_id, attr, limit_)
@@ -697,11 +757,12 @@ def web_queue(conn: ConnectionLike, *, project_ids: collections.abc.Sequence[int
             effects_commit_sha=row[17],
             effects_branch=row[18],
             effects_pr_number=row[19],
-            owner=row[20],
-            project_name=row[21],
-            forge=row[22],
-            url=row[23],
-            queue_position=row[24],
+            eval_duration_ms=row[20],
+            owner=row[21],
+            project_name=row[22],
+            forge=row[23],
+            url=row[24],
+            queue_position=row[25],
         )
 
     return QueryResults(conn, WEB_QUEUE, _decode_hook, project_ids)

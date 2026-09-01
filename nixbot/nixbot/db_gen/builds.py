@@ -99,7 +99,7 @@ SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))
 """
 
 FIND_REUSABLE_BUILD: typing.Final[str] = """-- name: FindReusableBuild :one
-SELECT id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number FROM builds WHERE project_id = $1 AND tree_hash = $2
+SELECT id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms FROM builds WHERE project_id = $1 AND tree_hash = $2
 AND status <> 'cancelled' ORDER BY id DESC LIMIT 1
 """
 
@@ -107,15 +107,15 @@ DETACH_BUILD_FROM_PR: typing.Final[str] = """-- name: DetachBuildFromPr :one
 UPDATE builds SET pr_number = NULL, pr_author = NULL,
     branch = CASE WHEN $2::bigint IS NULL
              THEN $3 ELSE branch END
-WHERE id = $1 RETURNING id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number
+WHERE id = $1 RETURNING id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms
 """
 
 ATTACH_BUILD_TO_PR: typing.Final[str] = """-- name: AttachBuildToPr :one
-UPDATE builds SET pr_number = $2, pr_author = $3 WHERE id = $1 RETURNING id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number
+UPDATE builds SET pr_number = $2, pr_author = $3 WHERE id = $1 RETURNING id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms
 """
 
 BACKFILL_PR_AUTHOR: typing.Final[str] = """-- name: BackfillPrAuthor :one
-UPDATE builds SET pr_author = $2 WHERE id = $1 RETURNING id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number
+UPDATE builds SET pr_author = $2 WHERE id = $1 RETURNING id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms
 """
 
 CREATE_BUILD: typing.Final[str] = """-- name: CreateBuild :one
@@ -130,7 +130,7 @@ SELECT $1::bigint, n.number, $2::text,
        $3::text, $4::text,
        $5::bigint, $6::text
 FROM n
-RETURNING id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number
+RETURNING id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms
 """
 
 CREATE_FAILED_BUILD: typing.Final[str] = """-- name: CreateFailedBuild :one
@@ -145,22 +145,28 @@ SELECT $1::bigint, n.number, $2::text,
        $3::text, $4::bigint,
        $5::text, 'failed', $6::text, now()
 FROM n
-RETURNING id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number
+RETURNING id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms
 """
 
 RECORD_ATTRIBUTES: typing.Final[str] = """-- name: RecordAttributes :exec
-INSERT INTO build_attributes (build_id, attr, system, drv_path, outputs, eval_warnings, status)
-SELECT $1::bigint, u.attr, u.system, u.drv_path, u.outputs, NULLIF(u.eval_warnings, 'null'::jsonb), 'pending'
+INSERT INTO build_attributes (build_id, attr, system, drv_path, outputs,
+    eval_warnings, eval_wall_ms, eval_alloc_bytes, status)
+SELECT $1::bigint, u.attr, u.system, u.drv_path, u.outputs,
+    NULLIF(u.eval_warnings, 'null'::jsonb), NULLIF(u.eval_wall_ms, -1), NULLIF(u.eval_alloc_bytes, -1), 'pending'
 FROM (SELECT unnest($2::text[]) AS attr,
              unnest($3::text[]) AS system,
              unnest($4::text[]) AS drv_path,
              unnest($5::jsonb[]) AS outputs,
-             unnest($6::jsonb[]) AS eval_warnings) u
+             unnest($6::jsonb[]) AS eval_warnings,
+             unnest($7::int[]) AS eval_wall_ms,
+             unnest($8::bigint[]) AS eval_alloc_bytes) u
 ON CONFLICT (build_id, attr) DO UPDATE SET
     system = EXCLUDED.system,
     drv_path = EXCLUDED.drv_path,
     outputs = EXCLUDED.outputs,
-    eval_warnings = EXCLUDED.eval_warnings
+    eval_warnings = EXCLUDED.eval_warnings,
+    eval_wall_ms = EXCLUDED.eval_wall_ms,
+    eval_alloc_bytes = EXCLUDED.eval_alloc_bytes
 WHERE build_attributes.status IN ('pending', 'building')
 """
 
@@ -183,6 +189,9 @@ SET status = $1,
     error = CASE
         WHEN $1 = 'pending' THEN NULL
         ELSE COALESCE($2, error)
+    END,
+    eval_duration_ms = CASE
+        WHEN $1 = 'pending' THEN NULL ELSE eval_duration_ms
     END,
     eval_warnings = CASE
         WHEN $1 = 'pending' THEN NULL ELSE eval_warnings
@@ -217,7 +226,7 @@ WHERE build_id = $1
 """
 
 GET_BUILD: typing.Final[str] = """-- name: GetBuild :one
-SELECT id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number FROM builds WHERE id = $1
+SELECT id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms FROM builds WHERE id = $1
 """
 
 MARK_EFFECTS_STARTED: typing.Final[str] = """-- name: MarkEffectsStarted :one
@@ -249,11 +258,19 @@ RETURNING attr
 COMPLETE_ATTRIBUTE: typing.Final[str] = """-- name: CompleteAttribute :exec
 INSERT INTO build_attributes
     (build_id, attr, system, drv_path, outputs, status, error,
-     cached, log_size, log_truncated, finished_at)
+     cached, log_size, log_truncated, finished_at,
+     eval_warnings, eval_wall_ms, eval_alloc_bytes)
 VALUES ($1, $2, $3, $4, $8::jsonb, $5, $6, $7,
-        $9::bigint, $10::boolean, now())
+        $9::bigint, $10::boolean, now(),
+        $11::jsonb, $12::int,
+        $13::bigint)
 ON CONFLICT (build_id, attr) DO UPDATE SET
     status = EXCLUDED.status,
+    -- Eval data is only known by failed_eval inserts. Build
+    -- completions pass NULL and must keep what the eval recorded.
+    eval_warnings = COALESCE(EXCLUDED.eval_warnings, build_attributes.eval_warnings),
+    eval_wall_ms = COALESCE(EXCLUDED.eval_wall_ms, build_attributes.eval_wall_ms),
+    eval_alloc_bytes = COALESCE(EXCLUDED.eval_alloc_bytes, build_attributes.eval_alloc_bytes),
     -- Eval recorded the full outputs map (multi-output drvs);
     -- merge the freshly-known "out" path into it instead of
     -- replacing it, and never NULL an existing map when no out
@@ -269,7 +286,7 @@ ON CONFLICT (build_id, attr) DO UPDATE SET
     log_size = EXCLUDED.log_size,
     log_truncated = EXCLUDED.log_truncated,
     finished_at = now()
-WHERE NOT $11::boolean
+WHERE NOT $14::boolean
     OR build_attributes.status IN ('pending', 'building')
 """
 
@@ -426,6 +443,7 @@ async def find_reusable_build(conn: ConnectionLike, *, project_id: int, tree_has
         effects_commit_sha=row[17],
         effects_branch=row[18],
         effects_pr_number=row[19],
+        eval_duration_ms=row[20],
     )
 
 
@@ -454,6 +472,7 @@ async def detach_build_from_pr(conn: ConnectionLike, *, id_: int, pr_number: int
         effects_commit_sha=row[17],
         effects_branch=row[18],
         effects_pr_number=row[19],
+        eval_duration_ms=row[20],
     )
 
 
@@ -482,6 +501,7 @@ async def attach_build_to_pr(conn: ConnectionLike, *, id_: int, pr_number: int |
         effects_commit_sha=row[17],
         effects_branch=row[18],
         effects_pr_number=row[19],
+        eval_duration_ms=row[20],
     )
 
 
@@ -510,6 +530,7 @@ async def backfill_pr_author(conn: ConnectionLike, *, id_: int, pr_author: str |
         effects_commit_sha=row[17],
         effects_branch=row[18],
         effects_pr_number=row[19],
+        eval_duration_ms=row[20],
     )
 
 
@@ -538,6 +559,7 @@ async def create_build(conn: ConnectionLike, *, project_id: int, tree_hash: str 
         effects_commit_sha=row[17],
         effects_branch=row[18],
         effects_pr_number=row[19],
+        eval_duration_ms=row[20],
     )
 
 
@@ -566,11 +588,23 @@ async def create_failed_build(conn: ConnectionLike, *, project_id: int, commit_s
         effects_commit_sha=row[17],
         effects_branch=row[18],
         effects_pr_number=row[19],
+        eval_duration_ms=row[20],
     )
 
 
-async def record_attributes(conn: ConnectionLike, *, build_id: int, attrs: collections.abc.Sequence[str], systems: collections.abc.Sequence[str], drv_paths: collections.abc.Sequence[str], outputs: collections.abc.Sequence[str], eval_warnings: collections.abc.Sequence[str]) -> None:
-    await conn.execute(RECORD_ATTRIBUTES, build_id, attrs, systems, drv_paths, outputs, eval_warnings)
+async def record_attributes(
+    conn: ConnectionLike,
+    *,
+    build_id: int,
+    attrs: collections.abc.Sequence[str],
+    systems: collections.abc.Sequence[str],
+    drv_paths: collections.abc.Sequence[str],
+    outputs: collections.abc.Sequence[str],
+    eval_warnings: collections.abc.Sequence[str],
+    eval_wall_ms: collections.abc.Sequence[int],
+    eval_alloc_bytes: collections.abc.Sequence[int],
+) -> None:
+    await conn.execute(RECORD_ATTRIBUTES, build_id, attrs, systems, drv_paths, outputs, eval_warnings, eval_wall_ms, eval_alloc_bytes)
 
 
 async def set_eval_warnings(conn: ConnectionLike, *, id_: int, warnings: str) -> None:
@@ -620,6 +654,7 @@ async def get_build(conn: ConnectionLike, *, id_: int) -> models.Build | None:
         effects_commit_sha=row[17],
         effects_branch=row[18],
         effects_pr_number=row[19],
+        eval_duration_ms=row[20],
     )
 
 
@@ -641,8 +676,25 @@ async def mark_attribute_building(conn: ConnectionLike, *, build_id: int, attr: 
     return row[0]
 
 
-async def complete_attribute(conn: ConnectionLike, *, build_id: int, attr: str, system: str | None, drv_path: str | None, status: str, error: str | None, cached: bool, outputs: str | None, log_size: int, log_truncated: bool, if_unfinished: bool) -> None:
-    await conn.execute(COMPLETE_ATTRIBUTE, build_id, attr, system, drv_path, status, error, cached, outputs, log_size, log_truncated, if_unfinished)
+async def complete_attribute(
+    conn: ConnectionLike,
+    *,
+    build_id: int,
+    attr: str,
+    system: str | None,
+    drv_path: str | None,
+    status: str,
+    error: str | None,
+    cached: bool,
+    outputs: str | None,
+    log_size: int,
+    log_truncated: bool,
+    eval_warnings: str | None,
+    eval_wall_ms: int | None,
+    eval_alloc_bytes: int | None,
+    if_unfinished: bool,
+) -> None:
+    await conn.execute(COMPLETE_ATTRIBUTE, build_id, attr, system, drv_path, status, error, cached, outputs, log_size, log_truncated, eval_warnings, eval_wall_ms, eval_alloc_bytes, if_unfinished)
 
 
 async def start_effect(conn: ConnectionLike, *, build_id: int, name: str, status: str) -> None:

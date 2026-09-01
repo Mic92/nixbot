@@ -24,6 +24,7 @@ import logging
 import os
 import re
 import signal
+import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -107,6 +108,8 @@ class EvalSettings:
 @dataclass
 class EvalResult:
     jobs: list[NixEvalJob]
+    # nix-eval-jobs process lifetime, excluding prefetch and slot wait.
+    duration_ms: int
 
 
 _NIX_DIR = Path(__file__).parent / "nix"
@@ -605,6 +608,7 @@ class EvalRunner:
             "starting evaluation",
             extra={"worktree": str(worktree_path), "argv0": cmd[0]},
         )
+        t0 = time.monotonic()
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             cwd=worktree_path,
@@ -635,6 +639,7 @@ class EvalRunner:
                     _read_stderr_tail(proc.stderr, on_line=on_stderr_line),
                 )
                 returncode = await proc.wait()
+                duration_ms = int((time.monotonic() - t0) * 1000)
         except BaseException as e:
             # Timeout, cancellation, or a reader bug: kill the evaluator
             # instead of leaking it (possibly blocked on a full pipe).
@@ -664,4 +669,4 @@ class EvalRunner:
         if parse_errors:
             msg = "; ".join(parse_errors)
             raise EvalError(msg)
-        return EvalResult(jobs=jobs)
+        return EvalResult(jobs=jobs, duration_ms=duration_ms)

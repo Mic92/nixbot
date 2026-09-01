@@ -120,6 +120,7 @@ BUILD = BuildRecord(
     effects_commit_sha=None,
     effects_branch=None,
     effects_pr_number=None,
+    eval_duration_ms=None,
 )
 
 
