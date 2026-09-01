@@ -44,6 +44,8 @@
           {% endif %}
         </div>
       </div>
+      {% set es = eval_stats | eval_stats %}
+      {% if es %}<p class="muted eval-stats">{{ es }}</p>{% endif %}
       {% if waiting %}
         <p class="muted">waiting for the build to start…</p>
       {% elif unavailable %}

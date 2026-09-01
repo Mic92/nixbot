@@ -15,7 +15,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from markupsafe import Markup
 
 from ..ansi import strip_ansi  # noqa: TID252
-from ..fmt import format_duration  # noqa: TID252
+from ..fmt import format_bytes, format_duration, format_ms  # noqa: TID252
 from .logs import ansi_to_html
 
 if TYPE_CHECKING:
@@ -80,6 +80,13 @@ def duration_secs(value: float | None) -> str:
     if value is None:
         return "—"
     return format_duration(value)
+
+
+def eval_stats(row: dict[str, Any]) -> str:
+    """Empty when nix-eval-jobs reported no stats for the attribute."""
+    if row.get("eval_wall_ms") is None:
+        return ""
+    return f"eval {format_ms(row['eval_wall_ms'])} · {format_bytes(row['eval_alloc_bytes'])} allocated"
 
 
 def _forge_base(project: dict[str, Any]) -> str | None:
@@ -155,6 +162,9 @@ def make_env() -> Environment:
     env.filters["timeuntil"] = timeuntil
     env.filters["duration"] = duration
     env.filters["duration_secs"] = duration_secs
+    env.filters["eval_ms"] = format_ms
+    env.filters["human_bytes"] = format_bytes
+    env.filters["eval_stats"] = eval_stats
     env.filters["excerpt"] = excerpt
     env.filters["plain"] = strip_ansi
     # asyncpg returns jsonb columns as text.
