@@ -60,6 +60,7 @@ async def get_or_create_build(  # noqa: PLR0913
     branch: str,
     pr_number: int | None = None,
     pr_author: str | None = None,
+    actor: str | None = None,
 ) -> tuple[BuildRecord, bool]:
     """Reuse keyed on post-merge tree hash across contexts."""
     async with pool.acquire() as conn, conn.transaction():
@@ -98,6 +99,7 @@ async def get_or_create_build(  # noqa: PLR0913
             branch=branch,
             pr_number=pr_number,
             pr_author=pr_author,
+            actor=actor,
         )
         return expect(row), True
 

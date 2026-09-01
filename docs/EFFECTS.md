@@ -233,17 +233,18 @@ run. The event only contributes data, available at runtime as JSON in
 `NIXBOT_ACTOR`, `NIXBOT_PR_NUMBER`, `NIXBOT_PR_HEAD`, `NIXBOT_COMMAND`,
 `NIXBOT_COMMAND_ARGS`, `NIXBOT_BUILD_STATUS`, `NIXBOT_BUILD_URL`.
 
-| kind                  | delivered when                                     | payload                                                                  |
-| --------------------- | -------------------------------------------------- | ------------------------------------------------------------------------ |
-| `pull_request`        | a PR build finished `succeeded`                    | `actor?`, `build`, `pullRequest`                                         |
-| `pull_request_closed` | PR closed or merged                                | `actor?`, `pullRequest` (with `merged`)                                  |
-| `comment`             | new PR comment whose first line is `/command args` | `actor`, `command`, `args`, `pullRequest`, `build?`                      |
-| `build_finished`      | any build reached a terminal status                | `actor?`, `build` (with `previousStatus`, `failedAttrs`), `pullRequest?` |
+| kind                  | delivered when                                         | payload                                                                  |
+| --------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------ |
+| `pull_request`        | a PR head built green, again on reopen or label change | `actor?`, `build`, `pullRequest`                                         |
+| `pull_request_closed` | PR closed or merged                                    | `actor?`, `pullRequest` (with `merged`)                                  |
+| `comment`             | new PR comment whose first line is `/command args`     | `actor`, `command`, `args`, `pullRequest`, `build?`                      |
+| `build_finished`      | any build reached a terminal status                    | `actor?`, `build` (with `previousStatus`, `failedAttrs`), `pullRequest?` |
 
 `actor` is who caused the delivery (pusher, commenter, the user who pressed
 restart) as `{ name = "github:alice"; permission = "write"; }`. It is absent
 when nobody did (poller). `pullRequest.author` carries the PR opener the same
-way. Permissions are looked up on the forge at delivery time.
+way. Permissions are looked up on the forge at delivery time. Comments by bot
+accounts (GitHub apps, nixbot itself on Gitea/GitLab) never deliver `comment`.
 
 `mkEffect { when = { ... }; }` restricts when an effect runs. All given keys
 must match. An effect that does not match is recorded as `skipped` with the
@@ -251,7 +252,7 @@ reason shown in the web UI.
 
 | `when` key                              | matches if                                                        |
 | --------------------------------------- | ----------------------------------------------------------------- |
-| `permission = "read"\|"write"\|"admin"` | actor **or** PR author has at least this level                    |
+| `permission = "read"\|"write"\|"admin"` | actor **or** PR author has at least this level (`comment`: actor) |
 | `labels = [ ... ]`                      | PR has all of these labels                                        |
 | `branches = [ "main" "release-*" ]`     | glob on PR base branch, or build branch                           |
 | `commands = [ "plan" ]`                 | `comment` kind: the `/command` used                               |
@@ -267,6 +268,12 @@ the previous one. `after` is not supported for event effects.
 `onPush` the clone has no push credentials, and its content is untrusted: tools
 like `tofu plan` execute code from it, so guard such effects with
 `when.permission`.
+
+Feedback goes through `nixbot-pr-comment [--replace-marker ID] [TEXT]` (on
+`PATH` in every `mkEffect`, body from stdin without `TEXT`). It comments on the
+pull request the event is about. With a marker the comment from a previous run
+is edited instead of adding a new one. Outside nixbot (local runs) it prints the
+body instead.
 
 Test locally with a hand-written payload:
 

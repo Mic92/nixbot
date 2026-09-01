@@ -44,6 +44,10 @@ def _permission(when: dict[str, Any], payload: Payload) -> str | None:
         return None
     actor = payload.get("actor") or {}
     author = (payload.get("pullRequest") or {}).get("author") or {}
+    if payload.get("command") is not None:
+        # A comment is vouched for by the commenter alone, otherwise
+        # anyone could /apply on a maintainer's PR.
+        author = {}
     have = max(
         _LEVELS.get(actor.get("permission"), 0),
         _LEVELS.get(author.get("permission"), 0),

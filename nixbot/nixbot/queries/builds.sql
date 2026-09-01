@@ -15,6 +15,8 @@ AND status <> 'cancelled' ORDER BY id DESC LIMIT 1;
 -- the PR merged): drop number and author together so the stale PR
 -- keeps no authz, and let a plain branch push take over the branch.
 UPDATE builds SET pr_number = NULL, pr_author = NULL,
+    merged_pr_number = CASE WHEN sqlc.narg(pr_number)::bigint IS NULL
+             THEN builds.pr_number ELSE NULL END,
     branch = CASE WHEN sqlc.narg(pr_number)::bigint IS NULL
              THEN sqlc.arg(branch) ELSE branch END
 WHERE id = $1 RETURNING *;
@@ -34,10 +36,11 @@ WITH n AS (
     RETURNING next_build_number - 1 AS number
 )
 INSERT INTO builds (project_id, number, tree_hash, commit_sha,
-                    branch, pr_number, pr_author)
+                    branch, pr_number, pr_author, actor)
 SELECT sqlc.arg(project_id)::bigint, n.number, sqlc.narg(tree_hash)::text,
        sqlc.arg(commit_sha)::text, sqlc.arg(branch)::text,
-       sqlc.narg(pr_number)::bigint, sqlc.narg(pr_author)::text
+       sqlc.narg(pr_number)::bigint, sqlc.narg(pr_author)::text,
+       sqlc.narg(actor)::text
 FROM n
 RETURNING *;
 
@@ -82,13 +85,15 @@ WHERE build_attributes.status IN ('pending', 'building');
 UPDATE builds SET eval_warnings = sqlc.arg(warnings)::jsonb WHERE id = $1;
 
 -- name: SetBuildStatus :exec
--- A failed/cancelled build also settles its pending effect rows in
+-- A failed/cancelled build also settles its pending onPush rows in
 -- the same statement: they only get queue items when the build
--- succeeds; after a failed rebuild nothing else owns them.
+-- succeeds; after a failed rebuild nothing else owns them. Event rows
+-- have their own queue items regardless of the build outcome.
 WITH failed_effects AS (
     UPDATE effect_runs SET status = 'failed',
         error = 'build did not succeed', finished_at = now()
     WHERE effect_runs.build_id = sqlc.arg(id)::bigint
+      AND effect_runs.kind = 'push'
       AND effect_runs.status = 'pending'
       AND sqlc.arg(status)::text IN ('failed', 'cancelled')
 )
@@ -200,7 +205,8 @@ WHERE NOT sqlc.arg(if_unfinished)::boolean
 
 -- name: StartEffect :one
 INSERT INTO effect_runs (project_id, kind, build_id, name, status)
-SELECT b.project_id, 'push', b.id, sqlc.arg(name)::text, sqlc.arg(status)::text
+SELECT b.project_id, sqlc.arg(kind)::text, b.id, sqlc.arg(name)::text,
+       sqlc.arg(status)::text
 FROM builds b WHERE b.id = sqlc.arg(build_id)::bigint
 ON CONFLICT (build_id, kind, name) DO UPDATE SET
     status = EXCLUDED.status, error = NULL, log_size = 0,
@@ -230,17 +236,18 @@ WHERE b.id = sqlc.arg(build_id)::bigint
 ON CONFLICT (build_id, kind, name) DO NOTHING;
 
 -- name: EffectDepStatuses :many
--- Statuses of the effects this effect declared in `after`.
+-- Statuses of the effects this effect declared in `after` (onPush only).
 SELECT d.name, d.status FROM effect_runs e
-JOIN effect_runs d ON d.build_id = e.build_id
+JOIN effect_runs d ON d.build_id = e.build_id AND d.kind = 'push'
     AND d.name IN (SELECT jsonb_array_elements_text(e.deps))
-WHERE e.build_id = $1 AND e.name = $2;
+WHERE e.build_id = $1 AND e.kind = 'push' AND e.name = $2;
 
 -- name: FinishEffect :exec
 UPDATE effect_runs SET
-    status = $3, error = sqlc.narg(error),
-    log_size = $4, log_truncated = $5, finished_at = now()
-WHERE build_id = $1 AND name = $2;
+    status = sqlc.arg(status), error = sqlc.narg(error),
+    log_size = sqlc.arg(log_size), log_truncated = sqlc.arg(log_truncated),
+    finished_at = now()
+WHERE build_id = sqlc.arg(build_id) AND kind = sqlc.arg(kind) AND name = sqlc.arg(name);
 
 -- name: EffectsSummary :one
 -- status: running while anything is in flight, else the worst outcome.
@@ -257,7 +264,7 @@ SELECT
         WHEN bool_or(status = 'succeeded') THEN 'succeeded'
         ELSE 'skipped'
     END::text AS status
-FROM effect_runs WHERE build_id = $1
+FROM effect_runs WHERE build_id = $1 AND kind = 'push'
 HAVING count(*) > 0;
 
 -- name: EffectsForBuild :many

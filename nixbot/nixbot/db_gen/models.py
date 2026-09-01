@@ -43,6 +43,8 @@ class Build:
     effects_branch: str | None
     effects_pr_number: int | None
     eval_duration_ms: int | None
+    actor: str | None
+    merged_pr_number: int | None
 
 
 @dataclasses.dataclass()
@@ -80,6 +82,10 @@ class EffectRun:
     log_truncated: bool
     started_at: datetime.datetime
     finished_at: datetime.datetime | None
+    payload: str | None
+    code_rev: str | None
+    skip_reason: str | None
+    actor: str | None
 
 
 @dataclasses.dataclass()

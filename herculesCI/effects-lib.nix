@@ -12,6 +12,10 @@ let
   idTokenScript = pkgs.writers.writePython3Bin "nixbot-id-token" { } (
     builtins.readFile ./nixbot-id-token.py
   );
+  # Posts/updates a PR comment from an onEvent effect, see docs/EFFECTS.md.
+  prCommentScript = pkgs.writers.writePython3Bin "nixbot-pr-comment" { } (
+    builtins.readFile ./nixbot-pr-comment.py
+  );
 in
 {
   mkEffect =
@@ -60,6 +64,7 @@ in
         pkgs.cacert
         pkgs.curl
         pkgs.jq
+        prCommentScript
       ]
       ++ (if idTokenAudiences != [ ] then [ idTokenScript ] else [ ])
       ++ inputs;

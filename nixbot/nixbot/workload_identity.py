@@ -58,6 +58,7 @@ class EffectIdentity:
     # Audiences the effect declared via idTokenAudiences. Enforced by
     # the token endpoint, not by mint().
     allowed_audiences: tuple[str, ...] = ()
+    actor: str | None = None
 
     @property
     def repository(self) -> str:
@@ -71,8 +72,12 @@ class EffectIdentity:
                 return f"{prefix}:pull_request"
             case "schedule":
                 return f"{prefix}:schedule:{self.schedule}"
-            case _:
+            case "push":
                 return f"{prefix}:ref:refs/heads/{self.branch}"
+            case _:
+                # onEvent kinds. Code is the default branch, but the
+                # trigger is untrusted, so never look like a push.
+                return f"{prefix}:event:{self.event}"
 
     def claims(self) -> dict[str, Any]:
         claims: dict[str, Any] = {
@@ -98,6 +103,11 @@ class EffectIdentity:
                     claims["base_ref"] = self.base_ref
             case "schedule":
                 claims["schedule"] = self.schedule
+            case _:
+                if self.pr_number is not None:
+                    claims["pr_number"] = self.pr_number
+        if self.actor is not None:
+            claims["actor"] = self.actor
         return claims
 
 

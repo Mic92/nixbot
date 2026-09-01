@@ -33,8 +33,14 @@ WITH cleared_failures AS (
 ), reset_effect_rows AS (
     UPDATE effect_runs SET status = 'pending', error = NULL,
         finished_at = NULL, log_size = 0, log_truncated = FALSE
-    WHERE build_id = sqlc.arg(build_id)::bigint
+    WHERE build_id = sqlc.arg(build_id)::bigint AND kind = 'push'
       AND sqlc.narg(attr)::text IS NULL
+), cancel_event_rows AS (
+    -- Event effects are re-delivered when the rebuilt build settles.
+    -- Finished ones keep their history and log.
+    UPDATE effect_runs SET status = 'cancelled', finished_at = now()
+    WHERE build_id = sqlc.arg(build_id)::bigint AND kind <> 'push'
+      AND status = 'pending' AND sqlc.narg(attr)::text IS NULL
 )
 UPDATE builds SET status = 'pending', error = NULL,
     eval_warnings = NULL, started_at = NULL, finished_at = NULL,
@@ -53,7 +59,7 @@ WITH flag AS (
 UPDATE effect_runs SET status = 'pending', error = NULL,
     finished_at = NULL, log_size = 0,
     log_truncated = FALSE
-WHERE build_id = sqlc.arg(build_id)
+WHERE build_id = sqlc.arg(build_id) AND kind = 'push'
   AND (sqlc.narg(names)::text[] IS NULL OR name = ANY(sqlc.narg(names)::text[]));
 
 -- name: CountUnfinishedAttributes :one
@@ -183,11 +189,14 @@ WITH cancelled AS (
 SELECT cancelled.status_generation FROM cancelled;
 
 -- name: DropRemovedEffects :exec
-DELETE FROM effect_runs WHERE build_id = $1
+DELETE FROM effect_runs WHERE build_id = $1 AND kind = 'push'
 AND NOT (name = ANY(sqlc.arg(names)::text[]));
 
 -- name: EffectStatus :one
 SELECT status FROM effect_runs WHERE build_id = $1 AND kind = 'push' AND name = $2;
+
+-- name: EffectRun :one
+SELECT * FROM effect_runs WHERE build_id = $1 AND kind = $2 AND name = $3;
 
 -- name: BuildEffectRunIds :many
 -- For unlinking logs on reset. NULL names = all of the build's runs.

@@ -44,6 +44,7 @@ from .forge import (
     GitlabClient,
     NetrcFetchCredentialsProvider,
 )
+from .forge_pr import ForgePrClient
 from .gitrepo import (
     CredentialsProvider,
     RepoManager,
@@ -342,6 +343,7 @@ async def build_service(config: Config) -> tuple[CIService, FastAPI]:
     ctx.webhook_base_url = config.webhook_base_url or config.url
     ctx.token_store = ApiTokenStore(pool)
     ctx.proxy_auth_header = config.proxy_auth_header
+    ctx.forge_pr = ForgePrClient(github, gitea, gitlab)
     ctx.visibility = VisibilityService(
         pool,
         authz,

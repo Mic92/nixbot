@@ -28,6 +28,7 @@ from .effects import (
     effects_context,
     should_run_effects,
 )
+from .event_effects import cloned_checkout, run_event_effect_item
 from .events import effects_event_for_build
 from .executor import failure_excerpt
 from .workload_identity import identity_from_event
@@ -177,6 +178,7 @@ async def enqueue_effects(
     await wq.enqueue_effect_items(
         o.pool,
         build_id=build.id_,
+        kind="push",
         names=names,
         dedup_keys=[_dedup_key(build, n, effects[n]) for n in names],
     )
@@ -190,11 +192,12 @@ async def _skip_effect(
     look green)."""
     error = f"dependency '{failed_dep}' did not succeed"
     await builds_q.start_effect(
-        o.pool, build_id=build.id_, name=name, status="dependency_failed"
+        o.pool, build_id=build.id_, kind="push", name=name, status="dependency_failed"
     )
     await builds_q.finish_effect(
         o.pool,
         build_id=build.id_,
+        kind="push",
         name=name,
         status="dependency_failed",
         error=error,
@@ -223,19 +226,16 @@ async def effect_checkout(
     if push_url is None:
         yield None
         return
-    dest = worktree_path.with_name(f"{worktree_path.name}-checkout")
-    await repos.clone_for_effect(info.key, dest, commit=commit, push_url=push_url)
-    try:
+    async with cloned_checkout(repos, info, worktree_path, commit, push_url) as dest:
         yield dest
-    finally:
-        repos.remove_effect_clone(dest)
 
 
-async def run_effect_item(
+async def run_effect_item(  # noqa: PLR0913
     o: Orchestrator,
     info: RepoInfo,
     build: BuildRecord,
     name: str,
+    kind: str = "push",
     credentials: FetchCredentials | None = None,
 ) -> None:
     """Dispatcher entry for one queued effect: run it, or skip it when a
@@ -244,6 +244,9 @@ async def run_effect_item(
     if task is None:
         msg = "run_effect_item must run inside a task"
         raise RuntimeError(msg)
+    if kind != "push":
+        await run_event_effect_item(o, info, build, kind, name, credentials)
+        return
     running = RunningEffect(task=task)
     o.running_effects[(build.id_, name)] = running
     try:
@@ -345,7 +348,7 @@ async def _run_one_effect(
     """One effect with its own row and log."""
     # A rerun resets the existing effect row.
     run_id = await builds_q.start_effect(
-        o.pool, build_id=build.id_, name=name, status="running"
+        o.pool, build_id=build.id_, kind="push", name=name, status="running"
     )
     if run_id is None:  # build row gone
         return
@@ -372,6 +375,7 @@ async def _run_one_effect(
     await builds_q.finish_effect(
         o.pool,
         build_id=build.id_,
+        kind="push",
         name=name,
         status="succeeded" if success else "failed",
         error=error,

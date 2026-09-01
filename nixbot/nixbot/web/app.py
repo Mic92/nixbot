@@ -50,12 +50,14 @@ from .metrics import create_metrics_router
 from .queries import PAGE_SIZE, BuildFilters, WebQueries
 from .routing import register_owner_convertor
 from .state_routes import create_state_router
+from .task_routes import create_task_router
 from .templating import STATIC_DIR, CachedStaticFiles, make_env
 from .workload_routes import create_workload_identity_router
 
 if TYPE_CHECKING:
     from ..api_tokens import ApiTokenStore  # noqa: TID252
     from ..auth import AuthzConfig, SessionSigner  # noqa: TID252
+    from ..forge_pr import ForgePrClient  # noqa: TID252
     from ..forge_tokens import SessionRevocations  # noqa: TID252
     from ..visibility import VisibilityService  # noqa: TID252
     from ..workload_identity import IdentityIssuer  # noqa: TID252
@@ -118,6 +120,8 @@ class WebContext:
         # Reverse-proxy auth header for the authenticated username.
         # Wired by bootstrap.
         self.proxy_auth_header: str | None = None
+        # Wired by bootstrap. Effects post PR comments through it.
+        self.forge_pr: ForgePrClient | None = None
 
     async def can_control(self, request: Request, build: dict[str, Any]) -> bool:
         """Whether the requester may restart/cancel this build (drives
@@ -475,6 +479,7 @@ class _PageRoutes:
         await ctx.queries.attach_eval_queue(
             [build], await ctx.visible_repo_ids(request)
         )
+        effects = await ctx.queries.effects(build["id"])
         return await ctx.render(
             "build.html",
             request=request,
@@ -487,7 +492,8 @@ class _PageRoutes:
             q=q,
             warned_counts=warned_counts,
             inline=inline,
-            effects=await ctx.queries.effects(build["id"]),
+            effects=[e for e in effects if e["kind"] == "push"],
+            event_effects=[e for e in effects if e["kind"] != "push"],
             effects_status=await ctx.queries.effects_status(build["id"]),
             prev_number=prev_number,
             next_number=next_number,
@@ -795,6 +801,8 @@ def create_app(
                 identity_issuer, task_tokens or TaskTokens()
             )
         )
+    if task_tokens is not None:
+        app.include_router(create_task_router(ctx, task_tokens))
     app.include_router(create_api_router(ctx))
     # Last: the legacy catch-alls must not shadow real routes.
     app.include_router(create_legacy_router(ctx), include_in_schema=False)
