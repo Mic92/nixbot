@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 import pytest
-from nixbot_effects import EffectError
+from nixbot_effects import EffectError, EventEffectMeta
 
 from nixbot import build_run as build_run_mod
 from nixbot import db
@@ -335,9 +335,13 @@ def run_effect_build(
     return run
 
 
-async def effect_statuses(pool: asyncpg.Pool, build_id: int) -> dict[str, str]:
+async def effect_statuses(
+    pool: asyncpg.Pool, build_id: int, kind: str = "push"
+) -> dict[str, str]:
     rows = await pool.fetch(
-        "SELECT name, status FROM effect_runs WHERE build_id = $1", build_id
+        "SELECT name, status FROM effect_runs WHERE build_id = $1 AND kind = $2",
+        build_id,
+        kind,
     )
     return {r["name"]: r["status"] for r in rows}
 
@@ -353,7 +357,9 @@ async def drain_effect_items(
                 orchestrator.pool, id_=item.payload["build_id"]
             )
             assert build is not None
-            await orchestrator.run_effect_item(info, build, item.payload["name"])
+            await orchestrator.run_effect_item(
+                info, build, item.payload["name"], item.payload.get("kind", "push")
+            )
         await queue.finish(item.id)
 
 
@@ -1181,7 +1187,8 @@ async def test_pr_worktree_config_cannot_grant_effects(
     git(upstream, "checkout", "main")
     base = git(upstream, "rev-parse", "HEAD")
 
-    ran = patch_effects(monkeypatch).ran
+    fake = patch_effects(monkeypatch)
+    ran = fake.ran
     orchestrator, reporter, project = await make_env(
         FakeEvalRunner([mk_job("a")]),
         FakeExecutor(),
@@ -1204,7 +1211,14 @@ async def test_pr_worktree_config_cannot_grant_effects(
     )
     # Listed for visibility (Mic92/nixbot#106), never queued or reported.
     assert await effect_statuses(pool, build.id_) == {"deploy": "skipped"}
-    assert not [e for e in reporter.events if e[0].startswith("effect")]
+    # The gated effect's dependencies were still built as a check.
+    assert fake.checked == ["deploy"]
+    assert await effect_statuses(pool, build.id_, "check") == {
+        "push.deploy": "succeeded"
+    }
+    # The PR gets an effects status for its checks: started 1, 0 failed.
+    kinds = [e[0] for e in reporter.events if e[0].startswith("effect")]
+    assert kinds == ["effects-started", "effects-finished"]
 
 
 async def test_rerun_effects_runs_effects_again(
@@ -1801,19 +1815,25 @@ async def test_effect_dep_cycle_fails_discovery(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A dependency cycle is a repo mistake: discovery fails, no effect
-    rows are created, and the (already reported) build stays green."""
+    runs, the (already reported) build stays green, the error is kept
+    for the build page and the effects status is failed."""
 
-    patch_effects(monkeypatch).push_error = EffectError(
-        "dependency cycle between effects"
-    )
-    _, _, build = await _effects_build(make_env, upstream, "eff-cycle")
+    fake = patch_effects(monkeypatch)
+    fake.push_error = EffectError("dependency cycle between effects")
+    fake.events = {"comment": {"apply": EventEffectMeta()}}
+    orchestrator, project, build = await _effects_build(make_env, upstream, "eff-cycle")
+    await drain_effect_items(orchestrator, project, pool)
     assert await build_status(pool, build.id_) == BuildStatus.SUCCEEDED
-    assert (
-        await pool.fetchval(
-            "SELECT count(*) FROM effect_runs WHERE build_id = $1", build.id_
-        )
-        == 0
+    rows = await pool.fetch(
+        "SELECT kind, name, status FROM effect_runs WHERE build_id = $1 ORDER BY name",
+        build.id_,
     )
+    assert [tuple(r) for r in rows] == [("check", "comment.apply", "succeeded")]
+    errors = await builds_q.effect_eval_errors(pool, build_id=build.id_)
+    assert [(x.source, "cycle" in x.error) for x in errors] == [("onPush", True)]
+    summary = await builds_q.effects_summary(pool, build_id=build.id_)
+    assert summary is not None
+    assert summary.status == "failed"
 
 
 async def test_failed_effect_reports_failure_status(

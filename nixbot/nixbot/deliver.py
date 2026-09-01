@@ -56,13 +56,21 @@ class Delivery:
         return cls(**p)
 
 
+@dataclass
+class EventListing:
+    code_rev: str
+    effects: dict[str, dict[str, EventEffectMeta]]
+    error: str | None = None
+
+
 class EventListingCache:
     """`onEvent` of a project's default branch, per rev. All kinds come
     from one evaluation, so a project without onEvent costs one nix
-    eval per default-branch push and nothing per delivery after."""
+    eval per default-branch push and nothing per delivery after. A
+    failed evaluation is cached too."""
 
     def __init__(self) -> None:
-        self._cache: dict[int, tuple[str, dict[str, dict[str, EventEffectMeta]]]] = {}
+        self._cache: dict[int, EventListing] = {}
         # Concurrent deliveries of one project share one evaluation
         # (and one worktree path).
         self._locks: dict[int, asyncio.Lock] = {}
@@ -72,25 +80,23 @@ class EventListingCache:
         s: CIService,
         info: RepoInfo,
         code_rev: str,
-        kind: str,
         credentials: FetchCredentials | None,
-    ) -> dict[str, EventEffectMeta]:
+    ) -> EventListing:
         lock = self._locks.setdefault(info.id, asyncio.Lock())
         async with lock:
             cached = self._cache.get(info.id)
-            if cached is None or cached[0] != code_rev:
-                listing = await self._list(s, info, code_rev, credentials)
-                self._cache[info.id] = (code_rev, listing)
-                cached = self._cache[info.id]
-        return cached[1].get(kind, {})
+            if cached is None or cached.code_rev != code_rev:
+                cached = await self._list(s, info, code_rev, credentials)
+                self._cache[info.id] = cached
+        return cached
 
-    @staticmethod
     async def _list(
+        self,
         s: CIService,
         info: RepoInfo,
         code_rev: str,
         credentials: FetchCredentials | None,
-    ) -> dict[str, dict[str, EventEffectMeta]]:
+    ) -> EventListing:
         repos = s.orchestrator.repos
         worktree = await repos.checkout_for_build(
             info.key,
@@ -109,14 +115,15 @@ class EventListingCache:
                 task_token=None,
             )
             try:
-                return await s.orchestrator.effects.list_all_event_effects(ctx)
-            except (EffectError, OSError):
-                # A broken default branch must not retry per delivery.
-                logger.exception(
+                return EventListing(
+                    code_rev, await s.orchestrator.effects.list_all_event_effects(ctx)
+                )
+            except (EffectError, OSError) as e:
+                logger.info(
                     "onEvent listing failed",
                     extra={"project": info.name, "rev": code_rev},
                 )
-                return {}
+                return EventListing(code_rev, {}, str(e))
         finally:
             await repos.remove_worktree(worktree)
 
@@ -132,7 +139,7 @@ def build_payload(base_url: str, info: RepoInfo, build: BuildRecord) -> dict[str
     }
 
 
-def _dedup_key(
+def event_dedup_key(
     project_id: int, build_id: int, kind: str, name: str, lock: str | None
 ) -> str:
     # Same lock key scheme as onPush effects so both serialise together.
@@ -158,7 +165,20 @@ async def deliver(s: CIService, d: Delivery) -> None:
         credentials,
     )
     code_rev = await repos.rev_parse(info.key, f"refs/heads/{info.default_branch}")
-    listing = await s.event_listings.get(s, info, code_rev, d.kind, credentials)
+    cached = await s.event_listings.get(s, info, code_rev, credentials)
+    listing = cached.effects.get(d.kind, {})
+    if cached.error is not None:
+        await builds_q.record_effect_eval_error(
+            s.pool,
+            build_id=build.id_,
+            source="delivery",
+            error=cached.error[-8000:],
+            code_rev=code_rev,
+        )
+    else:
+        await builds_q.clear_effect_eval_error(
+            s.pool, build_id=build.id_, source="delivery"
+        )
     if not listing:
         return
     try:
@@ -179,6 +199,7 @@ async def deliver(s: CIService, d: Delivery) -> None:
                 payload="{}",
                 code_rev=code_rev,
                 actor=d.actor,
+                lock=None,
             )
         return
     await ev_q.supersede_event_effects(
@@ -210,6 +231,7 @@ async def _match_and_enqueue(  # noqa: PLR0913
     payload_json = json.dumps(payload)
     for name, meta in listing.items():
         reason = skip_reason(meta.when, payload)
+        lock = None
         try:
             lock = expand_lock(meta.lock, payload)
         except EffectError as e:
@@ -224,6 +246,7 @@ async def _match_and_enqueue(  # noqa: PLR0913
             payload=payload_json,
             code_rev=code_rev,
             actor=d.actor,
+            lock=lock,
         )
         if run_id is None:
             if not reason:
@@ -232,7 +255,7 @@ async def _match_and_enqueue(  # noqa: PLR0913
         if reason:
             continue
         names.append(name)
-        keys.append(_dedup_key(build.project_id, build.id_, d.kind, name, lock))
+        keys.append(event_dedup_key(build.project_id, build.id_, d.kind, name, lock))
     if names:
         await wq.enqueue_effect_items(
             s.pool, build_id=build.id_, kind=d.kind, names=names, dedup_keys=keys

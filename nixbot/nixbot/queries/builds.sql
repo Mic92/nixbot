@@ -93,7 +93,7 @@ WITH failed_effects AS (
     UPDATE effect_runs SET status = 'failed',
         error = 'build did not succeed', finished_at = now()
     WHERE effect_runs.build_id = sqlc.arg(id)::bigint
-      AND effect_runs.kind = 'push'
+      AND effect_runs.owner = 'build'
       AND effect_runs.status = 'pending'
       AND sqlc.arg(status)::text IN ('failed', 'cancelled')
 )
@@ -227,6 +227,23 @@ ON CONFLICT (build_id, kind, name) DO UPDATE SET
     log_truncated = FALSE, started_at = now(), finished_at = NULL,
     deps = EXCLUDED.deps;
 
+-- name: StartPendingChecks :exec
+-- Build-time effect checks (kind 'check'): dependencies of every
+-- onEvent effect, and of onPush effects on refs where they do not run.
+WITH dropped AS (
+    DELETE FROM effect_runs
+    WHERE build_id = sqlc.arg(build_id)::bigint AND kind = 'check'
+      AND status <> 'running' AND NOT (name = ANY(sqlc.arg(names)::text[]))
+)
+INSERT INTO effect_runs (project_id, kind, build_id, name, status)
+SELECT b.project_id, 'check', b.id, u.name, 'pending'
+FROM builds b, unnest(sqlc.arg(names)::text[]) AS u(name)
+WHERE b.id = sqlc.arg(build_id)::bigint
+ON CONFLICT (build_id, kind, name) DO UPDATE SET
+    status = 'pending', error = NULL, log_size = 0,
+    log_truncated = FALSE, started_at = now(), finished_at = NULL
+WHERE effect_runs.status <> 'running';
+
 -- name: RecordSkippedEffects :exec
 -- DO NOTHING: rows from a real run (build reused by a gated ref) stay.
 INSERT INTO effect_runs (project_id, kind, build_id, name, status, finished_at)
@@ -250,8 +267,15 @@ UPDATE effect_runs SET
 WHERE build_id = sqlc.arg(build_id) AND kind = sqlc.arg(kind) AND name = sqlc.arg(name);
 
 -- name: EffectsSummary :one
--- status: running while anything is in flight, else the worst outcome.
--- No row for a build without effects.
+-- Running while anything is in flight, else the worst outcome. Eval
+-- errors of the built commit count as failures. No row when empty.
+WITH rows AS (
+    SELECT r.status FROM effect_runs r
+    WHERE r.build_id = sqlc.arg(build_id)::bigint AND r.owner = 'build'
+    UNION ALL
+    SELECT 'failed' FROM effect_eval_errors x
+    WHERE x.build_id = sqlc.arg(build_id)::bigint AND x.source <> 'delivery'
+)
 SELECT
     count(*) FILTER (WHERE status IN ('failed', 'dependency_failed'))::bigint AS failed,
     count(*) FILTER (WHERE status = 'succeeded')::bigint AS succeeded,
@@ -264,8 +288,20 @@ SELECT
         WHEN bool_or(status = 'succeeded') THEN 'succeeded'
         ELSE 'skipped'
     END::text AS status
-FROM effect_runs WHERE build_id = $1 AND kind = 'push'
+FROM rows
 HAVING count(*) > 0;
+
+-- name: RecordEffectEvalError :exec
+INSERT INTO effect_eval_errors (build_id, source, error, code_rev)
+VALUES ($1, $2, sqlc.arg(error)::text, sqlc.narg(code_rev)::text)
+ON CONFLICT (build_id, source) DO UPDATE SET
+    error = EXCLUDED.error, code_rev = EXCLUDED.code_rev, created_at = now();
+
+-- name: ClearEffectEvalError :exec
+DELETE FROM effect_eval_errors WHERE build_id = $1 AND source = $2;
+
+-- name: EffectEvalErrors :many
+SELECT * FROM effect_eval_errors WHERE build_id = $1 ORDER BY source;
 
 -- name: EffectsForBuild :many
 SELECT * FROM effect_runs WHERE build_id = $1 ORDER BY name;

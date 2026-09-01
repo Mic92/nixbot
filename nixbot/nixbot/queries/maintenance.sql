@@ -33,14 +33,17 @@ WITH cleared_failures AS (
 ), reset_effect_rows AS (
     UPDATE effect_runs SET status = 'pending', error = NULL,
         finished_at = NULL, log_size = 0, log_truncated = FALSE
-    WHERE build_id = sqlc.arg(build_id)::bigint AND kind = 'push'
+    WHERE build_id = sqlc.arg(build_id)::bigint AND owner = 'build'
       AND sqlc.narg(attr)::text IS NULL
 ), cancel_event_rows AS (
     -- Event effects are re-delivered when the rebuilt build settles.
     -- Finished ones keep their history and log.
     UPDATE effect_runs SET status = 'cancelled', finished_at = now()
-    WHERE build_id = sqlc.arg(build_id)::bigint AND kind <> 'push'
+    WHERE build_id = sqlc.arg(build_id)::bigint AND owner = 'delivery'
       AND status = 'pending' AND sqlc.narg(attr)::text IS NULL
+), cleared_eval_errors AS (
+    DELETE FROM effect_eval_errors
+    WHERE build_id = sqlc.arg(build_id)::bigint AND sqlc.narg(attr)::text IS NULL
 )
 UPDATE builds SET status = 'pending', error = NULL,
     eval_warnings = NULL, started_at = NULL, finished_at = NULL,

@@ -392,7 +392,7 @@ SELECT id FROM effect_runs WHERE build_id = $1 AND kind = 'push' AND name = $2
 """
 
 WEB_EFFECTS: typing.Final[str] = """-- name: WebEffects :many
-SELECT id, project_id, kind, build_id, schedule_name, name, status, error, deps, log_size, log_truncated, started_at, finished_at, payload, code_rev, skip_reason, actor FROM effect_runs WHERE build_id = $1
+SELECT id, project_id, kind, owner, build_id, schedule_name, name, status, error, deps, log_size, log_truncated, started_at, finished_at, payload, code_rev, skip_reason, actor, lock FROM effect_runs WHERE build_id = $1
 ORDER BY array_position(
     ARRAY['failed', 'dependency_failed', 'running', 'pending', 'succeeded', 'skipped'],
     status), name
@@ -759,20 +759,22 @@ def web_effects(conn: ConnectionLike, *, build_id: int | None) -> QueryResults[m
             id_=row[0],
             project_id=row[1],
             kind=row[2],
-            build_id=row[3],
-            schedule_name=row[4],
-            name=row[5],
-            status=row[6],
-            error=row[7],
-            deps=row[8],
-            log_size=row[9],
-            log_truncated=row[10],
-            started_at=row[11],
-            finished_at=row[12],
-            payload=row[13],
-            code_rev=row[14],
-            skip_reason=row[15],
-            actor=row[16],
+            owner=row[3],
+            build_id=row[4],
+            schedule_name=row[5],
+            name=row[6],
+            status=row[7],
+            error=row[8],
+            deps=row[9],
+            log_size=row[10],
+            log_truncated=row[11],
+            started_at=row[12],
+            finished_at=row[13],
+            payload=row[14],
+            code_rev=row[15],
+            skip_reason=row[16],
+            actor=row[17],
+            lock=row[18],
         )
 
     return QueryResults(conn, WEB_EFFECTS, _decode_hook, build_id)
