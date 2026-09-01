@@ -623,9 +623,21 @@ async def test_build_service_composition(postgres_dsn: str, tmp_path: Path) -> N
         await service.pool.close()
 
 
-async def test_restart_removes_stale_logs(postgres_dsn: str, tmp_path: Path) -> None:
+def skip_reeval(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These tests cover the restart reset, not the re-evaluation."""
+
+    async def noop(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr("nixbot.restart_dispatch._reeval", noop)
+
+
+async def test_restart_removes_stale_logs(
+    postgres_dsn: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A restart drops the previous run's log metadata and on-disk file
     at reset time, so the pending row does not show stale output."""
+    skip_reeval(monkeypatch)
     config = make_config(postgres_dsn, tmp_path / "state")
     service, _app = await build_service(config)
     pool = service.pool
@@ -644,6 +656,7 @@ async def test_restart_removes_stale_logs(postgres_dsn: str, tmp_path: Path) -> 
         log_file.write_bytes(b"stale log")
 
         await service.restart_build(build_id)
+        await service.drain_work()
 
         assert (
             await pool.fetchval(
@@ -656,9 +669,10 @@ async def test_restart_removes_stale_logs(postgres_dsn: str, tmp_path: Path) -> 
         await pool.close()
 
 
-async def test_restart_clears_failed_cache_immediately(
-    postgres_dsn: str, tmp_path: Path
+async def test_restart_clears_failed_cache(
+    postgres_dsn: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    skip_reeval(monkeypatch)
     config = make_config(postgres_dsn, tmp_path / "state")
     service, _app = await build_service(config)
     pool = service.pool
@@ -679,9 +693,12 @@ async def test_restart_clears_failed_cache_immediately(
             project_id,
         )
 
-        # Reset is synchronous: cache cleared and rows pending
-        # before any worker runs.
         await service.restart_build(build_id)
+        assert (
+            await pool.fetchval("SELECT kind FROM work_queue WHERE status = 'pending'")
+            == "rerun"
+        )
+        await service.drain_work()
         assert await pool.fetchval("SELECT count(*) FROM failed_builds") == 0
         assert (
             await pool.fetchval(
@@ -693,10 +710,6 @@ async def test_restart_clears_failed_cache_immediately(
         assert (
             await pool.fetchval("SELECT status FROM builds WHERE id = $1", build_id)
             == "pending"
-        )
-        assert (
-            await pool.fetchval("SELECT kind FROM work_queue WHERE status = 'pending'")
-            == "rerun"
         )
     finally:
         await pool.close()
@@ -892,10 +905,11 @@ async def test_effect_item_setup_failure_settles_row(
 
 
 async def test_restart_attribute_posts_pending(
-    postgres_dsn: str, tmp_path: Path
+    postgres_dsn: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Re-run on the forge must flip the check to pending immediately,
-    not only when the async rebuild finishes."""
+    """Re-run on the forge must flip the check to pending when the
+    reset lands, not only when the async rebuild finishes."""
+    skip_reeval(monkeypatch)
     config = make_config(postgres_dsn, tmp_path / "state")
     service, _app = await build_service(config)
     pool = service.pool
@@ -922,6 +936,7 @@ async def test_restart_attribute_posts_pending(
         service.orchestrator.reporter = FakeReporter()
 
         await service.restart_attribute(build_id, "x86_64-linux.a")
+        await service.drain_work()
 
         assert restarts == [(build_id, "x86_64-linux.a")]
     finally:

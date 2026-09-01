@@ -73,17 +73,10 @@ async def rerun_pending_attributes(
     the stored eval results — no re-evaluation (attribute restarts
     and crash recovery)."""
     if build.id_ in o.cancel_events:
-        # Already running. A concurrent rerun would double-write
-        # attribute completions.
-        return
-    # Claim the slot before the first await. Concurrent reruns
-    # must not pass the guard together.
+        msg = f"build {build.id_} still has a live run"
+        raise RuntimeError(msg)
     cancel_event = o.cancel_events[build.id_] = asyncio.Event()
     try:
-        current = await builds_q.get_build(o.pool, id_=build.id_)
-        if current is not None and current.status == "cancelled":
-            # Cancelled between scheduling the rerun and getting here.
-            return
         # Pending rows for systems no longer in build_systems would
         # stay non-terminal forever: the scheduler drops their jobs.
         # Drop the rows too (same as never recording them).
@@ -135,7 +128,7 @@ async def rerun_pending_attributes(
                 await o.refresh_schedules(event)
     finally:
         o.canceller.complete(build.id_)
-        o.cancel_events.pop(build.id_, None)
+        o.release_run(build.id_)
 
 
 async def _rerun_names(
@@ -216,4 +209,4 @@ async def rerun_effects(
         # The enqueued effect items share this build's key and only
         # become claimable once this item finishes.
     finally:
-        o.cancel_events.pop(build.id_, None)
+        o.release_run(build.id_)

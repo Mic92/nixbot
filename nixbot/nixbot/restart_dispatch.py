@@ -1,12 +1,12 @@
-"""Build rerun paths driven from the work queue: resuming pending
-attributes from stored eval results, falling back to re-evaluation,
-and effects-only restarts. State resets happen synchronously in the
-service. This module only re-executes.
+"""Build rerun paths driven from the work queue: restarts, resuming
+pending attributes from stored eval results, falling back to
+re-evaluation, and effects-only restarts. A build's rows have a single
+writer, so restart resets happen here once the previous run released
+the build, never from the request handler.
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import TYPE_CHECKING
 
@@ -14,7 +14,7 @@ from . import db
 from .db import BuildStatus
 from .db_gen import builds as builds_q
 from .db_gen import maintenance as q
-from .events import BuildResult, ChangeEvent, EvalReport
+from .events import BuildResult, ChangeEvent, EvalReport, event_for_build
 from .recovery import check_store_paths, find_unfinished_builds
 from .repos import repo_info
 
@@ -27,11 +27,6 @@ if TYPE_CHECKING:
     from .service import CIService
 
 logger = logging.getLogger(__name__)
-
-# Pause before handing a rerun of a still-unwinding build back to
-# the work queue. Bounds the retry cadence without holding the
-# dedup key indefinitely.
-UNWIND_RETRY_SECONDS = 0.5
 
 
 async def restart_effects(s: CIService, build_id: int, name: str | None = None) -> None:
@@ -48,32 +43,38 @@ async def restart_effects(s: CIService, build_id: int, name: str | None = None) 
     await s.orchestrator.rerun_effects(info, build, credentials, only=name)
 
 
-async def rerun(s: CIService, build_id: int) -> bool:
+async def rerun(
+    s: CIService, build_id: int, *, restart: bool = False, attr: str | None = None
+) -> None:
     """Resume the pending attributes of a build from stored eval
-    results, falling back to a re-evaluation. Returns True when the
-    previous run is still unwinding and the rerun must be retried
-    (rerun_pending_attributes would drop it on the floor)."""
-    # Serialized by the work queue's per-build dedup key.
-    if build_id in s.orchestrator.cancel_events:
-        await asyncio.sleep(UNWIND_RETRY_SECONDS)
-        if build_id in s.orchestrator.cancel_events:
-            return True
-    build = await builds_q.get_build(s.orchestrator.pool, id_=build_id)
+    results, falling back to a re-evaluation. With `restart`, first
+    reset the build (or one attribute) to pending."""
+    o = s.orchestrator
+    # Single writer: never reset or rerun under a live run.
+    await o.wait_idle(build_id)
+    build = await builds_q.get_build(o.pool, id_=build_id)
     if build is None:
-        return False
+        return
     project = await s.repo_store.by_id(build.project_id)
     if project is None:
-        return False
+        return
     info = repo_info(project)
+    if restart:
+        await q.reset_build_for_restart(o.pool, build_id=build_id, attr=attr)
+        o.reset_build_logs(build_id, attr)
+        build = await builds_q.get_build(o.pool, id_=build_id)
+        if build is None:
+            return
+        await o.reporter.build_restarted(event_for_build(info, build), build, attr)
     credentials = await s.credentials_provider(info.forge).get(info.clone_url)
     results = await find_unfinished_builds(s.pool, build_id=build_id)
     resumable = results[0] if results else None
     if resumable is None:
-        return False
+        return
     jobs = await _resumable_eval_jobs(s, build, resumable)
     if jobs is not None:
-        await s.orchestrator.rerun_pending_attributes(info, build, jobs, credentials)
-        return False
+        await o.rerun_pending_attributes(info, build, jobs, credentials)
+        return
     # No usable stored eval: re-evaluate rather than rerun an empty set
     # that would aggregate straight to "succeeded".
     try:
@@ -87,7 +88,6 @@ async def rerun(s: CIService, build_id: int) -> bool:
             error="re-evaluation failed; see service logs",
         )
         await _report_interrupted(s, resumable)
-    return False
 
 
 async def _resumable_eval_jobs(
@@ -135,7 +135,7 @@ async def _reeval(
         ):
             await s.orchestrator.run_build(event, build, worktree_path)
     finally:
-        s.orchestrator.cancel_events.pop(build.id_, None)
+        s.orchestrator.release_run(build.id_)
 
 
 async def change_event_for(

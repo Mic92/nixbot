@@ -563,7 +563,7 @@ async def build_attributes(  # noqa: PLR0913
         BuildResult(status, generation, schedule_result.results),
         eval_success=True,
     )
-    o.cancel_events.pop(build.id_, None)
+    o.release_run(build.id_)
 
     if status == BuildStatus.SUCCEEDED:
         await o.refresh_schedules(event)
