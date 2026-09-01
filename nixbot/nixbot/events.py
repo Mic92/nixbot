@@ -81,6 +81,7 @@ class EvalReport:
     warnings: list[str] = field(default_factory=list)
     jobs: Sequence[NixEvalJobSuccess] | None = None
     error: str | None = None
+    duration_ms: int | None = None
 
 
 @dataclass(frozen=True)

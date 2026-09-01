@@ -15,6 +15,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from markupsafe import Markup
 
 from ..ansi import strip_ansi  # noqa: TID252
+from ..fmt import format_duration  # noqa: TID252
 from .logs import ansi_to_html
 
 if TYPE_CHECKING:
@@ -78,12 +79,7 @@ def duration(row: dict[str, Any]) -> str:
 def duration_secs(value: float | None) -> str:
     if value is None:
         return "—"
-    seconds = int(value)
-    if seconds >= 3600:  # noqa: PLR2004
-        return f"{seconds // 3600}h {seconds % 3600 // 60}m"
-    if seconds >= 60:  # noqa: PLR2004
-        return f"{seconds // 60}m {seconds % 60}s"
-    return f"{seconds}s"
+    return format_duration(value)
 
 
 def _forge_base(project: dict[str, Any]) -> str | None:

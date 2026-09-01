@@ -270,6 +270,7 @@ async def _record_eval_success(
             success=True,
             warnings=[str(g["message"]) for g in live_warnings.snapshot()],
             jobs=buildable,
+            duration_ms=result.duration_ms,
         ),
     )
 

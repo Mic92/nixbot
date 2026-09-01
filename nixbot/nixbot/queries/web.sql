@@ -196,3 +196,7 @@ WHERE started_at IS NOT NULL AND finished_at IS NOT NULL;
 -- name: MetricsProjects :one
 SELECT count(*) FILTER (WHERE enabled) AS enabled, count(*) AS total
 FROM projects;
+
+-- name: MetricsEvalDuration :one
+SELECT coalesce(sum(eval_duration_ms), 0)::float / 1000 AS total, count(*) AS count
+FROM builds WHERE eval_duration_ms IS NOT NULL;

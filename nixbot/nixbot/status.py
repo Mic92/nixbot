@@ -39,6 +39,7 @@ import httpx
 
 from .ansi import strip_ansi
 from .db_gen import failed as q
+from .fmt import format_duration
 from .forge import ForgeError
 from .forge.retry import retry_after_seconds
 
@@ -385,8 +386,12 @@ def effects_summary_description(failed: int, succeeded: int) -> str:
     return f"{succeeded} effect{'s' if succeeded != 1 else ''} succeeded"
 
 
-def eval_description(success: bool, warnings: list[str]) -> str:
+def eval_description(
+    success: bool, warnings: list[str], duration_ms: int | None = None
+) -> str:
     base = "evaluation succeeded" if success else "evaluation failed"
+    if duration_ms is not None:
+        base += f" in {format_duration(duration_ms / 1000)}"
     if warnings:
         count = len(warnings)
         return f"{base} ({count} warning{'s' if count != 1 else ''})"
@@ -494,7 +499,7 @@ class ForgeStatusReporter:
             build,
             f"{self.context_prefix}/nix-eval",
             StatusState.success if report.success else StatusState.failure,
-            eval_description(report.success, report.warnings),
+            eval_description(report.success, report.warnings, report.duration_ms),
             text=text,
         )
         if report.success:

@@ -239,6 +239,11 @@ def test_eval_description_warning_count() -> None:
     assert eval_description(True, []) == "evaluation succeeded"
     assert eval_description(True, ["w"]) == "evaluation succeeded (1 warning)"
     assert eval_description(False, ["a", "b"]) == "evaluation failed (2 warnings)"
+    assert (
+        eval_description(True, ["w"], 38_400)
+        == "evaluation succeeded in 38s (1 warning)"
+    )
+    assert eval_description(True, [], 3_723_000) == "evaluation succeeded in 1h 2m"
 
 
 async def test_phase_statuses_and_target_url() -> None:

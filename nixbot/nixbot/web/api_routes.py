@@ -81,6 +81,8 @@ class Build(BaseModel):
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
+    # nix-eval-jobs run time. None unless this build evaluated.
+    eval_duration_ms: int | None = None
     eval_queue: EvalQueue | None = None  # only while pending
 
 
@@ -108,6 +110,9 @@ class Attribute(BaseModel):
     finished_at: datetime | None
     log_size: int | None = None
     log_truncated: bool | None = None
+    # Per-attribute cost reported by nix-eval-jobs.
+    eval_wall_ms: int | None = None
+    eval_alloc_bytes: int | None = None
 
 
 class Effect(BaseModel):
