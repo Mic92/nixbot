@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 __all__: collections.abc.Sequence[str] = (
-    "AttributeEvalStatsRow",
+    "AttributeStatusRow",
     "MetricsAttributeCountsRow",
     "MetricsBuildCountsRow",
     "MetricsBuildDurationRow",
@@ -16,12 +16,12 @@ __all__: collections.abc.Sequence[str] = (
     "WebAttributeCountsRow",
     "WebAttributeHistoryRow",
     "WebAttributeNeighborNumbersRow",
+    "WebEvalStatsRow",
     "WebNeighborNumbersRow",
     "WebQueueRow",
     "WebRecentBuildsRow",
     "WebRepoOverviewRow",
     "attribute_error",
-    "attribute_eval_stats",
     "attribute_status",
     "metrics_attribute_counts",
     "metrics_build_counts",
@@ -38,6 +38,7 @@ __all__: collections.abc.Sequence[str] = (
     "web_build_by_number",
     "web_builds_for_repo",
     "web_effects",
+    "web_eval_stats",
     "web_neighbor_numbers",
     "web_projects",
     "web_queue",
@@ -192,7 +193,8 @@ class WebQueueRow:
 
 
 @dataclasses.dataclass()
-class AttributeEvalStatsRow:
+class AttributeStatusRow:
+    status: str
     eval_wall_ms: int | None
     eval_alloc_bytes: int | None
 
@@ -225,6 +227,14 @@ class MetricsProjectsRow:
 class MetricsEvalDurationRow:
     total: int
     count: int
+
+
+@dataclasses.dataclass()
+class WebEvalStatsRow:
+    attr: str
+    status: str
+    eval_wall_ms: int | None
+    eval_alloc_bytes: int | None
 
 
 WEB_PROJECTS: typing.Final[str] = """-- name: WebProjects :many
@@ -404,11 +414,7 @@ ORDER BY b.status = 'pending', b.id
 """
 
 ATTRIBUTE_STATUS: typing.Final[str] = """-- name: AttributeStatus :one
-SELECT status FROM build_attributes WHERE build_id = $1 AND attr = $2
-"""
-
-ATTRIBUTE_EVAL_STATS: typing.Final[str] = """-- name: AttributeEvalStats :one
-SELECT eval_wall_ms, eval_alloc_bytes FROM build_attributes
+SELECT status, eval_wall_ms, eval_alloc_bytes FROM build_attributes
 WHERE build_id = $1 AND attr = $2
 """
 
@@ -445,6 +451,14 @@ FROM projects
 METRICS_EVAL_DURATION: typing.Final[str] = """-- name: MetricsEvalDuration :one
 SELECT coalesce(sum(eval_duration_ms), 0)::float / 1000 AS total, count(*) AS count
 FROM builds WHERE eval_duration_ms IS NOT NULL
+"""
+
+WEB_EVAL_STATS: typing.Final[str] = """-- name: WebEvalStats :many
+SELECT attr, status, eval_wall_ms, eval_alloc_bytes FROM build_attributes
+WHERE build_id = $1 AND eval_wall_ms IS NOT NULL
+ORDER BY CASE WHEN $2::boolean
+    THEN eval_alloc_bytes ELSE eval_wall_ms END DESC, attr
+LIMIT $3::bigint
 """
 
 
@@ -794,18 +808,11 @@ def web_queue(conn: ConnectionLike, *, project_ids: collections.abc.Sequence[int
     return QueryResults(conn, WEB_QUEUE, _decode_hook, project_ids)
 
 
-async def attribute_status(conn: ConnectionLike, *, build_id: int, attr: str) -> str | None:
+async def attribute_status(conn: ConnectionLike, *, build_id: int, attr: str) -> AttributeStatusRow | None:
     row = await conn.fetchrow(ATTRIBUTE_STATUS, build_id, attr)
     if row is None:
         return None
-    return row[0]
-
-
-async def attribute_eval_stats(conn: ConnectionLike, *, build_id: int, attr: str) -> AttributeEvalStatsRow | None:
-    row = await conn.fetchrow(ATTRIBUTE_EVAL_STATS, build_id, attr)
-    if row is None:
-        return None
-    return AttributeEvalStatsRow(eval_wall_ms=row[0], eval_alloc_bytes=row[1])
+    return AttributeStatusRow(status=row[0], eval_wall_ms=row[1], eval_alloc_bytes=row[2])
 
 
 async def attribute_error(conn: ConnectionLike, *, build_id: int, attr: str) -> str | None:
@@ -855,3 +862,10 @@ async def metrics_eval_duration(conn: ConnectionLike) -> MetricsEvalDurationRow 
     if row is None:
         return None
     return MetricsEvalDurationRow(total=row[0], count=row[1])
+
+
+def web_eval_stats(conn: ConnectionLike, *, build_id: int, by_alloc: bool, limit_: int) -> QueryResults[WebEvalStatsRow]:
+    def _decode_hook(row: asyncpg.Record) -> WebEvalStatsRow:
+        return WebEvalStatsRow(attr=row[0], status=row[1], eval_wall_ms=row[2], eval_alloc_bytes=row[3])
+
+    return QueryResults(conn, WEB_EVAL_STATS, _decode_hook, build_id, by_alloc, limit_)

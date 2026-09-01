@@ -53,7 +53,9 @@
             · <time datetime="{{ build.created_at.isoformat() }}"
        title="{{ build.created_at }}">{{ build.created_at | timeago }}</time>
             · {{ "running for" if build.status in RUNNING_STATUSES else "took" }} {{ build | duration }}
-            {% if build.eval_duration_ms is not none %}· eval {{ (build.eval_duration_ms / 1000) | duration_secs }}{% endif %}
+            {% if build.eval_duration_ms is not none %}
+              · <a href="{{ build_path(project, build.number) }}/eval">eval {{ (build.eval_duration_ms / 1000) | duration_secs }}</a>
+            {% endif %}
           </p>
         </div>
         <div class="controls">

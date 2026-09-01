@@ -13,8 +13,7 @@
         <ul class="attr-warnings">{% for w in aw %}<li>{{ w | ansi }}</li>{% endfor %}</ul>
       {% endif %}
     </td>
-    {% set es = a | eval_stats %}
-    <td class="attr-duration"{% if es %} title="{{ es }}"{% endif %}>{{ a | duration }}</td>
+    <td class="attr-duration" title="{{ a | eval_stats }}">{{ a | duration }}</td>
   </tr>
   {% if a.error %}{{ error_row(a.error) }}{% endif %}
 {% endfor %}
