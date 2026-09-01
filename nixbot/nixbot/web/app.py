@@ -590,6 +590,32 @@ class _PageRoutes:
             history=await ctx.queries.attribute_history(project["id"], attr),
         )
 
+    async def eval_page(  # noqa: PLR0913
+        self,
+        request: Request,
+        forge: str,
+        owner: str,
+        name: str,
+        number: int,
+        sort: str = "time",
+    ) -> HTMLResponse:
+        """Per-attribute eval cost as reported by nix-eval-jobs."""
+        ctx = self.ctx
+        if sort not in ("time", "alloc"):
+            raise HTTPException(status_code=404)
+        project = await ctx.repo_or_404(forge, owner, name, request)
+        build = await ctx.queries.build_by_number(project["id"], number)
+        if build is None:
+            raise HTTPException(status_code=404)
+        return await ctx.render(
+            "eval.html",
+            request=request,
+            project=project,
+            build=build,
+            sort=sort,
+            rows=await ctx.queries.eval_stats(build["id"], by_alloc=sort == "alloc"),
+        )
+
     async def badge(
         self, request: Request, forge: str, owner: str, name: str, branch: str = ""
     ) -> Response:
@@ -640,6 +666,10 @@ def create_router(ctx: WebContext) -> APIRouter:
         (
             "/repos/{forge}/{owner:owner}/{name:segment}/builds/{number}/attrs",
             pages.attribute_rows,
+        ),
+        (
+            "/repos/{forge}/{owner:owner}/{name:segment}/builds/{number}/eval",
+            pages.eval_page,
         ),
         # :path — attribute names may contain slashes.
         (

@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     import asyncpg
 
 PAGE_SIZE = 50
+EVAL_STATS_LIMIT = 500
 
 
 @dataclass
@@ -162,6 +163,16 @@ class WebQueries:
 
     async def effects(self, build_id: int) -> list[dict[str, Any]]:
         return _dicts(await gen.web_effects(self.pool, build_id=build_id))
+
+    async def eval_stats(
+        self, build_id: int, *, by_alloc: bool
+    ) -> list[dict[str, Any]]:
+        """Most expensive attributes to evaluate."""
+        return _dicts(
+            await gen.web_eval_stats(
+                self.pool, build_id=build_id, by_alloc=by_alloc, limit_=EVAL_STATS_LIMIT
+            )
+        )
 
     async def effects_status(self, build_id: int) -> str | None:
         row = await builds_gen.effects_summary(self.pool, build_id=build_id)

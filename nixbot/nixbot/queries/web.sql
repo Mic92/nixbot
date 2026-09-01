@@ -171,10 +171,7 @@ WHERE b.status IN ('pending', 'evaluating', 'building')
 ORDER BY b.status = 'pending', b.id;
 
 -- name: AttributeStatus :one
-SELECT status FROM build_attributes WHERE build_id = $1 AND attr = $2;
-
--- name: AttributeEvalStats :one
-SELECT eval_wall_ms, eval_alloc_bytes FROM build_attributes
+SELECT status, eval_wall_ms, eval_alloc_bytes FROM build_attributes
 WHERE build_id = $1 AND attr = $2;
 
 -- name: AttributeError :one
@@ -204,3 +201,11 @@ FROM projects;
 -- name: MetricsEvalDuration :one
 SELECT coalesce(sum(eval_duration_ms), 0)::float / 1000 AS total, count(*) AS count
 FROM builds WHERE eval_duration_ms IS NOT NULL;
+
+-- name: WebEvalStats :many
+-- Attributes with eval stats, most expensive first.
+SELECT attr, status, eval_wall_ms, eval_alloc_bytes FROM build_attributes
+WHERE build_id = $1 AND eval_wall_ms IS NOT NULL
+ORDER BY CASE WHEN sqlc.arg(by_alloc)::boolean
+    THEN eval_alloc_bytes ELSE eval_wall_ms END DESC, attr
+LIMIT sqlc.arg(limit_)::bigint;

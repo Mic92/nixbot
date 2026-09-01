@@ -28,10 +28,7 @@
               <td>{{ h.branch }}</td>
               <td>{{ status_pill(h.status) }}</td>
               <td>{{ commit_link(project, h.commit_sha) }}</td>
-              <td class="muted"
-                  {% if h.eval_alloc_bytes is not none %} title="{{ h.eval_alloc_bytes | human_bytes }} allocated"{% endif %}>
-                {{ h.eval_wall_ms | eval_ms if h.eval_wall_ms is not none else "" }}
-              </td>
+              <td class="muted" title="{{ h | eval_stats }}">{{ h.eval_wall_ms | eval_ms }}</td>
               <td>{{ ago(h.build_created_at) }}</td>
             </tr>
           {% else %}

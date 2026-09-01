@@ -2277,9 +2277,14 @@ def test_build_eval_stats_surface(client: WebHarness) -> None:
     client.loop.run_until_complete(seed())
     base = "/repos/github/acme/widget"
     text = client.get(f"{base}/builds/2").text
-    assert "· eval 38s" in text
+    assert ">eval 38s</a>" in text
     assert 'title="eval 412 ms · 48.0 MiB allocated"' in text
-    assert "· eval" not in client.get(f"{base}/builds/1").text
+    assert f'href="{base}/builds/2/eval"' in text
+    assert "/eval" not in client.get(f"{base}/builds/1").text
+    stats = client.get(f"{base}/builds/2/eval?sort=alloc").text
+    assert "x86_64-linux.evalfail" in stats
+    assert "48.0 MiB" in stats
+    assert client.get(f"{base}/builds/2/eval?sort=bogus").status_code == 404
     log_page = client.get(f"{base}/builds/2/logs/x86_64-linux.evalfail").text
     assert "eval 412 ms · 48.0 MiB allocated" in log_page
     history = client.get(f"{base}/attrs/x86_64-linux.evalfail").text

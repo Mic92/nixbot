@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% from "_macros.html" import status_icon %}
+{% block title %}
+  {{ repo_name(project.owner, project.name) }} #{{ build.number }} eval
+{% endblock title %}
+{% block body %}
+  <main id="main">
+    <section class="content">
+      <div class="build-header">
+        <div>
+          <h2>
+            {{ status_icon(build.status, labelled=false) }}<a href="{{ repo_path(project) }}">{{ repo_name(project.owner, project.name) }}</a>
+            <a href="{{ build_path(project, build.number) }}">build #{{ build.number }}</a>
+            evaluation
+          </h2>
+          <p class="build-meta">
+            {% if build.eval_duration_ms is not none %}took {{ (build.eval_duration_ms / 1000) | duration_secs }} ·{% endif %}
+            {{ rows | length }} attribute{{ "s" if rows | length != 1 }}
+            · measured per nix-eval-jobs worker, shared work counts towards the first attribute that needs it
+          </p>
+        </div>
+      </div>
+      <form method="get" class="filters">
+        <select name="sort" aria-label="sort by" onchange="this.form.submit()">
+          <option value="time" {% if sort == "time" %}selected{% endif %}>slowest first</option>
+          <option value="alloc" {% if sort == "alloc" %}selected{% endif %}>largest first</option>
+        </select>
+      </form>
+      <div class="table-scroll">
+        <table class="attrs">
+          <thead class="visually-hidden">
+            <tr>
+              <th scope="col">status</th>
+              <th scope="col">attribute</th>
+              <th scope="col">time</th>
+              <th scope="col">allocated</th>
+            </tr>
+          </thead>
+          {% for a in rows %}
+            <tr>
+              <td class="attr-status">{{ status_icon(a.status) }}</td>
+              <td class="attr-name">
+                <a href="{{ build_path(project, build.number) }}/logs/{{ a.attr | urlencode }}"><code>{{ a.attr }}</code></a>
+              </td>
+              <td class="attr-duration">{{ a.eval_wall_ms | eval_ms }}</td>
+              <td class="attr-duration">{{ a.eval_alloc_bytes | human_bytes }}</td>
+            </tr>
+          {% else %}
+            <tr>
+              <td colspan="4" class="empty-state">no eval stats recorded</td>
+            </tr>
+          {% endfor %}
+        </table>
+      </div>
+    </section>
+  </main>
+{% endblock body %}
