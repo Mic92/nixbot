@@ -145,9 +145,14 @@ def test_log_page_keeps_up_with_a_line_burst(page: Page, server: TestServer) -> 
         server.run(burst())
         page.locator(".logline", has_text="burst done").wait_for(timeout=60_000)
         assert layout_count() - before < max_layouts
-        rows = page.locator(".log-card .log-lines > *")
+        rows = page.locator(".log-card .log-lines > .logline")
         assert rows.count() == max_live_rows
         assert "burst done" in rows.last.inner_text()
+        # Scrolling up to the marker loads the trimmed lines back.
+        marker = page.locator(".log-card .log-lines > .log-elided").first
+        assert "obj_0.o" not in page.content()
+        marker.scroll_into_view_if_needed()
+        page.locator(".logline", has_text="obj_0.o").wait_for(timeout=15_000)
     finally:
         cdp.detach()
         cap.close()

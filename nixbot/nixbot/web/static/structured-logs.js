@@ -10,6 +10,8 @@
  * @typedef {{idx:number,status:string,html?:string,card?:string}} Drv
  * @typedef {{t:string,idx:number,status?:string,html?:string,card?:string}} Delta
  */
+/** @param {Element|null} el */
+const hx = (el) => /** @type {any} */ (globalThis).htmx.process(el);
 
 (() => {
   /** @param {string} id @returns {HTMLElement|null} */
@@ -21,7 +23,7 @@
     return el;
   };
   const list = must("drv-list");
-  const STREAM = list.dataset.stream; // set only while the build runs
+  const BASE = list.dataset.base; // set only while the build runs
 
   /** @param {ParentNode} el @param {string} sel @returns {HTMLElement} */
   const pick = (el, sel) => {
@@ -55,7 +57,7 @@
     }
   });
 
-  if (STREAM) return runLive();
+  if (BASE) return runLive();
 
   // Track cards whose rows are loaded so a jump fires now or waits.
   /** @type {WeakSet<HTMLElement>} */
@@ -176,7 +178,6 @@
       const c = { el, vp: pick(el, ".log-lines"), status };
       cards.set(idx, c);
       setStatus(c, status);
-      return c;
     }
 
     /** @param {Card} c @param {string} status */
@@ -194,38 +195,57 @@
 
     // Flushed once per frame: a per-line insert + scrollHeight read is a
     // forced layout per line (Mic92/nixbot#98).
-    /** @type {Map<Card, string[]>} */
+    /** @type {Map<number, string[]>} */
     const pendingRows = new Map();
     let flushScheduled = false;
-    // The finished page has the full log. Live only needs the tail.
-    const MAX_LIVE_ROWS = 5000;
+    const MAX_LIVE_ROWS = Number(list.dataset.tail);
+
+    /** Keep the last MAX_LIVE_ROWS; a marker loads the rest on scroll-up.
+     * @param {number} idx @param {Card} c */
+    function trim(idx, c) {
+      const excess = c.vp.childElementCount - MAX_LIVE_ROWS;
+      if (excess <= 0) return;
+      const first = c.vp.children[excess];
+      const m = /^d\d+-L(\d+)$/.exec(first.id);
+      if (!m) return;
+      const range = document.createRange();
+      range.setStartBefore(/** @type {Node} */ (c.vp.firstChild));
+      range.setEndBefore(first);
+      range.deleteContents();
+      const hidden = Number(m[1]) - 1;
+      c.vp.insertAdjacentHTML(
+        "afterbegin",
+        `<div class="log-elided" role="separator" hx-get="${BASE}/drv/${idx}?start=0&end=${hidden}" hx-trigger="intersect once" hx-target="this" hx-swap="outerHTML">loading ${
+          hidden.toLocaleString("en")
+        } hidden lines…</div>`,
+      );
+      hx(c.vp.firstElementChild);
+    }
 
     function flush() {
       flushScheduled = false;
-      for (const [c, chunks] of pendingRows) {
-        // Follow the tail only when already at the bottom, so scrolling up
-        // to read pauses following and scrolling back resumes it.
+      for (const [idx, chunks] of pendingRows) {
+        const c = cards.get(idx);
+        if (!c) continue;
+        // Scrolling up pauses following and trimming.
         const atBottom =
           c.vp.scrollHeight - c.vp.scrollTop - c.vp.clientHeight < 40;
-        c.vp.insertAdjacentHTML("beforeend", chunks.join(""));
-        const excess = c.vp.childElementCount - MAX_LIVE_ROWS;
-        if (excess > 0) {
-          const range = document.createRange();
-          range.setStartBefore(/** @type {Node} */ (c.vp.firstChild));
-          range.setEndAfter(/** @type {Node} */ (c.vp.children[excess - 1]));
-          range.deleteContents();
-        }
-        if (c.el.open && atBottom) c.vp.scrollTop = c.vp.scrollHeight;
+        const html = chunks.join("");
+        c.vp.insertAdjacentHTML("beforeend", html);
+        if (html.includes("hx-get")) hx(c.vp);
+        if (!atBottom) continue;
+        trim(idx, c);
+        if (c.el.open) c.vp.scrollTop = c.vp.scrollHeight;
       }
       pendingRows.clear();
     }
 
-    /** @param {Card|undefined} c @param {string|undefined} html */
-    function addRows(c, html) {
-      if (!c || !html) return;
-      const chunks = pendingRows.get(c);
+    /** @param {number} idx @param {string|undefined} html */
+    function addRows(idx, html) {
+      if (!html) return;
+      const chunks = pendingRows.get(idx);
       if (chunks) chunks.push(html);
-      else pendingRows.set(c, [html]);
+      else pendingRows.set(idx, [html]);
       if (!flushScheduled) {
         flushScheduled = true;
         requestAnimationFrame(flush);
@@ -240,7 +260,7 @@
         if (c) setStatus(c, "running");
         else addCard(delta.idx, "running", delta.card ?? "");
       } else if (delta.t === "line") {
-        addRows(c, delta.html);
+        addRows(delta.idx, delta.html);
       } else if (delta.t === "status" && c && delta.status) {
         flush();
         setStatus(c, delta.status);
@@ -255,12 +275,13 @@
       pendingRows.clear();
       updateGroups();
       for (const e of state) {
-        addRows(addCard(e.idx, e.status, e.card ?? ""), e.html);
+        addCard(e.idx, e.status, e.card ?? "");
+        addRows(e.idx, e.html);
       }
     }
 
     let errors = 0;
-    const src = new EventSource(/** @type {string} */ (STREAM));
+    const src = new EventSource(`${BASE}/stream?format=structured`);
     src.addEventListener("state", (ev) => {
       errors = 0;
       reset(JSON.parse(ev.data));

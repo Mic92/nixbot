@@ -116,6 +116,17 @@ class LogContainerWriter:
         d = self._drvs.get(drv)
         return d.count if d else 0
 
+    def __len__(self) -> int:
+        return len(self._drvs)
+
+    def entry(self, i: int) -> dict:
+        """TOC-shaped entry, the reader's interface for live rendering."""
+        d = list(self._drvs.values())[i]
+        return {"name": d.name, "status": d.status, "ph": d.phases, "n": d.count}
+
+    def lines(self, i: int) -> list[str]:
+        return list(self._drvs.values())[i].lines
+
     def failing(self) -> list[tuple[str, list[str]]]:
         """(name, lines) for derivations left in a failed status."""
         return [(d.name, d.lines) for d in self._drvs.values() if d.status == "failed"]

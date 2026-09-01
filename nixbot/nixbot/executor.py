@@ -557,6 +557,11 @@ class StructuredCapture:
         with contextlib.suppress(ValueError):
             self._subs.remove(q)
 
+    @property
+    def container(self) -> LogContainerWriter:
+        """Reader-shaped access to the retained lines."""
+        return self._w
+
     def state(self, *, with_lines: bool = True) -> list[dict]:
         st = self._w.state(with_lines=with_lines)
         for e in st:
