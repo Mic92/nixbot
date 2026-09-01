@@ -141,11 +141,11 @@
     /* Status changes for this attribute re-render the page: header
        dot, controls, and (once finished) line anchors. */
     const events = new EventSource("/events?build={{ build.id }}");
-    events.onmessage = (ev) => {
+    events.addEventListener("status", (ev) => {
       let e;
       try { e = JSON.parse(ev.data); } catch { return; }
       if (e.attr !== {{ attr | tojson }}) return;
       if (!LIVE || !["pending", "building"].includes(e.status)) location.reload();
-    };
+    });
   </script>
 {% endblock body %}

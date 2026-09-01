@@ -290,11 +290,11 @@ def test_build_page_live_markers(client: WebHarness) -> None:
     running = client.get("/repos/github/acme/widget/builds/3")
     # htmx SSE wiring: event stream scoped to the build, main region
     # refetched and morphed on events.
-    assert 'sse-connect="/events?build=' in running.text
-    assert 'hx-trigger="sse:message' in running.text
+    assert 'hx-sse:connect="/events?build=' in running.text
+    assert 'hx-trigger="status from:body' in running.text
     # Finished pages re-check on connect too (attr restart).
     finished = client.get("/repos/github/acme/widget/builds/2")
-    assert "htmx:sseOpen" in finished.text
+    assert "htmx:sse:after:connection" in finished.text
     # PR link on the PR build.
     assert "/pull/5" in running.text
 
@@ -1521,7 +1521,7 @@ def test_events_stream_coalesces_burst(client: WebHarness) -> None:
             )
         async with asyncio.timeout(5):
             line = await anext(gen)
-        assert line.startswith("data:")
+        assert line.startswith("event: status\ndata:")
         assert sub.queue.empty()  # the rest of the burst was dropped
         await gen.aclose()
 
@@ -1573,7 +1573,7 @@ def test_events_stream_refreshes_visibility(
         received = []
         async with asyncio.timeout(5):
             async for line in gen:
-                if line.startswith("data:"):
+                if "data:" in line:
                     received.append(line)
                     break
         # Refreshes re-authenticate instead of reusing the request's

@@ -167,7 +167,7 @@ async def event_stream(
             # Drop the rest of the burst. One refetch covers them all.
             while not sub.queue.empty():
                 sub.queue.get_nowait()
-            yield f"data: {payload}\n\n"
+            yield f"event: status\ndata: {payload}\n\n"
             await asyncio.sleep(COALESCE_SECONDS)
     finally:
         broker.unsubscribe(sub)

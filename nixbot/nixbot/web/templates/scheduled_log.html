@@ -50,12 +50,12 @@
        arrive on the shared events channel. Reload to re-render the
        header dot and, once finished, the server-side static log. */
     const events = new EventSource("/events?project={{ project.id }}");
-    events.onmessage = (ev) => {
+    events.addEventListener("status", (ev) => {
       let e;
       try { e = JSON.parse(ev.data); } catch { return; }
       if (e.run_id !== RUN_ID) return;
       if (!LIVE || !["running"].includes(e.status)) location.reload();
-    };
+    });
     if (LIVE) {
       const follow = document.getElementById("follow");
       const atBottom = () =>

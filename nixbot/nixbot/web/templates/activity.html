@@ -3,14 +3,14 @@
   builds
 {% endblock title %}
 {% block bodyattrs %}
-  hx-ext="sse, morph" sse-connect="/events"
+  hx-sse:connect="/events"
 {% endblock bodyattrs %}
 {% block body %}
   <main id="main">
     <section class="content">
       <div hx-get="/builds/queue"
-           hx-trigger="sse:message throttle:1s"
-           hx-swap="morph:innerHTML">{% include "_queue.html" %}</div>
+           hx-trigger="status from:body throttle:1s"
+           hx-swap="innerMorph">{% include "_queue.html" %}</div>
       <h2 class="section">Recent activity</h2>
       <div class="table-scroll">
         <table class="builds" id="activity">
@@ -26,8 +26,8 @@
           </thead>
           <tbody id="feed"
                  hx-get="/builds/rows"
-                 hx-trigger="sse:message throttle:1s"
-                 hx-swap="morph:innerHTML"
+                 hx-trigger="status from:body throttle:1s"
+                 hx-swap="innerMorph"
                  hx-vals='js:{limit: document.querySelectorAll("#feed tr[data-id]").length}'>
             {% include "_build_rows.html" %}
           </tbody>
