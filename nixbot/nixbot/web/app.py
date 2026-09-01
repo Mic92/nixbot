@@ -84,6 +84,13 @@ ATTR_GROUPS: dict[str, tuple[str, ...]] = {
 INLINE_GROUPS = ("failed", "building")
 
 
+def _by_group(per_status: dict[str, int]) -> dict[str, int]:
+    return {
+        group: sum(per_status.get(s, 0) for s in statuses)
+        for group, statuses in ATTR_GROUPS.items()
+    }
+
+
 class WebContext:
     """Shared state for the routes. Auth (5.3) extends this."""
 
@@ -434,9 +441,16 @@ class _PageRoutes:
             project=project,
         )
 
-    async def build_page(
-        self, request: Request, forge: str, owner: str, name: str, number: int
+    async def build_page(  # noqa: PLR0913
+        self,
+        request: Request,
+        forge: str,
+        owner: str,
+        name: str,
+        number: int,
+        q: str | None = None,
     ) -> HTMLResponse:
+        q = q or None
         ctx = self.ctx
         project = await ctx.repo_or_404(forge, owner, name, request)
         build = await ctx.queries.build_by_number(project["id"], number)
@@ -449,9 +463,15 @@ class _PageRoutes:
             project["id"], number
         )
         group_counts, warned_counts, inline = await self._grouped_attributes(
-            build["id"], None
+            build["id"], q
         )
-        total = sum(group_counts.values())
+        # The progress bar covers the whole build, not the search result.
+        progress = (
+            _by_group((await ctx.queries.attribute_counts(build["id"], None))[0])
+            if q
+            else group_counts
+        )
+        total = sum(progress.values())
         await ctx.queries.attach_eval_queue(
             [build], await ctx.visible_repo_ids(request)
         )
@@ -461,8 +481,10 @@ class _PageRoutes:
             project=project,
             build=build,
             attrs_total=total,
-            attrs_done=total - group_counts["pending"] - group_counts["building"],
+            attrs_done=total - progress["pending"] - progress["building"],
+            progress=progress,
             group_counts=group_counts,
+            q=q,
             warned_counts=warned_counts,
             inline=inline,
             effects=await ctx.queries.effects(build["id"]),
@@ -519,14 +541,8 @@ class _PageRoutes:
         """Per-group counts plus eagerly loaded first pages: the inline
         groups normally, every matching group under a search query."""
         counts, warned = await self.ctx.queries.attribute_counts(build_id, q)
-        group_counts = {
-            group: sum(counts.get(s, 0) for s in statuses)
-            for group, statuses in ATTR_GROUPS.items()
-        }
-        warned_counts = {
-            group: sum(warned.get(s, 0) for s in statuses)
-            for group, statuses in ATTR_GROUPS.items()
-        }
+        group_counts = _by_group(counts)
+        warned_counts = _by_group(warned)
         # Groups with eval warnings open eagerly so they are not buried.
         eager = [g for g in ATTR_GROUPS if q or g in INLINE_GROUPS or warned_counts[g]]
         inline = {

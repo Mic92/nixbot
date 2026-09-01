@@ -9,7 +9,7 @@
   <main id="main">
     <section class="content">
       <div hx-get="/builds/queue"
-           hx-trigger="status from:body throttle:1s"
+           hx-trigger="status from:body throttle:1s, htmx:sse:after:connection from:body"
            hx-swap="innerMorph">{% include "_queue.html" %}</div>
       <h2 class="section">Recent activity</h2>
       <div class="table-scroll">
@@ -26,7 +26,7 @@
           </thead>
           <tbody id="feed"
                  hx-get="/builds/rows"
-                 hx-trigger="status from:body throttle:1s"
+                 hx-trigger="status from:body throttle:1s, htmx:sse:after:connection from:body"
                  hx-swap="innerMorph"
                  hx-vals='js:{limit: document.querySelectorAll("#feed tr[data-id]").length}'>
             {% include "_build_rows.html" %}

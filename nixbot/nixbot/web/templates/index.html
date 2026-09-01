@@ -8,9 +8,8 @@
         hx-get="/"
         hx-include="#pipeline-filter"
         hx-select="#main"
-        hx-target="this"
         hx-swap="outerMorph"
-        hx-trigger="status from:body throttle:1s">
+        hx-trigger="status from:body throttle:1s, htmx:sse:after:connection from:body">
     <section class="content dashboard">
       <h2 class="section">Repositories</h2>
       <p class="filters">

@@ -50,11 +50,10 @@ def test_attribute_table_refreshes_while_building(
     row.locator(".status-icon.failed").wait_for(timeout=15_000)
     assert "flipped by e2e test" in page.content()
 
-    # Groups must stay expandable after a morph: the morphed-in lazy
-    # placeholder needs htmx processing or it never fetches.
+    # The morph keeps the user-opened group open (morphIgnore: open)
+    # and the morphed-in lazy placeholder refetches its rows.
     group = page.locator("details.attr-group[data-group=succeeded]")
-    if group.get_attribute("open") is None:
-        group.locator("summary").click()
+    assert group.get_attribute("open") is not None
     page.locator(
         'details[data-group=succeeded] tr[data-attr="x86_64-linux.ok"]'
     ).wait_for(timeout=15_000)
