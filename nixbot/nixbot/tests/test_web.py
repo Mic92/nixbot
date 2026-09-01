@@ -2259,3 +2259,26 @@ def test_api_log_stream_json(client: WebHarness, tmp_path: Path) -> None:
         "/api/repos/github/acme/widget/builds/2/logs/x86_64-linux.bad/stream"
     ).text
     assert finished == "event: done\ndata: {}\n\n"
+
+
+def test_build_eval_stats_surface(client: WebHarness) -> None:
+    async def seed() -> None:
+        pool = client.ctx.pool
+        await pool.execute(
+            "UPDATE builds SET eval_duration_ms = 38400 WHERE number = 2"
+        )
+        await pool.execute(
+            "UPDATE build_attributes a SET eval_wall_ms = 412,"
+            " eval_alloc_bytes = 50331648 FROM builds b"
+            " WHERE a.build_id = b.id AND b.number = 2"
+            " AND a.attr = 'x86_64-linux.bad'"
+        )
+
+    client.loop.run_until_complete(seed())
+    text = client.get("/repos/github/acme/widget/builds/2").text
+    assert "· eval 38s" in text
+    assert "· eval" not in client.get("/repos/github/acme/widget/builds/1").text
+    detail = client.get("/api/repos/github/acme/widget/builds/2").json()
+    assert detail["build"]["eval_duration_ms"] == 38400
+    broken = next(a for a in detail["attributes"] if a["attr"] == "x86_64-linux.bad")
+    assert (broken["eval_wall_ms"], broken["eval_alloc_bytes"]) == (412, 50331648)

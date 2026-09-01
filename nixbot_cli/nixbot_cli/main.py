@@ -23,6 +23,7 @@ from .term import (
     bold,
     cyan,
     dim,
+    fmt_duration,
     green,
     link,
     queue_note,
@@ -226,7 +227,9 @@ def cmd_build_view(client: NixbotClient, args: argparse.Namespace) -> int:
         f"{repo} {cyan(build['branch'])} "
         f"@ {dim(build['commit_sha'][:12])}"
     )
-    print(f"status: {status_str(build['status'])}{queue_note(build)}")
+    eval_ms = build.get("eval_duration_ms")
+    eval_note = f" · eval {fmt_duration(eval_ms / 1000)}" if eval_ms is not None else ""
+    print(f"status: {status_str(build['status'])}{queue_note(build)}{eval_note}")
     if build.get("error"):
         print(f"error: {build['error']}")
     counts: dict[str, int] = {}

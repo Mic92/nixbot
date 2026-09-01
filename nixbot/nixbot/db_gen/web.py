@@ -9,6 +9,7 @@ __all__: collections.abc.Sequence[str] = (
     "MetricsAttributeCountsRow",
     "MetricsBuildCountsRow",
     "MetricsBuildDurationRow",
+    "MetricsEvalDurationRow",
     "MetricsProjectsRow",
     "QueryResults",
     "WebAttributeCountsRow",
@@ -23,6 +24,7 @@ __all__: collections.abc.Sequence[str] = (
     "metrics_attribute_counts",
     "metrics_build_counts",
     "metrics_build_duration",
+    "metrics_eval_duration",
     "metrics_projects",
     "metrics_queue_depth",
     "web_attribute_counts",
@@ -209,6 +211,12 @@ class MetricsBuildDurationRow:
 class MetricsProjectsRow:
     enabled: int
     total: int
+
+
+@dataclasses.dataclass()
+class MetricsEvalDurationRow:
+    total: int
+    count: int
 
 
 WEB_PROJECTS: typing.Final[str] = """-- name: WebProjects :many
@@ -419,6 +427,11 @@ WHERE started_at IS NOT NULL AND finished_at IS NOT NULL
 METRICS_PROJECTS: typing.Final[str] = """-- name: MetricsProjects :one
 SELECT count(*) FILTER (WHERE enabled) AS enabled, count(*) AS total
 FROM projects
+"""
+
+METRICS_EVAL_DURATION: typing.Final[str] = """-- name: MetricsEvalDuration :one
+SELECT coalesce(sum(eval_duration_ms), 0)::float / 1000 AS total, count(*) AS count
+FROM builds WHERE eval_duration_ms IS NOT NULL
 """
 
 
@@ -815,3 +828,10 @@ async def metrics_projects(conn: ConnectionLike) -> MetricsProjectsRow | None:
     if row is None:
         return None
     return MetricsProjectsRow(enabled=row[0], total=row[1])
+
+
+async def metrics_eval_duration(conn: ConnectionLike) -> MetricsEvalDurationRow | None:
+    row = await conn.fetchrow(METRICS_EVAL_DURATION)
+    if row is None:
+        return None
+    return MetricsEvalDurationRow(total=row[0], count=row[1])

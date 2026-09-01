@@ -53,6 +53,15 @@ async def render_metrics(pool: asyncpg.Pool) -> str:
     lines.append("# TYPE nixbot_build_duration_seconds_count gauge")
     lines.append(f"nixbot_build_duration_seconds_count {duration.count}")
 
+    eval_duration = expect(await gen.metrics_eval_duration(pool))
+    lines.append(
+        "# HELP nixbot_eval_duration_seconds_sum Total nix-eval-jobs run time."
+    )
+    lines.append("# TYPE nixbot_eval_duration_seconds_sum gauge")
+    lines.append(f"nixbot_eval_duration_seconds_sum {eval_duration.total}")
+    lines.append("# TYPE nixbot_eval_duration_seconds_count gauge")
+    lines.append(f"nixbot_eval_duration_seconds_count {eval_duration.count}")
+
     projects = expect(await gen.metrics_projects(pool))
     lines.append("# HELP nixbot_projects Projects known/enabled.")
     lines.append("# TYPE nixbot_projects gauge")
