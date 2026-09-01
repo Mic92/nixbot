@@ -45,6 +45,9 @@ class EffectsOptions:
     # Runner-prepared pushable clone, mounted at the effect's
     # __nixbot_effect_checkout path.
     effect_checkout: Path | None = None
+    # onEvent delivery: (kind, payload). Exposed as /run/event.json
+    # and NIXBOT_* variables inside the sandbox.
+    event: tuple[str, dict[str, Any]] | None = None
     # Line-wise sink for all child output (nix eval, bwrap, the effect).
     log: LogWrite | None = None
     debug: bool = False

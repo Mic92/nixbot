@@ -16,10 +16,12 @@ from .errors import EffectError
 from .eval import (
     build_derivation,
     instantiate_effects,
+    instantiate_event_effect,
     instantiate_scheduled_effect,
     nix_command,
     parse_derivation,
 )
+from .match import payload_env
 from .proc import stream_command
 from .sandbox import (
     effect_checkout_mount,
@@ -180,6 +182,13 @@ async def _run_in_sandbox(
             secrets_file = work_dir / "secrets.json"
             secrets_file.touch(mode=0o600)
             secrets_file.write_text(json.dumps(secrets))
+            event_args: list[str] = []
+            if opts.event is not None:
+                kind, payload = opts.event
+                event_file = work_dir / "event.json"
+                event_file.write_text(json.dumps(payload))
+                event_args = ["--ro-bind", str(event_file), "/run/event.json"]
+                env.update(payload_env(kind, payload))
             cmd = [
                 *_bubblewrap_command(
                     drv_path,
@@ -197,6 +206,7 @@ async def _run_in_sandbox(
                 "--ro-bind",
                 str(secrets_file),
                 "/run/secrets.json",
+                *event_args,
                 *env_args(env, clear_env),
                 "--",
                 drv["builder"],
@@ -239,6 +249,19 @@ async def run_effect(opts: EffectsOptions, effect: str) -> None:
         gcroot = Path(tmpdir) / "result"
         drv_path, should_run = await instantiate_effects(effect, opts, gcroot)
         await _run_selected(opts, effect, drv_path, should_run=should_run)
+
+
+async def run_event_effect(
+    opts: EffectsOptions, kind: str, effect: str, payload: dict[str, Any]
+) -> None:
+    """Run one onEvent.<kind> effect with `payload` as its event."""
+    opts.event = (kind, payload)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        gcroot = Path(tmpdir) / "result"
+        drv_path, should_run = await instantiate_event_effect(
+            kind, effect, opts, gcroot
+        )
+        await _run_selected(opts, f"{kind}/{effect}", drv_path, should_run=should_run)
 
 
 async def run_scheduled_effect(

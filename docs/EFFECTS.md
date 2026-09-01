@@ -218,6 +218,70 @@ derivation attribute; effects built without `mkEffect` can set the attribute
 directly. Effects that do not set it get no checkout. If the repository has no
 forge token to push with, the effect fails with an error.
 
+## Event effects (`onEvent`)
+
+`herculesCI.onEvent.<kind>.<name>` defines effects that react to pull requests,
+PR comments, PR close and build results. See
+[examples/on-event/flake.nix](../examples/on-event/flake.nix). Hercules CI
+ignores `onEvent`.
+
+The effect code is **always evaluated from the default branch**. A pull request
+cannot change what runs by editing `onEvent`. This is independent of
+`effects_on_pull_requests`, which controls whether a PR's own `onPush` effects
+run. The event only contributes data, available at runtime as JSON in
+`$NIXBOT_EVENT_JSON` (`/run/event.json`) and as `NIXBOT_EVENT_KIND`,
+`NIXBOT_ACTOR`, `NIXBOT_PR_NUMBER`, `NIXBOT_PR_HEAD`, `NIXBOT_COMMAND`,
+`NIXBOT_COMMAND_ARGS`, `NIXBOT_BUILD_STATUS`, `NIXBOT_BUILD_URL`.
+
+| kind                  | delivered when                                     | payload                                                                  |
+| --------------------- | -------------------------------------------------- | ------------------------------------------------------------------------ |
+| `pull_request`        | a PR build finished `succeeded`                    | `actor?`, `build`, `pullRequest`                                         |
+| `pull_request_closed` | PR closed or merged                                | `actor?`, `pullRequest` (with `merged`)                                  |
+| `comment`             | new PR comment whose first line is `/command args` | `actor`, `command`, `args`, `pullRequest`, `build?`                      |
+| `build_finished`      | any build reached a terminal status                | `actor?`, `build` (with `previousStatus`, `failedAttrs`), `pullRequest?` |
+
+`actor` is who caused the delivery (pusher, commenter, the user who pressed
+restart) as `{ name = "github:alice"; permission = "write"; }`. It is absent
+when nobody did (poller). `pullRequest.author` carries the PR opener the same
+way. Permissions are looked up on the forge at delivery time.
+
+`mkEffect { when = { ... }; }` restricts when an effect runs. All given keys
+must match. An effect that does not match is recorded as `skipped` with the
+reason shown in the web UI.
+
+| `when` key                              | matches if                                                        |
+| --------------------------------------- | ----------------------------------------------------------------- |
+| `permission = "read"\|"write"\|"admin"` | actor **or** PR author has at least this level                    |
+| `labels = [ ... ]`                      | PR has all of these labels                                        |
+| `branches = [ "main" "release-*" ]`     | glob on PR base branch, or build branch                           |
+| `commands = [ "plan" ]`                 | `comment` kind: the `/command` used                               |
+| `status = [ "succeeded" ]`              | status of the build in the payload                                |
+| `transition = "broke"\|"fixed"`         | build status vs the previous finished build of the same branch/PR |
+
+`lock` works as for `onPush` and may contain `{pr}`, so `lock = "preview-{pr}"`
+serialises per pull request, also against `onPush` effects using the same
+expanded name. A newer delivery for the same PR cancels still-queued effects of
+the previous one. `after` is not supported for event effects.
+
+`checkout = true` mounts the **PR head** at `/build/checkout`. Unlike for
+`onPush` the clone has no push credentials, and its content is untrusted: tools
+like `tofu plan` execute code from it, so guard such effects with
+`when.permission`.
+
+Try an effect locally by describing the event with flags instead of pushing:
+
+```console
+$ nbo effects list --event pull_request --pr 7 --permission write --label preview
+$ nbo effects run --event comment --command plan --actor github:alice \
+    --permission write plan
+```
+
+`list` prints every effect of that kind together with the reason it would be
+skipped. The flags cover what `when` looks at: `--pr`, `--actor`,
+`--permission`, `--author-permission`, `--label`, `--command`, `--args`,
+`--build-status` and `--previous-build-status`. `--payload FILE` takes a
+complete payload instead.
+
 ## Buildbot secrets configuration
 
 When running effects through nixbot (not locally), secrets are configured at
