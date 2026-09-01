@@ -6,7 +6,8 @@
     <meta name="description"
           content="nixbot: continuous integration for Nix projects">
     <meta name="keywords" content="nix, ci, builds, nixbot">
-    <meta name="htmx-config" content='{"noSwap":[204,304,"4xx","5xx"]}'>
+    <meta name="htmx-config"
+          content='{"noSwap":[204,304,"4xx","5xx"],"morphIgnore":["data-htmx-powered","open"]}'>
     <title>
       {% block title %}
         nixbot
@@ -93,32 +94,9 @@
         const menu = document.querySelector("details.menu[open]");
         if (menu && !menu.contains(e.target)) menu.open = false;
       });
-      /* Morphs render the server's default open/closed state for the
-         attribute groups - an SSE refresh would snap them back and
-         drop lazily loaded rows. Remember the user's toggles and
-         reapply them after swaps. */
       document.body.addEventListener("click", (e) => {
         const li = e.target.closest?.(".attr-warnings li");
         if (li) li.classList.toggle("expanded");
-      });
-      const groupState = new Map();
-      /* click, not toggle: htmx's settle phase strips and restores
-         attributes on swapped-in elements, which fires toggle too. */
-      document.body.addEventListener("click", (e) => {
-        const g = e.target.closest?.("details.attr-group > summary")?.parentElement;
-        if (g) groupState.set(g.dataset.group, !g.open);
-      });
-      document.body.addEventListener("htmx:after:settle", (e) => {
-        for (const g of document.querySelectorAll("details.attr-group")) {
-          const saved = groupState.get(g.dataset.group);
-          if (saved !== undefined) g.open = saved;
-        }
-        /* SSE morphs render the unfiltered groups. Refire an active
-           search. Guarded on #main so the search swap can't loop. */
-        const filter = document.querySelector("#attr-filter");
-        if (e.target.id === "main" && filter?.value) {
-          htmx.trigger(filter, "search");
-        }
       });
     </script>
   </body>

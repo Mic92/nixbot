@@ -155,7 +155,7 @@
           </thead>
           <tbody id="feed"
                  hx-get="{{ rows_url }}"
-                 hx-trigger="status from:body throttle:1s"
+                 hx-trigger="status from:body throttle:1s, htmx:sse:after:connection from:body"
                  hx-swap="innerMorph"
                  hx-vals='js:{limit: document.querySelectorAll("#feed tr[data-id]").length}'>
             {% with builds = builds["items"], has_more = builds.has_next, more_url = rows_url %}

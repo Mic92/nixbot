@@ -14,10 +14,11 @@
   {# throttle, not delay: delay debounces, so a busy build's event
      stream keeps resetting it and the refetch never fires. #}
   {% set trigger = "status from:body throttle:1s, htmx:sse:after:connection from:body" %}
+  {# hx-include: an SSE refetch keeps an active attribute search. #}
   <main id="main"
         hx-get="{{ build_path(project, build.number) }}"
+        hx-include="#attr-filter"
         hx-select="#main"
-        hx-target="this"
         hx-swap="outerMorph"
         hx-trigger="{{ trigger }}">
     <section class="content">
@@ -87,10 +88,10 @@
              aria-label="build progress">
           <span class="spinner" aria-hidden="true"></span>
           <div class="progress-track">
-            {% for cls, n in [("ok", group_counts.succeeded + group_counts.skipped),
-              ("bad", group_counts.failed),
-              ("off", group_counts.cancelled),
-              ("run", group_counts.building)] %}
+            {% for cls, n in [("ok", progress.succeeded + progress.skipped),
+              ("bad", progress.failed),
+              ("off", progress.cancelled),
+              ("run", progress.building)] %}
               {% if n %}
                 <span class="seg {{ cls }}"
                       style="width: {{ (100 * n / attrs_total) | round(2) }}%"></span>
@@ -123,6 +124,7 @@
         <input type="search"
                id="attr-filter"
                name="q"
+               value="{{ q or "" }}"
                placeholder="search attributes"
                aria-label="search attributes"
                hx-get="{{ build_path(project, build.number) }}/attrs"
