@@ -8,7 +8,11 @@ from typing import TYPE_CHECKING
 import pytest
 
 from nixbot_effects import EffectError, EventEffectMeta
-from nixbot_effects.eval import instantiate_event_effect, list_event_effects
+from nixbot_effects.eval import (
+    instantiate_event_effect,
+    list_all_event_effects,
+    list_event_effects,
+)
 from nixbot_effects.match import event_payload, expand_lock, payload_env, skip_reason
 from nixbot_effects.options import EffectsOptions
 from nixbot_effects.tests.support import init_repo
@@ -59,6 +63,18 @@ async def test_list_event_effects(tmp_path: Path) -> None:
         await list_event_effects(opts, "comment")
     with pytest.raises(EffectError, match="unknown event kind"):
         await list_event_effects(opts, "push")
+    # The service lists all kinds at once. One bad `when` anywhere
+    # fails the whole listing, like a broken default branch.
+    with pytest.raises(EffectError, match="unknown `when` keys: typo"):
+        await list_all_event_effects(opts)
+    (tmp_path / "fixed").mkdir()
+    fixed, _ = init_repo(
+        tmp_path / "fixed",
+        {"flake.nix": FLAKE_NIX.replace("when.typo = 1;", "")},
+    )
+    listing = await list_all_event_effects(EffectsOptions(path=fixed))
+    assert set(listing) == {"pull_request", "comment"}
+    assert set(listing["pull_request"]) == {"plan", "env.notify"}
     drv, should_run = await instantiate_event_effect(
         "pull_request", "env.notify", opts, tmp_path / "gcroot"
     )
@@ -86,6 +102,14 @@ def test_permission_actor_or_author() -> None:
     assert skip_reason(when, {"pullRequest": PR, "actor": actor}) is None
     author_ok = {**PR, "author": {"name": "github:dave", "permission": "write"}}
     assert skip_reason(when, {"pullRequest": author_ok, "actor": None}) is None
+    # Commands count the commenter only.
+    outsider = {"name": "github:eve", "permission": "read"}
+    assert (
+        skip_reason(
+            when, {"pullRequest": author_ok, "actor": outsider, "command": "apply"}
+        )
+        == "needs write access (actor github:eve: read)"
+    )
 
 
 def test_labels_branches_commands_status() -> None:

@@ -47,9 +47,10 @@ ENQUEUE_EFFECT_ITEMS: typing.Final[str] = """-- name: EnqueueEffectItems :exec
 INSERT INTO work_queue (kind, dedup_key, payload)
 SELECT 'effect', u.dedup_key,
        jsonb_build_object('build_id', $1::bigint,
+                          'kind', $2::text,
                           'name', u.name)
-FROM (SELECT unnest($2::text[]) AS name,
-             unnest($3::text[]) AS dedup_key) AS u
+FROM (SELECT unnest($3::text[]) AS name,
+             unnest($4::text[]) AS dedup_key) AS u
 ON CONFLICT (kind, dedup_key, md5(payload::text))
 WHERE status = 'pending'
 DO NOTHING
@@ -69,9 +70,10 @@ WHERE id = (
       )
       AND NOT (w.kind = 'effect' AND EXISTS (
         SELECT 1 FROM effect_runs e
-        JOIN effect_runs d ON d.build_id = e.build_id
+        JOIN effect_runs d ON d.build_id = e.build_id AND d.kind = 'push'
             AND d.name IN (SELECT jsonb_array_elements_text(e.deps))
         WHERE e.build_id = (w.payload->>'build_id')::bigint
+          AND e.kind = 'push' AND w.payload->>'kind' = 'push'
           AND e.name = w.payload->>'name'
           AND d.status IN ('pending', 'running')
       ))
@@ -120,8 +122,8 @@ async def enqueue_work_item(conn: ConnectionLike, *, kind: str, dedup_key: str, 
     return row[0]
 
 
-async def enqueue_effect_items(conn: ConnectionLike, *, build_id: int, names: collections.abc.Sequence[str], dedup_keys: collections.abc.Sequence[str]) -> None:
-    await conn.execute(ENQUEUE_EFFECT_ITEMS, build_id, names, dedup_keys)
+async def enqueue_effect_items(conn: ConnectionLike, *, build_id: int, kind: str, names: collections.abc.Sequence[str], dedup_keys: collections.abc.Sequence[str]) -> None:
+    await conn.execute(ENQUEUE_EFFECT_ITEMS, build_id, kind, names, dedup_keys)
 
 
 async def claim_next_work_item(conn: ConnectionLike) -> ClaimNextWorkItemRow | None:

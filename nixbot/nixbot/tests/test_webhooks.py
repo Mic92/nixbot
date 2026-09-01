@@ -24,6 +24,8 @@ from nixbot.webhooks import (
     CheckRerequested,
     DeliveryDeduper,
     PrClosed,
+    PrComment,
+    PrLabeled,
     WebhookEvent,
     create_webhook_router,
     is_merge_queue_branch,
@@ -150,6 +152,7 @@ def test_parse_github_pr() -> None:
     payload: dict[str, Any] = {
         "action": "synchronize",
         "repository": {"id": 7},
+        "sender": {"login": "bob"},
         "pull_request": {
             "number": 12,
             "title": "Add feature",
@@ -162,6 +165,8 @@ def test_parse_github_pr() -> None:
     assert isinstance(event, ChangeRequest)
     assert event.pr_number == 12
     assert event.pr_author == "github:alice"
+    # The pusher, not the PR author, caused this event.
+    assert event.actor == "github:bob"
     assert event.base_sha == "refs/heads/main"
     assert event.commit_sha == "headsha"
     # PR title must not feed the [skip ci] check.
@@ -169,11 +174,14 @@ def test_parse_github_pr() -> None:
 
     payload["action"] = "closed"
     closed = parse_github_event("pull_request", payload)
-    assert closed == PrClosed(forge="github", forge_repo_id="7", pr_number=12)
+    assert closed == PrClosed(
+        forge="github", forge_repo_id="7", pr_number=12, actor="github:bob"
+    )
 
-    # Merged close must not cancel: the merge push reuses the PR build.
     payload["pull_request"]["merged"] = True
-    assert parse_github_event("pull_request", payload) is None
+    merged = parse_github_event("pull_request", payload)
+    assert isinstance(merged, PrClosed)
+    assert merged.merged
 
     payload["action"] = "labeled"
     assert parse_github_event("pull_request", payload) is None
@@ -361,7 +369,9 @@ def test_parse_gitea_events() -> None:
         forge="gitea", forge_repo_id="3", pr_number=4
     )
     closed_pr["merged"] = True
-    assert parse_gitea_event("pull_request", closed_payload) is None
+    assert parse_gitea_event("pull_request", closed_payload) == PrClosed(
+        forge="gitea", forge_repo_id="3", pr_number=4, merged=True
+    )
 
 
 # --- HTTP endpoint behavior ------------------------------------------------------
@@ -671,6 +681,7 @@ def test_parse_gitlab_events() -> None:
         pr_author="gitlab:bob",
         # No base sha in the payload: merge against the target branch.
         base_sha="refs/heads/main",
+        actor="gitlab:bob",
     )
     # A reopen by a maintainer must not hand them the author's
     # build-control rights.
@@ -687,6 +698,7 @@ def test_parse_gitlab_events() -> None:
     )
     assert isinstance(reopened, ChangeRequest)
     assert reopened.pr_author is None
+    assert reopened.actor == "gitlab:mallory"
 
     opened = parse_gitlab_event(
         "Merge Request Hook",
@@ -717,12 +729,9 @@ def test_parse_gitlab_events() -> None:
         "Merge Request Hook",
         {**GITLAB_MR, "object_attributes": {"iid": 4, "action": "close"}},
     )
-    assert closed == PrClosed(forge="gitlab", forge_repo_id="8", pr_number=4)
-    merged = parse_gitlab_event(
-        "Merge Request Hook",
-        {**GITLAB_MR, "object_attributes": {"iid": 4, "action": "merge"}},
+    assert closed == PrClosed(
+        forge="gitlab", forge_repo_id="8", pr_number=4, actor="gitlab:bob"
     )
-    assert merged is None
 
 
 async def test_gitlab_endpoint_token_validation() -> None:
@@ -804,3 +813,138 @@ async def test_pr_merges_into_current_base_tip(tmp_path: Path) -> None:
         assert (wt.path / "after.txt").exists()
     finally:
         await manager.remove_worktree(wt)
+
+
+def _gh_comment(body: str, **over: Any) -> dict[str, Any]:
+    return {
+        "action": "created",
+        "repository": {"id": 7},
+        "sender": {"login": "alice"},
+        "issue": {"number": 12, "state": "open", "pull_request": {"url": "x"}},
+        "comment": {"body": body, "user": {"login": "alice", "type": "User"}},
+        **over,
+    }
+
+
+def test_parse_github_issue_comment() -> None:
+    assert parse_github_event("issue_comment", _gh_comment("/deploy staging  now")) == (
+        PrComment(
+            forge="github",
+            forge_repo_id="7",
+            pr_number=12,
+            actor="github:alice",
+            command="deploy",
+            args="staging  now",
+        )
+    )
+    # Only the first line is the command.
+    ev = parse_github_event("issue_comment", _gh_comment("/plan\nplease"))
+    assert isinstance(ev, PrComment)
+    assert (ev.command, ev.args) == ("plan", "")
+    ignored = [
+        _gh_comment("looks good"),
+        _gh_comment(" /plan later in text"[1:] + "\n", action="edited"),
+        _gh_comment("/plan", issue={"number": 3, "state": "open"}),  # plain issue
+        _gh_comment(
+            "/plan", issue={"number": 12, "state": "closed", "pull_request": {}}
+        ),
+        _gh_comment("/plan", comment={"body": "/plan", "user": {"type": "Bot"}}),
+        _gh_comment("/Plan"),
+    ]
+    assert [parse_github_event("issue_comment", p) for p in ignored] == [None] * 6
+
+
+def test_parse_gitea_pr_comment() -> None:
+    payload = {**_gh_comment("/plan"), "is_pull": True}
+    del payload["issue"]["pull_request"]
+    ev = parse_gitea_event("issue_comment", payload)
+    assert ev == PrComment(
+        forge="gitea",
+        forge_repo_id="7",
+        pr_number=12,
+        actor="gitea:alice",
+        command="plan",
+        args="",
+    )
+    assert parse_gitea_event("issue_comment", {**payload, "is_pull": False}) is None
+
+
+def test_parse_gitlab_note() -> None:
+    payload: dict[str, Any] = {
+        "project": {"id": 8},
+        "user": {"username": "alice"},
+        "object_attributes": {
+            "noteable_type": "MergeRequest",
+            "note": "/apply",
+            "action": "create",
+        },
+        "merge_request": {"iid": 4, "state": "opened"},
+    }
+    assert parse_gitlab_event("Note Hook", payload) == PrComment(
+        forge="gitlab",
+        forge_repo_id="8",
+        pr_number=4,
+        actor="gitlab:alice",
+        command="apply",
+        args="",
+    )
+    payload["object_attributes"]["noteable_type"] = "Issue"
+    assert parse_gitlab_event("Note Hook", payload) is None
+
+    merged = parse_gitlab_event(
+        "Merge Request Hook",
+        {
+            **GITLAB_MR,
+            "object_attributes": {**GITLAB_MR["object_attributes"], "action": "merge"},
+        },
+    )
+    assert merged == PrClosed(
+        forge="gitlab", forge_repo_id="8", pr_number=4, merged=True, actor="gitlab:bob"
+    )
+
+
+def test_label_events() -> None:
+    pr = {"number": 3, "state": "open", "head": {"sha": "a"}, "base": {"ref": "m"}}
+    gh = parse_github_event(
+        "pull_request",
+        {
+            "action": "labeled",
+            "repository": {"id": 1},
+            "pull_request": pr,
+            "sender": {"login": "al"},
+        },
+    )
+    assert gh == PrLabeled(
+        forge="github", forge_repo_id="1", pr_number=3, actor="github:al"
+    )
+    closed = parse_github_event(
+        "pull_request",
+        {
+            "action": "labeled",
+            "repository": {"id": 1},
+            "pull_request": {**pr, "state": "closed"},
+        },
+    )
+    assert closed is None
+    gitea = parse_gitea_event(
+        "pull_request_label",
+        {
+            "action": "label_updated",
+            "repository": {"id": 1},
+            "pull_request": pr,
+            "sender": {"login": "al"},
+        },
+    )
+    assert isinstance(gitea, PrLabeled)
+    gl = parse_gitlab_event(
+        "Merge Request Hook",
+        {
+            "project": {"id": 1},
+            "user": {"username": "al"},
+            "object_attributes": {"iid": 3, "action": "update", "state": "opened"},
+            "changes": {"labels": {"previous": [], "current": [{"title": "x"}]}},
+        },
+    )
+    assert gl == PrLabeled(
+        forge="gitlab", forge_repo_id="1", pr_number=3, actor="gitlab:al"
+    )

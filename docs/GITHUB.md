@@ -27,10 +27,14 @@ secure authentication.
      - Checks: Read and write (to report build status as check runs)
      - Metadata: Read-only (basic repository info)
      - Pull requests: Read-only (required to subscribe to the pull_request
-       event), (read and write is required for effects to create PRs)
+       event), (read and write is required for effects to create PRs or comment
+       via `nixbot-pr-comment`)
+     - Issues: Read-only (required to subscribe to the issue_comment event for
+       `onEvent.comment` effects)
    - **Organization Permissions** (if app is for an organization):
      - Members: Read-only (to verify organization membership for access control)
-   - **Subscribe to events**: Push, Pull request, Check run, Check suite
+   - **Subscribe to events**: Push, Pull request, Check run, Check suite, Issue
+     comment
 
    Note: when adding permissions to an existing app, every installation (your
    user account and each organization) must accept the new permissions under
@@ -85,9 +89,9 @@ For each repository you want to build:
    - Toggle the project on in the web UI (as admin)
 
 2. **Webhook delivery**:
-   - GitHub delivers push, pull_request, check_run and check_suite events
-     through the App-level webhook configured in Step 1; no per-repository
-     webhooks are created.
+   - GitHub delivers push, pull_request, issue_comment, check_run and
+     check_suite events through the App-level webhook configured in Step 1; no
+     per-repository webhooks are created.
    - The endpoint is `https://nixbot.<your-domain>/webhooks/github` (the legacy
      `/change_hook/github` path also works).
 
@@ -98,9 +102,9 @@ For each repository you want to build:
 - **Project Discovery**: Automatically discovers repositories the app has access
   to (restricted by `userAllowlist`/`repoAllowlist` if set); discovered projects
   are built once enabled in the web UI
-- **Webhook Delivery**: Push, pull_request, check_run and check_suite events
-  arrive via the GitHub App webhook; the payload signature is verified with the
-  webhook secret
+- **Webhook Delivery**: Push, pull_request, issue_comment, check_run and
+  check_suite events arrive via the GitHub App webhook; the payload signature is
+  verified with the webhook secret
 - **Status Updates**: Reports build status as Check Runs (with markdown log
   excerpts and a working Re-run button) on commits and pull requests
 - **Access Control**:

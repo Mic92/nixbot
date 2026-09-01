@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 
     import pytest
     from fastapi import FastAPI
+    from nixbot_effects import EventEffectMeta
 
     from nixbot.auth import User
     from nixbot.build_scheduler import CachedFailure
@@ -78,20 +79,41 @@ class FakeEffects:
     Assigning e.g. `fake.run_effect = fn` replaces one operation."""
 
     push: dict[str, EffectMeta] = field(default_factory=dict)
+    events: dict[str, dict[str, EventEffectMeta]] = field(default_factory=dict)
     schedules: dict[str, Any] = field(default_factory=dict)
     push_error: Exception | None = None
+    events_error: Exception | None = None
     ran: list[str] = field(default_factory=list)
+    event_ran: list[tuple[str, str, dict[str, Any]]] = field(default_factory=list)
 
     async def list_effects(self, _ctx: Any) -> dict[str, EffectMeta]:
         if self.push_error is not None:
             raise self.push_error
         return self.push
 
+    async def list_all_event_effects(
+        self, _ctx: Any
+    ) -> dict[str, dict[str, EventEffectMeta]]:
+        if self.events_error is not None:
+            raise self.events_error
+        return self.events
+
     async def list_scheduled_effects(self, _ctx: Any) -> dict[str, Any]:
         return self.schedules
 
     async def run_effect(self, _ctx: Any, effect: str, _log: Any = None) -> bool:
         self.ran.append(effect)
+        return True
+
+    async def run_event_effect(
+        self,
+        _ctx: Any,
+        kind: str,
+        effect: str,
+        payload: dict[str, Any],
+        _log: Any = None,
+    ) -> bool:
+        self.event_ran.append((kind, effect, payload))
         return True
 
     async def run_scheduled_effect(

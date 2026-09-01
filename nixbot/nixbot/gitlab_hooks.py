@@ -46,6 +46,8 @@ async def register_repo_hook(  # noqa: PLR0913
         "token": secret,
         "push_events": True,
         "merge_requests_events": True,
+        # onEvent.comment
+        "note_events": True,
         "enable_ssl_verification": True,
     }
 

@@ -99,23 +99,25 @@ SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))
 """
 
 FIND_REUSABLE_BUILD: typing.Final[str] = """-- name: FindReusableBuild :one
-SELECT id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms FROM builds WHERE project_id = $1 AND tree_hash = $2
+SELECT id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms, actor, merged_pr_number FROM builds WHERE project_id = $1 AND tree_hash = $2
 AND status <> 'cancelled' ORDER BY id DESC LIMIT 1
 """
 
 DETACH_BUILD_FROM_PR: typing.Final[str] = """-- name: DetachBuildFromPr :one
 UPDATE builds SET pr_number = NULL, pr_author = NULL,
+    merged_pr_number = CASE WHEN $2::bigint IS NULL
+             THEN builds.pr_number ELSE NULL END,
     branch = CASE WHEN $2::bigint IS NULL
              THEN $3 ELSE branch END
-WHERE id = $1 RETURNING id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms
+WHERE id = $1 RETURNING id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms, actor, merged_pr_number
 """
 
 ATTACH_BUILD_TO_PR: typing.Final[str] = """-- name: AttachBuildToPr :one
-UPDATE builds SET pr_number = $2, pr_author = $3 WHERE id = $1 RETURNING id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms
+UPDATE builds SET pr_number = $2, pr_author = $3 WHERE id = $1 RETURNING id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms, actor, merged_pr_number
 """
 
 BACKFILL_PR_AUTHOR: typing.Final[str] = """-- name: BackfillPrAuthor :one
-UPDATE builds SET pr_author = $2 WHERE id = $1 RETURNING id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms
+UPDATE builds SET pr_author = $2 WHERE id = $1 RETURNING id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms, actor, merged_pr_number
 """
 
 CREATE_BUILD: typing.Final[str] = """-- name: CreateBuild :one
@@ -125,12 +127,13 @@ WITH n AS (
     RETURNING next_build_number - 1 AS number
 )
 INSERT INTO builds (project_id, number, tree_hash, commit_sha,
-                    branch, pr_number, pr_author)
+                    branch, pr_number, pr_author, actor)
 SELECT $1::bigint, n.number, $2::text,
        $3::text, $4::text,
-       $5::bigint, $6::text
+       $5::bigint, $6::text,
+       $7::text
 FROM n
-RETURNING id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms
+RETURNING id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms, actor, merged_pr_number
 """
 
 CREATE_FAILED_BUILD: typing.Final[str] = """-- name: CreateFailedBuild :one
@@ -145,7 +148,7 @@ SELECT $1::bigint, n.number, $2::text,
        $3::text, $4::bigint,
        $5::text, 'failed', $6::text, now()
 FROM n
-RETURNING id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms
+RETURNING id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms, actor, merged_pr_number
 """
 
 RECORD_ATTRIBUTES: typing.Final[str] = """-- name: RecordAttributes :exec
@@ -179,6 +182,7 @@ WITH failed_effects AS (
     UPDATE effect_runs SET status = 'failed',
         error = 'build did not succeed', finished_at = now()
     WHERE effect_runs.build_id = $4::bigint
+      AND effect_runs.kind = 'push'
       AND effect_runs.status = 'pending'
       AND $1::text IN ('failed', 'cancelled')
 )
@@ -226,7 +230,7 @@ WHERE build_id = $1
 """
 
 GET_BUILD: typing.Final[str] = """-- name: GetBuild :one
-SELECT id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms FROM builds WHERE id = $1
+SELECT id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms, actor, merged_pr_number FROM builds WHERE id = $1
 """
 
 MARK_EFFECTS_STARTED: typing.Final[str] = """-- name: MarkEffectsStarted :one
@@ -292,8 +296,9 @@ WHERE NOT $14::boolean
 
 START_EFFECT: typing.Final[str] = """-- name: StartEffect :one
 INSERT INTO effect_runs (project_id, kind, build_id, name, status)
-SELECT b.project_id, 'push', b.id, $1::text, $2::text
-FROM builds b WHERE b.id = $3::bigint
+SELECT b.project_id, $1::text, b.id, $2::text,
+       $3::text
+FROM builds b WHERE b.id = $4::bigint
 ON CONFLICT (build_id, kind, name) DO UPDATE SET
     status = EXCLUDED.status, error = NULL, log_size = 0,
     log_truncated = FALSE, started_at = now(), finished_at = NULL
@@ -323,16 +328,17 @@ ON CONFLICT (build_id, kind, name) DO NOTHING
 
 EFFECT_DEP_STATUSES: typing.Final[str] = """-- name: EffectDepStatuses :many
 SELECT d.name, d.status FROM effect_runs e
-JOIN effect_runs d ON d.build_id = e.build_id
+JOIN effect_runs d ON d.build_id = e.build_id AND d.kind = 'push'
     AND d.name IN (SELECT jsonb_array_elements_text(e.deps))
-WHERE e.build_id = $1 AND e.name = $2
+WHERE e.build_id = $1 AND e.kind = 'push' AND e.name = $2
 """
 
 FINISH_EFFECT: typing.Final[str] = """-- name: FinishEffect :exec
 UPDATE effect_runs SET
-    status = $3, error = $6,
-    log_size = $4, log_truncated = $5, finished_at = now()
-WHERE build_id = $1 AND name = $2
+    status = $1, error = $2,
+    log_size = $3, log_truncated = $4,
+    finished_at = now()
+WHERE build_id = $5 AND kind = $6 AND name = $7
 """
 
 EFFECTS_SUMMARY: typing.Final[str] = """-- name: EffectsSummary :one
@@ -348,12 +354,12 @@ SELECT
         WHEN bool_or(status = 'succeeded') THEN 'succeeded'
         ELSE 'skipped'
     END::text AS status
-FROM effect_runs WHERE build_id = $1
+FROM effect_runs WHERE build_id = $1 AND kind = 'push'
 HAVING count(*) > 0
 """
 
 EFFECTS_FOR_BUILD: typing.Final[str] = """-- name: EffectsForBuild :many
-SELECT id, project_id, kind, build_id, schedule_name, name, status, error, deps, log_size, log_truncated, started_at, finished_at FROM effect_runs WHERE build_id = $1 ORDER BY name
+SELECT id, project_id, kind, build_id, schedule_name, name, status, error, deps, log_size, log_truncated, started_at, finished_at, payload, code_rev, skip_reason, actor FROM effect_runs WHERE build_id = $1 ORDER BY name
 """
 
 ATTRIBUTE_STATUSES: typing.Final[str] = """-- name: AttributeStatuses :many
@@ -450,6 +456,8 @@ async def find_reusable_build(conn: ConnectionLike, *, project_id: int, tree_has
         effects_branch=row[18],
         effects_pr_number=row[19],
         eval_duration_ms=row[20],
+        actor=row[21],
+        merged_pr_number=row[22],
     )
 
 
@@ -479,6 +487,8 @@ async def detach_build_from_pr(conn: ConnectionLike, *, id_: int, pr_number: int
         effects_branch=row[18],
         effects_pr_number=row[19],
         eval_duration_ms=row[20],
+        actor=row[21],
+        merged_pr_number=row[22],
     )
 
 
@@ -508,6 +518,8 @@ async def attach_build_to_pr(conn: ConnectionLike, *, id_: int, pr_number: int |
         effects_branch=row[18],
         effects_pr_number=row[19],
         eval_duration_ms=row[20],
+        actor=row[21],
+        merged_pr_number=row[22],
     )
 
 
@@ -537,11 +549,13 @@ async def backfill_pr_author(conn: ConnectionLike, *, id_: int, pr_author: str |
         effects_branch=row[18],
         effects_pr_number=row[19],
         eval_duration_ms=row[20],
+        actor=row[21],
+        merged_pr_number=row[22],
     )
 
 
-async def create_build(conn: ConnectionLike, *, project_id: int, tree_hash: str | None, commit_sha: str, branch: str, pr_number: int | None, pr_author: str | None) -> models.Build | None:
-    row = await conn.fetchrow(CREATE_BUILD, project_id, tree_hash, commit_sha, branch, pr_number, pr_author)
+async def create_build(conn: ConnectionLike, *, project_id: int, tree_hash: str | None, commit_sha: str, branch: str, pr_number: int | None, pr_author: str | None, actor: str | None) -> models.Build | None:
+    row = await conn.fetchrow(CREATE_BUILD, project_id, tree_hash, commit_sha, branch, pr_number, pr_author, actor)
     if row is None:
         return None
     return models.Build(
@@ -566,6 +580,8 @@ async def create_build(conn: ConnectionLike, *, project_id: int, tree_hash: str 
         effects_branch=row[18],
         effects_pr_number=row[19],
         eval_duration_ms=row[20],
+        actor=row[21],
+        merged_pr_number=row[22],
     )
 
 
@@ -595,6 +611,8 @@ async def create_failed_build(conn: ConnectionLike, *, project_id: int, commit_s
         effects_branch=row[18],
         effects_pr_number=row[19],
         eval_duration_ms=row[20],
+        actor=row[21],
+        merged_pr_number=row[22],
     )
 
 
@@ -661,6 +679,8 @@ async def get_build(conn: ConnectionLike, *, id_: int) -> models.Build | None:
         effects_branch=row[18],
         effects_pr_number=row[19],
         eval_duration_ms=row[20],
+        actor=row[21],
+        merged_pr_number=row[22],
     )
 
 
@@ -703,8 +723,8 @@ async def complete_attribute(
     await conn.execute(COMPLETE_ATTRIBUTE, build_id, attr, system, drv_path, status, error, cached, outputs, log_size, log_truncated, eval_warnings, eval_wall_ms, eval_alloc_bytes, if_unfinished)
 
 
-async def start_effect(conn: ConnectionLike, *, name: str, status: str, build_id: int) -> int | None:
-    row = await conn.fetchrow(START_EFFECT, name, status, build_id)
+async def start_effect(conn: ConnectionLike, *, kind: str, name: str, status: str, build_id: int) -> int | None:
+    row = await conn.fetchrow(START_EFFECT, kind, name, status, build_id)
     if row is None:
         return None
     return row[0]
@@ -725,8 +745,8 @@ def effect_dep_statuses(conn: ConnectionLike, *, build_id: int | None, name: str
     return QueryResults(conn, EFFECT_DEP_STATUSES, _decode_hook, build_id, name)
 
 
-async def finish_effect(conn: ConnectionLike, *, build_id: int | None, name: str, status: str, log_size: int, log_truncated: bool, error: str | None) -> None:
-    await conn.execute(FINISH_EFFECT, build_id, name, status, log_size, log_truncated, error)
+async def finish_effect(conn: ConnectionLike, *, status: str, error: str | None, log_size: int, log_truncated: bool, build_id: int | None, kind: str, name: str) -> None:
+    await conn.execute(FINISH_EFFECT, status, error, log_size, log_truncated, build_id, kind, name)
 
 
 async def effects_summary(conn: ConnectionLike, *, build_id: int | None) -> EffectsSummaryRow | None:
@@ -738,7 +758,25 @@ async def effects_summary(conn: ConnectionLike, *, build_id: int | None) -> Effe
 
 def effects_for_build(conn: ConnectionLike, *, build_id: int | None) -> QueryResults[models.EffectRun]:
     def _decode_hook(row: asyncpg.Record) -> models.EffectRun:
-        return models.EffectRun(id_=row[0], project_id=row[1], kind=row[2], build_id=row[3], schedule_name=row[4], name=row[5], status=row[6], error=row[7], deps=row[8], log_size=row[9], log_truncated=row[10], started_at=row[11], finished_at=row[12])
+        return models.EffectRun(
+            id_=row[0],
+            project_id=row[1],
+            kind=row[2],
+            build_id=row[3],
+            schedule_name=row[4],
+            name=row[5],
+            status=row[6],
+            error=row[7],
+            deps=row[8],
+            log_size=row[9],
+            log_truncated=row[10],
+            started_at=row[11],
+            finished_at=row[12],
+            payload=row[13],
+            code_rev=row[14],
+            skip_reason=row[15],
+            actor=row[16],
+        )
 
     return QueryResults(conn, EFFECTS_FOR_BUILD, _decode_hook, build_id)
 

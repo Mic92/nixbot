@@ -170,6 +170,7 @@ async def reuse_terminal_build(  # noqa: PLR0913
                 # must still deploy when a default-branch push reuses it.
                 await o.maybe_run_effects(event, build, worktree_path, credentials)
             await o.refresh_schedules(event)
+            await o.deliver_events(event, build, finished=False)
         except Exception:
             logger.exception(
                 "post-processing reused build failed",

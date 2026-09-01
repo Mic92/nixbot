@@ -34,6 +34,7 @@ from .canceller import (
     has_skip_ci_marker,
 )
 from .db import BuildStatus
+from .db_gen import events as ev_q
 from .db_gen import maintenance as q
 from .effects import EffectsBackend, NixEffects
 from .effects_state import TaskTokens
@@ -281,6 +282,7 @@ class Orchestrator:
                 event.branch,
                 pr_number=event.pr_number,
                 pr_author=event.pr_author,
+                actor=event.actor,
             )
             await self._dispatch_build(
                 event,
@@ -387,6 +389,42 @@ class Orchestrator:
         transactional DB write, then the result is re-aggregated."""
         await build_run.run_build(self, event, build, worktree_path, credentials)
 
+    async def deliver_events(
+        self, event: ChangeEvent, build: BuildRecord, *, finished: bool = True
+    ) -> None:
+        """Queue onEvent deliveries for a settled build. The service
+        matches them against the default branch (deliver.py). A reused
+        build (finished=False) already had its build_finished."""
+        queue = WorkQueue(self.pool)
+        subject = (
+            f"pr-{event.pr_number}"
+            if event.pr_number is not None
+            else f"branch-{build.branch}"
+        )
+        key = f"deliver-{build.project_id}-{subject}"
+        base = {
+            "build_id": build.id_,
+            "actor": event.actor,
+            "pr_number": event.pr_number,
+        }
+        if event.pr_number is not None and build.status == BuildStatus.SUCCEEDED:
+            await queue.enqueue("deliver", key, {"kind": "pull_request", **base})
+        if finished and build.status in (BuildStatus.SUCCEEDED, BuildStatus.FAILED):
+            previous = await ev_q.previous_finished_status(
+                self.pool, build_id=build.id_
+            )
+            failed = await ev_q.failed_attr_names(self.pool, build_id=build.id_)
+            await queue.enqueue(
+                "deliver",
+                key,
+                {
+                    "kind": "build_finished",
+                    **base,
+                    "previous_status": previous,
+                    "failed_attrs": list(failed),
+                },
+            )
+
     async def refresh_schedules(self, event: ChangeEvent) -> None:
         """Queue `onSchedule` re-discovery after a successful
         default-branch build. The service's scheduled-effects loop only
@@ -453,10 +491,11 @@ class Orchestrator:
         info: RepoInfo,
         build: BuildRecord,
         name: str,
+        kind: str = "push",
         credentials: FetchCredentials | None = None,
     ) -> None:
         """Dispatcher entry for one queued effect."""
-        await effects_run.run_effect_item(self, info, build, name, credentials)
+        await effects_run.run_effect_item(self, info, build, name, kind, credentials)
 
     async def post_effects_summary(
         self, event: ChangeEvent, build: BuildRecord

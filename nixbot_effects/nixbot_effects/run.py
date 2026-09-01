@@ -147,6 +147,9 @@ async def _run_in_sandbox(
     secrets = dict(select_secrets(drv, opts.secrets or {}, opts))
     bind_mounts = select_mounts(drv, opts)
     env, task_token = task_env(drv_env, opts)
+    if opts.api_base_url and opts.task_token:
+        env["NIXBOT_API_URL"] = opts.api_base_url
+        env["NIXBOT_API_TOKEN"] = opts.task_token
     audiences = id_token_audiences(drv_env)
     if audiences and opts.api_base_url and opts.task_token:
         if opts.bind_id_token_audiences is not None:

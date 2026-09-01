@@ -17,7 +17,6 @@
       pkgs = nixpkgs.legacyPackages.x86_64-linux;
       fx = nixbot.lib.effects { inherit pkgs; };
       inherit (fx) mkEffect;
-      nbo = nixbot.packages.x86_64-linux.nixbot-cli;
 
       # checkout = true mounts the PR head at $NIXBOT_EFFECT_CHECKOUT (cwd).
       # That tree is untrusted: `tofu plan` executes provider code from it,
@@ -26,10 +25,7 @@
         args:
         mkEffect (
           {
-            inputs = [
-              pkgs.opentofu
-              nbo
-            ];
+            inputs = [ pkgs.opentofu ];
             checkout = true;
             userSetupScript = "cd infra && tofu init -input=false";
           }
@@ -37,7 +33,7 @@
         );
       planScript = ''
         tofu plan -input=false -no-color -lock=false | tee "$TMPDIR/plan.txt"
-        nbo pr comment --replace-marker tofu-plan --file "$TMPDIR/plan.txt"
+        nixbot-pr-comment --replace-marker tofu-plan < "$TMPDIR/plan.txt"
       '';
     in
     {
@@ -66,10 +62,9 @@
                   labels = [ "preview" ];
                 };
                 lock = "preview-{pr}";
-                inputs = [ nbo ];
                 effectScript = ''
                   echo deploy "pr-$NIXBOT_PR_NUMBER" at "$NIXBOT_PR_HEAD"
-                  nbo pr comment --replace-marker preview "https://pr-$NIXBOT_PR_NUMBER.preview.example.org"
+                  nixbot-pr-comment --replace-marker preview "https://pr-$NIXBOT_PR_NUMBER.preview.example.org"
                 '';
               };
             };
@@ -101,7 +96,7 @@
                 lock = "infra";
                 effectScript = ''
                   tofu apply -input=false -auto-approve
-                  nbo pr comment "Applied $NIXBOT_PR_HEAD (requested by $NIXBOT_ACTOR)."
+                  nixbot-pr-comment "Applied $NIXBOT_PR_HEAD (requested by $NIXBOT_ACTOR)."
                 '';
               };
             };

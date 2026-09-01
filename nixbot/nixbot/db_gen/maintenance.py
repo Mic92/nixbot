@@ -23,6 +23,7 @@ __all__: collections.abc.Sequence[str] = (
     "count_unfinished_attributes",
     "delete_attributes_by_name",
     "drop_removed_effects",
+    "effect_run",
     "effect_status",
     "fail_interrupted_effects",
     "find_unfinished_builds",
@@ -102,8 +103,14 @@ WITH cleared_failures AS (
 ), reset_effect_rows AS (
     UPDATE effect_runs SET status = 'pending', error = NULL,
         finished_at = NULL, log_size = 0, log_truncated = FALSE
-    WHERE build_id = $2::bigint
+    WHERE build_id = $2::bigint AND kind = 'push'
       AND $1::text IS NULL
+), cancel_event_rows AS (
+    -- Event effects are re-delivered when the rebuilt build settles.
+    -- Finished ones keep their history and log.
+    UPDATE effect_runs SET status = 'cancelled', finished_at = now()
+    WHERE build_id = $2::bigint AND kind <> 'push'
+      AND status = 'pending' AND $1::text IS NULL
 )
 UPDATE builds SET status = 'pending', error = NULL,
     eval_warnings = NULL, started_at = NULL, finished_at = NULL,
@@ -119,7 +126,7 @@ WITH flag AS (
 UPDATE effect_runs SET status = 'pending', error = NULL,
     finished_at = NULL, log_size = 0,
     log_truncated = FALSE
-WHERE build_id = $1
+WHERE build_id = $1 AND kind = 'push'
   AND ($2::text[] IS NULL OR name = ANY($2::text[]))
 """
 
@@ -165,7 +172,7 @@ AND attr = ANY($2::text[])
 """
 
 FIND_UNFINISHED_BUILDS: typing.Final[str] = """-- name: FindUnfinishedBuilds :many
-SELECT id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms FROM builds WHERE status = ANY($1::text[])
+SELECT id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms, actor, merged_pr_number FROM builds WHERE status = ANY($1::text[])
 AND ($2::bigint IS NULL OR id = $2)
 ORDER BY id
 """
@@ -249,12 +256,16 @@ SELECT cancelled.status_generation FROM cancelled
 """
 
 DROP_REMOVED_EFFECTS: typing.Final[str] = """-- name: DropRemovedEffects :exec
-DELETE FROM effect_runs WHERE build_id = $1
+DELETE FROM effect_runs WHERE build_id = $1 AND kind = 'push'
 AND NOT (name = ANY($2::text[]))
 """
 
 EFFECT_STATUS: typing.Final[str] = """-- name: EffectStatus :one
 SELECT status FROM effect_runs WHERE build_id = $1 AND kind = 'push' AND name = $2
+"""
+
+EFFECT_RUN: typing.Final[str] = """-- name: EffectRun :one
+SELECT id, project_id, kind, build_id, schedule_name, name, status, error, deps, log_size, log_truncated, started_at, finished_at, payload, code_rev, skip_reason, actor FROM effect_runs WHERE build_id = $1 AND kind = $2 AND name = $3
 """
 
 BUILD_EFFECT_RUN_IDS: typing.Final[str] = """-- name: BuildEffectRunIds :many
@@ -389,6 +400,8 @@ def find_unfinished_builds(conn: ConnectionLike, *, statuses: collections.abc.Se
             effects_branch=row[18],
             effects_pr_number=row[19],
             eval_duration_ms=row[20],
+            actor=row[21],
+            merged_pr_number=row[22],
         )
 
     return QueryResults(conn, FIND_UNFINISHED_BUILDS, _decode_hook, statuses, build_id)
@@ -444,6 +457,13 @@ async def effect_status(conn: ConnectionLike, *, build_id: int | None, name: str
     if row is None:
         return None
     return row[0]
+
+
+async def effect_run(conn: ConnectionLike, *, build_id: int | None, kind: str, name: str) -> models.EffectRun | None:
+    row = await conn.fetchrow(EFFECT_RUN, build_id, kind, name)
+    if row is None:
+        return None
+    return models.EffectRun(id_=row[0], project_id=row[1], kind=row[2], build_id=row[3], schedule_name=row[4], name=row[5], status=row[6], error=row[7], deps=row[8], log_size=row[9], log_truncated=row[10], started_at=row[11], finished_at=row[12], payload=row[13], code_rev=row[14], skip_reason=row[15], actor=row[16])
 
 
 def build_effect_run_ids(conn: ConnectionLike, *, build_id: int | None, names: collections.abc.Sequence[str] | None) -> QueryResults[int]:

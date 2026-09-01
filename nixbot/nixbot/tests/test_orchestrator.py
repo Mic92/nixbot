@@ -1471,11 +1471,12 @@ async def test_effect_rows_roundtrip(pool: asyncpg.Pool, tmp_path: Path) -> None
     build, _ = await db.get_or_create_build(pool, project.id, "tree-fx", "sha", "main")
 
     await builds_q.start_effect(
-        pool, build_id=build.id_, name="deploy", status="running"
+        pool, build_id=build.id_, kind="push", name="deploy", status="running"
     )
     await builds_q.finish_effect(
         pool,
         build_id=build.id_,
+        kind="push",
         name="deploy",
         status="failed",
         error="ssh: connection refused",
@@ -1490,7 +1491,7 @@ async def test_effect_rows_roundtrip(pool: asyncpg.Pool, tmp_path: Path) -> None
 
     # A rerun resets the row to running with fresh timestamps.
     await builds_q.start_effect(
-        pool, build_id=build.id_, name="deploy", status="running"
+        pool, build_id=build.id_, kind="push", name="deploy", status="running"
     )
     effects = await builds_q.effects_for_build(pool, build_id=build.id_)
     assert effects[0].status == "running"

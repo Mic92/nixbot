@@ -160,6 +160,15 @@ async def list_effects(ctx: EffectsContext) -> dict[str, EffectMeta]:
     return await _with_timeout(nixbot_effects.list_effects(ctx), "listing effects")
 
 
+async def list_all_event_effects(
+    ctx: EffectsContext,
+) -> dict[str, dict[str, nixbot_effects.EventEffectMeta]]:
+    """onEvent definitions on the default branch, by kind."""
+    return await _with_timeout(
+        nixbot_effects.list_all_event_effects(ctx), "listing event effects"
+    )
+
+
 async def list_scheduled_effects(ctx: EffectsContext) -> dict:
     """The onSchedule definitions on the default branch."""
     return await _with_timeout(
@@ -213,6 +222,20 @@ async def run_effect(
     )
 
 
+async def run_event_effect(
+    ctx: EffectsContext,
+    kind: str,
+    effect: str,
+    payload: dict,
+    log_write: LogWrite | None = None,
+) -> bool:
+    return await _run_wrapped(
+        ctx,
+        log_write,
+        lambda: nixbot_effects.run_event_effect(ctx, kind, effect, payload),
+    )
+
+
 async def run_scheduled_effect(
     ctx: EffectsContext,
     schedule_name: str,
@@ -230,9 +253,20 @@ class EffectsBackend(Protocol):
     """How the orchestrator evaluates and runs effects. Tests fake it."""
 
     async def list_effects(self, ctx: EffectsContext) -> dict[str, EffectMeta]: ...
+    async def list_all_event_effects(
+        self, ctx: EffectsContext
+    ) -> dict[str, dict[str, nixbot_effects.EventEffectMeta]]: ...
     async def list_scheduled_effects(self, ctx: EffectsContext) -> dict: ...
     async def run_effect(
         self, ctx: EffectsContext, effect: str, log_write: LogWrite | None = None
+    ) -> bool: ...
+    async def run_event_effect(
+        self,
+        ctx: EffectsContext,
+        kind: str,
+        effect: str,
+        payload: dict,
+        log_write: LogWrite | None = None,
     ) -> bool: ...
     async def run_scheduled_effect(
         self,
@@ -245,6 +279,8 @@ class EffectsBackend(Protocol):
 
 class NixEffects:
     list_effects = staticmethod(list_effects)
+    list_all_event_effects = staticmethod(list_all_event_effects)
     list_scheduled_effects = staticmethod(list_scheduled_effects)
     run_effect = staticmethod(run_effect)
+    run_event_effect = staticmethod(run_event_effect)
     run_scheduled_effect = staticmethod(run_scheduled_effect)
