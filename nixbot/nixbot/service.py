@@ -592,7 +592,8 @@ class CIService:
         re-runs a settled effect to clear it."""
         by_build: dict[int, list[str]] = {}
         for row in settled:
-            by_build.setdefault(row.build_id, []).append(row.name)
+            if row.build_id is not None:
+                by_build.setdefault(row.build_id, []).append(row.name)
         for build_id, names in by_build.items():
             build = await builds_q.get_build(self.pool, id_=build_id)
             if build is None:

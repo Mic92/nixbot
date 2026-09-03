@@ -10,7 +10,7 @@ import os
 import re
 import subprocess
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 import asyncpg
@@ -32,6 +32,7 @@ if TYPE_CHECKING:
 
     from nixbot.auth import User
     from nixbot.build_scheduler import CachedFailure
+    from nixbot.effects import EffectMeta
 
 from nixbot.models import CacheStatus, NixEvalJobSuccess
 
@@ -69,6 +70,35 @@ def mk_job(
         outputs={"out": out or f"/nix/store/{attr}-out"},
         system=system,
     )
+
+
+@dataclass
+class FakeEffects:
+    """EffectsBackend without nix. Configure the listings, read what ran.
+    Assigning e.g. `fake.run_effect = fn` replaces one operation."""
+
+    push: dict[str, EffectMeta] = field(default_factory=dict)
+    schedules: dict[str, Any] = field(default_factory=dict)
+    push_error: Exception | None = None
+    ran: list[str] = field(default_factory=list)
+
+    async def list_effects(self, _ctx: Any) -> dict[str, EffectMeta]:
+        if self.push_error is not None:
+            raise self.push_error
+        return self.push
+
+    async def list_scheduled_effects(self, _ctx: Any) -> dict[str, Any]:
+        return self.schedules
+
+    async def run_effect(self, _ctx: Any, effect: str, _log: Any = None) -> bool:
+        self.ran.append(effect)
+        return True
+
+    async def run_scheduled_effect(
+        self, _ctx: Any, schedule_name: str, effect: str, _log: Any = None
+    ) -> bool:
+        self.ran.append(f"{schedule_name}/{effect}")
+        return True
 
 
 class FakeCache:
@@ -402,9 +432,15 @@ class WebHarness:
         url: str,
         user: User | None = None,
         headers: dict[str, str] | None = None,
+        *,
+        follow_redirects: bool = False,
     ) -> httpx.Response:
         request_headers = cookie_header(self._cookies(user)) | (headers or {})
-        return self.run(self.http.get(url, headers=request_headers))
+        return self.run(
+            self.http.get(
+                url, headers=request_headers, follow_redirects=follow_redirects
+            )
+        )
 
     def post(
         self,

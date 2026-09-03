@@ -29,7 +29,7 @@ from nixbot.executor import (
     StructuredCapture,
     attribute_log_path,
     container_path,
-    effect_log_path,
+    effect_run_log_path,
 )
 from nixbot.logstore import LogContainerWriter
 from nixbot.web import events as events_module
@@ -1347,17 +1347,17 @@ def test_log_sse_stream_caps_history_backlog(
         run_id = await _insert_scheduled_run(
             ctx.pool, project_id, effect="big", status="running"
         )
-        writer = LogWriter(path=tmp_path / "logs" / "scheduled" / f"{run_id}.zst")
+        writer = LogWriter(path=effect_run_log_path(tmp_path, run_id))
         await writer.write("".join(f"line{i:05d}\n" for i in range(3000)).encode())
-        registry.register_scheduled(run_id, writer)
+        registry.register_effect(run_id, writer)
         try:
-            url = f"/repos/github/acme/widget/schedules/runs/{run_id}/stream"
+            url = f"/repos/github/acme/widget/effects/runs/{run_id}/stream"
             stream_task = asyncio.ensure_future(client.http.get(url))
             await asyncio.sleep(0.1)
             await writer.close()
             return (await stream_task).text
         finally:
-            registry.unregister_scheduled(run_id)
+            registry.unregister_effect(run_id)
 
     stream = client.loop.run_until_complete(run())
     assert "line02999" in stream
@@ -1382,17 +1382,17 @@ def test_log_sse_stream_neutralizes_carriage_returns(
         run_id = await _insert_scheduled_run(
             ctx.pool, project_id, effect="cr", status="running"
         )
-        writer = LogWriter(path=tmp_path / "logs" / "scheduled" / f"{run_id}.zst")
+        writer = LogWriter(path=effect_run_log_path(tmp_path, run_id))
         await writer.write(b"progress 1%\rprogress 2%\r\nevent: done\rtail\n")
-        registry.register_scheduled(run_id, writer)
+        registry.register_effect(run_id, writer)
         try:
-            url = f"/repos/github/acme/widget/schedules/runs/{run_id}/stream"
+            url = f"/repos/github/acme/widget/effects/runs/{run_id}/stream"
             stream_task = asyncio.ensure_future(client.http.get(url))
             await asyncio.sleep(0.1)
             await writer.close()
             return (await stream_task).text
         finally:
-            registry.unregister_scheduled(run_id)
+            registry.unregister_effect(run_id)
 
     stream = client.loop.run_until_complete(run())
     body_lines = stream.split("\n")
@@ -1633,20 +1633,20 @@ def test_build_page_shows_effects(client: WebHarness) -> None:
     async def seed_effects() -> None:
         ctx = client.ctx
         build_id = await ctx.pool.fetchval("SELECT id FROM builds WHERE number = 2")
-        await ctx.pool.execute(
-            """
-            INSERT INTO build_effects (build_id, name, status, error, log_size,
-                                       finished_at)
-            VALUES ($1, 'deploy', 'failed', 'ssh: connection refused',
-                    42, now()),
-                   ($1, 'notify', 'running', NULL, 0, NULL)
-            """,
+        await _insert_effect_run(
+            ctx.pool,
             build_id,
+            "deploy",
+            "failed",
+            error="ssh: connection refused",
+            log_size=42,
+            finished_at=datetime.now(UTC),
         )
+        await _insert_effect_run(ctx.pool, build_id, "notify", "running")
         pr_build_id = await ctx.pool.fetchval("SELECT id FROM builds WHERE number = 3")
         await ctx.pool.execute(
-            "INSERT INTO build_effects (build_id, name, status, finished_at) "
-            "VALUES ($1, 'deploy', 'skipped', now())",
+            "INSERT INTO effect_runs (project_id, kind, build_id, name, status, finished_at) "
+            "VALUES ((SELECT project_id FROM builds WHERE id = $1), 'push', $1, 'deploy', 'skipped', now())",
             pr_build_id,
         )
 
@@ -1657,8 +1657,7 @@ def test_build_page_shows_effects(client: WebHarness) -> None:
     assert "deploy" in text
     assert "ssh: connection refused" in text
     # Both finished-with-log and running effects link to the viewer.
-    assert "logs/effect:deploy" in text
-    assert "logs/effect:notify" in text
+    assert text.count("/effects/runs/") == 2
     # Builds without effects don't render the section.
     assert "Effects" not in client.get("/repos/github/acme/widget/builds/1").text
     pr_text = client.get("/repos/github/acme/widget/builds/3").text
@@ -1672,20 +1671,24 @@ def test_effect_log_raw_text(client: WebHarness, tmp_path: Path) -> None:
         ctx = client.ctx
         ctx.state_dir = tmp_path
         build_id = await ctx.pool.fetchval("SELECT id FROM builds WHERE number = 2")
-        log_file = effect_log_path(tmp_path, build_id, "deploy2")
-        log_file.parent.mkdir(parents=True, exist_ok=True)
-        log_file.write_bytes(
-            zstandard.ZstdCompressor().compress(b"activating system...\n")
-        )
-        await ctx.pool.execute(
-            "INSERT INTO build_effects (build_id, name, status, log_size, "
-            "finished_at) VALUES ($1, 'deploy2', 'succeeded', 42, now())",
+        run_id = await _insert_effect_run(
+            ctx.pool,
             build_id,
+            "deploy2",
+            "succeeded",
+            log_size=42,
+            finished_at=datetime.now(UTC),
         )
+        _write_effect_log(tmp_path, run_id, b"activating system...\n")
 
     client.loop.run_until_complete(seed_effect_log())
-    response = client.get("/repos/github/acme/widget/builds/2/logs/effect:deploy2.txt")
+    # Old per-build URL redirects to the run.
+    response = client.get(
+        "/repos/github/acme/widget/builds/2/logs/effect:deploy2.txt",
+        follow_redirects=True,
+    )
     assert response.status_code == 200
+    assert "/effects/runs/" in str(response.url)
     assert "activating system" in response.text
 
 
@@ -1696,27 +1699,29 @@ def test_effect_log_viewer_status_icon(client: WebHarness, tmp_path: Path) -> No
         ctx = client.ctx
         ctx.state_dir = tmp_path
         build_id = await ctx.pool.fetchval("SELECT id FROM builds WHERE number = 2")
-        log_file = effect_log_path(tmp_path, build_id, "deploy3")
-        log_file.parent.mkdir(parents=True, exist_ok=True)
-        log_file.write_bytes(
-            zstandard.ZstdCompressor().compress(b"activating system...\n")
-        )
-        await ctx.pool.execute(
-            "INSERT INTO build_effects (build_id, name, status, log_size, "
-            "finished_at) VALUES ($1, 'deploy3', 'succeeded', 42, now())",
+        run_id = await _insert_effect_run(
+            ctx.pool,
             build_id,
+            "deploy3",
+            "succeeded",
+            log_size=42,
+            finished_at=datetime.now(UTC),
         )
+        _write_effect_log(tmp_path, run_id, b"activating system...\n")
 
     client.loop.run_until_complete(seed_effect_log())
-    text = client.get("/repos/github/acme/widget/builds/2/logs/effect:deploy3").text
+    text = client.get(
+        "/repos/github/acme/widget/builds/2/logs/effect:deploy3", follow_redirects=True
+    ).text
     assert "status-icon succeeded" in text
+    assert "effect of <a" in text
     # Controls must target the effect endpoints, not /attrs/effect:...
     assert "attrs/effect" not in text
 
 
 def test_effect_changes_notify_build_events(client: WebHarness) -> None:
     """The page's SSE refresh rides on build_events. Without a trigger
-    on build_effects the Effects section never updates live."""
+    on effect_runs the Effects section never updates live."""
 
     async def run() -> list[str]:
         ctx = client.ctx
@@ -1727,11 +1732,11 @@ def test_effect_changes_notify_build_events(client: WebHarness) -> None:
         try:
             await conn.add_listener("build_events", listener)
             await ctx.pool.execute(
-                "INSERT INTO build_effects (build_id, name) VALUES ($1, 'fxlive')",
+                "INSERT INTO effect_runs (project_id, kind, build_id, name) VALUES ((SELECT project_id FROM builds WHERE id = $1), 'push', $1, 'fxlive')",
                 build_id,
             )
             await ctx.pool.execute(
-                "UPDATE build_effects SET status = 'succeeded', "
+                "UPDATE effect_runs SET status = 'succeeded', "
                 "finished_at = now() WHERE build_id = $1 AND name = 'fxlive'",
                 build_id,
             )
@@ -1906,9 +1911,9 @@ async def _insert_scheduled_run(  # noqa: PLR0913
     error: str | None = None,
 ) -> int:
     return await pool.fetchval(
-        "INSERT INTO scheduled_effect_runs "
-        "(project_id, schedule_name, effect, status, error, finished_at) "
-        "VALUES ($1, $2, $3, $4, $5, now()) RETURNING id",
+        "INSERT INTO effect_runs "
+        "(project_id, kind, schedule_name, name, status, error, finished_at) "
+        "VALUES ($1, 'schedule', $2, $3, $4, $5, now()) RETURNING id",
         project_id,
         schedule_name,
         effect,
@@ -1917,10 +1922,34 @@ async def _insert_scheduled_run(  # noqa: PLR0913
     )
 
 
-def _write_scheduled_log(state_dir: Path, run_id: int, data: bytes) -> None:
-    log_dir = state_dir / "logs" / "scheduled"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    (log_dir / f"{run_id}.zst").write_bytes(zstandard.ZstdCompressor().compress(data))
+def _write_effect_log(state_dir: Path, run_id: int, data: bytes) -> None:
+    path = effect_run_log_path(state_dir, run_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(zstandard.ZstdCompressor().compress(data))
+
+
+async def _insert_effect_run(  # noqa: PLR0913
+    pool: asyncpg.Pool,
+    build_id: int,
+    name: str,
+    status: str,
+    *,
+    error: str | None = None,
+    log_size: int = 0,
+    finished_at: datetime | None = None,
+) -> int:
+    return await pool.fetchval(
+        "INSERT INTO effect_runs"
+        " (project_id, kind, build_id, name, status, error, log_size, finished_at)"
+        " SELECT project_id, 'push', id, $2, $3, $4, $5, $6"
+        " FROM builds WHERE id = $1 RETURNING id",
+        build_id,
+        name,
+        status,
+        error,
+        log_size,
+        finished_at,
+    )
 
 
 def test_scheduled_run_viewer_renders_ansi(client: WebHarness, tmp_path: Path) -> None:
@@ -1934,16 +1963,16 @@ def test_scheduled_run_viewer_renders_ansi(client: WebHarness, tmp_path: Path) -
             "SELECT id FROM projects WHERE forge_repo_id = 'web-1'"
         )
         run_id = await _insert_scheduled_run(ctx.pool, project_id)
-        _write_scheduled_log(tmp_path, run_id, b"\x1b[31;1merror:\x1b[0m boom\n")
+        _write_effect_log(tmp_path, run_id, b"\x1b[31;1merror:\x1b[0m boom\n")
         return run_id
 
     run_id = client.run(setup())
-    resp = client.get(f"/repos/github/acme/widget/schedules/runs/{run_id}")
+    resp = client.get(f"/repos/github/acme/widget/effects/runs/{run_id}")
     assert resp.status_code == 200
     assert "ansi-red" in resp.text
     assert f"runs/{run_id}.txt" in resp.text  # raw link present
     # Raw route still works and is not shadowed by the HTML viewer.
-    raw = client.get(f"/repos/github/acme/widget/schedules/runs/{run_id}.txt")
+    raw = client.get(f"/repos/github/acme/widget/effects/runs/{run_id}.txt")
     assert raw.status_code == 200
     assert "error: boom" in raw.text
     assert "\x1b[" not in raw.text
@@ -1962,7 +1991,7 @@ def test_scheduled_run_viewer_cross_project_404(client: WebHarness) -> None:
 
     run_id = client.run(setup())
     assert (
-        client.get(f"/repos/github/acme/widget/schedules/runs/{run_id}").status_code
+        client.get(f"/repos/github/acme/widget/effects/runs/{run_id}").status_code
         == 404
     )
 
@@ -1982,7 +2011,7 @@ def test_scheduled_run_log_unavailable_placeholder(
         return await _insert_scheduled_run(ctx.pool, project_id, effect="pruned")
 
     run_id = client.run(setup())
-    resp = client.get(f"/repos/github/acme/widget/schedules/runs/{run_id}")
+    resp = client.get(f"/repos/github/acme/widget/effects/runs/{run_id}")
     assert resp.status_code == 200
     assert "log unavailable" in resp.text
 
@@ -2001,7 +2030,7 @@ def test_scheduled_run_viewer_waiting_before_log(client: WebHarness) -> None:
         )
 
     run_id = client.run(setup())
-    resp = client.get(f"/repos/github/acme/widget/schedules/runs/{run_id}")
+    resp = client.get(f"/repos/github/acme/widget/effects/runs/{run_id}")
     assert resp.status_code == 200
     assert "waiting for the run to start" in resp.text
     assert "log unavailable" not in resp.text
@@ -2074,18 +2103,18 @@ def test_scheduled_run_stream_replays_history(
         run_id = await _insert_scheduled_run(
             ctx.pool, project_id, effect="streamed", status="running"
         )
-        writer = LogWriter(path=tmp_path / "logs" / "scheduled" / f"{run_id}.zst")
+        writer = LogWriter(path=effect_run_log_path(tmp_path, run_id))
         await writer.write(b"scheduled early\n")
-        registry.register_scheduled(run_id, writer)
+        registry.register_effect(run_id, writer)
         try:
-            url = f"/repos/github/acme/widget/schedules/runs/{run_id}/stream"
+            url = f"/repos/github/acme/widget/effects/runs/{run_id}/stream"
             task = asyncio.ensure_future(client.http.get(url))
             await asyncio.sleep(0.1)
             await writer.write(b"scheduled late\n")
             await writer.close()
             return (await task).text
         finally:
-            registry.unregister_scheduled(run_id)
+            registry.unregister_effect(run_id)
 
     stream = client.loop.run_until_complete(run())
     assert "scheduled early" in stream
@@ -2108,13 +2137,12 @@ def test_scheduled_run_notify_build_events(client: WebHarness) -> None:
         try:
             await conn.add_listener("build_events", listener)
             run_id = await ctx.pool.fetchval(
-                "INSERT INTO scheduled_effect_runs "
-                "(project_id, schedule_name, effect) VALUES ($1, 'n', 'd') "
-                "RETURNING id",
+                "INSERT INTO effect_runs (project_id, kind, schedule_name, name)"
+                " VALUES ($1, 'schedule', 'n', 'd') RETURNING id",
                 project_id,
             )
             await ctx.pool.execute(
-                "UPDATE scheduled_effect_runs SET status = 'succeeded', "
+                "UPDATE effect_runs SET status = 'succeeded', "
                 "finished_at = now() WHERE id = $1",
                 run_id,
             )

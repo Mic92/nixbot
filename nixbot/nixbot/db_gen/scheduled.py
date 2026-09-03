@@ -9,7 +9,6 @@ __all__: collections.abc.Sequence[str] = (
     "LatestScheduledRunsRow",
     "ProjectSchedulesRow",
     "QueryResults",
-    "ScheduledRunDetailRow",
     "ScheduledRunsForEffectRow",
     "SchedulesForUpdateRow",
     "delete_project_schedules",
@@ -19,8 +18,6 @@ __all__: collections.abc.Sequence[str] = (
     "latest_scheduled_runs",
     "mark_schedule_run",
     "project_schedules",
-    "scheduled_run_detail",
-    "scheduled_run_exists",
     "scheduled_runs_for_effect",
     "schedules_for_update",
     "start_scheduled_run",
@@ -53,7 +50,7 @@ class SchedulesForUpdateRow:
 @dataclasses.dataclass()
 class LatestScheduledRunsRow:
     id_: int
-    schedule_name: str
+    schedule_name: str | None
     effect: str
     status: str
     error: str | None
@@ -70,20 +67,9 @@ class ProjectSchedulesRow:
 
 
 @dataclasses.dataclass()
-class ScheduledRunDetailRow:
-    id_: int
-    schedule_name: str
-    effect: str
-    status: str
-    error: str | None
-    started_at: datetime.datetime
-    finished_at: datetime.datetime | None
-
-
-@dataclasses.dataclass()
 class ScheduledRunsForEffectRow:
     id_: int
-    schedule_name: str
+    schedule_name: str | None
     effect: str
     status: str
     error: str | None
@@ -120,21 +106,23 @@ WHERE last_run IS NULL
 """
 
 START_SCHEDULED_RUN: typing.Final[str] = """-- name: StartScheduledRun :one
-INSERT INTO scheduled_effect_runs (project_id, schedule_name, effect)
-VALUES ($1, $2, $3) RETURNING id
+INSERT INTO effect_runs (project_id, kind, schedule_name, name)
+VALUES ($1, 'schedule', $2, $3) RETURNING id
 """
 
 FINISH_SCHEDULED_RUN: typing.Final[str] = """-- name: FinishScheduledRun :exec
-UPDATE scheduled_effect_runs
-SET status = $2, error = $3, finished_at = now() WHERE id = $1
+UPDATE effect_runs
+SET status = $2, error = $5, log_size = $3, log_truncated = $4,
+    finished_at = now()
+WHERE id = $1
 """
 
 LATEST_SCHEDULED_RUNS: typing.Final[str] = """-- name: LatestScheduledRuns :many
-SELECT DISTINCT ON (schedule_name, effect)
-       id, schedule_name, effect, status, error,
+SELECT DISTINCT ON (schedule_name, name)
+       id, schedule_name, name AS effect, status, error,
        started_at, finished_at
-FROM scheduled_effect_runs WHERE project_id = $1
-ORDER BY schedule_name, effect, started_at DESC
+FROM effect_runs WHERE project_id = $1 AND kind = 'schedule'
+ORDER BY schedule_name, name, started_at DESC
 """
 
 PROJECT_SCHEDULES: typing.Final[str] = """-- name: ProjectSchedules :many
@@ -148,21 +136,13 @@ UPDATE scheduled_effects SET last_run = $4
 WHERE project_id = $1 AND schedule_name = $2 AND effect = $3
 """
 
-SCHEDULED_RUN_EXISTS: typing.Final[str] = """-- name: ScheduledRunExists :one
-SELECT id FROM scheduled_effect_runs WHERE id = $1 AND project_id = $2
-"""
-
-SCHEDULED_RUN_DETAIL: typing.Final[str] = """-- name: ScheduledRunDetail :one
-SELECT id, schedule_name, effect, status, error, started_at, finished_at
-FROM scheduled_effect_runs WHERE id = $1 AND project_id = $2
-"""
-
 SCHEDULED_RUNS_FOR_EFFECT: typing.Final[str] = """-- name: ScheduledRunsForEffect :many
-SELECT id, schedule_name, effect, status, error, started_at, finished_at
-FROM scheduled_effect_runs
+SELECT id, schedule_name, name AS effect, status, error, started_at, finished_at
+FROM effect_runs
 WHERE project_id = $1
+  AND kind = 'schedule'
   AND schedule_name = $2
-  AND effect = $3
+  AND name = $3
   AND ($4::bigint IS NULL OR id < $4)
 ORDER BY id DESC LIMIT $5::bigint
 """
@@ -232,15 +212,15 @@ def due_schedule_rows(conn: ConnectionLike, *, now: datetime.datetime) -> QueryR
     return QueryResults(conn, DUE_SCHEDULE_ROWS, _decode_hook, now)
 
 
-async def start_scheduled_run(conn: ConnectionLike, *, project_id: int, schedule_name: str, effect: str) -> int | None:
-    row = await conn.fetchrow(START_SCHEDULED_RUN, project_id, schedule_name, effect)
+async def start_scheduled_run(conn: ConnectionLike, *, project_id: int, schedule_name: str | None, name: str) -> int | None:
+    row = await conn.fetchrow(START_SCHEDULED_RUN, project_id, schedule_name, name)
     if row is None:
         return None
     return row[0]
 
 
-async def finish_scheduled_run(conn: ConnectionLike, *, id_: int, status: str, error: str | None) -> None:
-    await conn.execute(FINISH_SCHEDULED_RUN, id_, status, error)
+async def finish_scheduled_run(conn: ConnectionLike, *, id_: int, status: str, log_size: int, log_truncated: bool, error: str | None) -> None:
+    await conn.execute(FINISH_SCHEDULED_RUN, id_, status, log_size, log_truncated, error)
 
 
 def latest_scheduled_runs(conn: ConnectionLike, *, project_id: int) -> QueryResults[LatestScheduledRunsRow]:
@@ -261,21 +241,7 @@ async def mark_schedule_run(conn: ConnectionLike, *, project_id: int, schedule_n
     await conn.execute(MARK_SCHEDULE_RUN, project_id, schedule_name, effect, last_run)
 
 
-async def scheduled_run_exists(conn: ConnectionLike, *, id_: int, project_id: int) -> int | None:
-    row = await conn.fetchrow(SCHEDULED_RUN_EXISTS, id_, project_id)
-    if row is None:
-        return None
-    return row[0]
-
-
-async def scheduled_run_detail(conn: ConnectionLike, *, id_: int, project_id: int) -> ScheduledRunDetailRow | None:
-    row = await conn.fetchrow(SCHEDULED_RUN_DETAIL, id_, project_id)
-    if row is None:
-        return None
-    return ScheduledRunDetailRow(id_=row[0], schedule_name=row[1], effect=row[2], status=row[3], error=row[4], started_at=row[5], finished_at=row[6])
-
-
-def scheduled_runs_for_effect(conn: ConnectionLike, *, project_id: int, schedule_name: str, effect: str, before: int | None, limit_: int) -> QueryResults[ScheduledRunsForEffectRow]:
+def scheduled_runs_for_effect(conn: ConnectionLike, *, project_id: int, schedule_name: str | None, effect: str, before: int | None, limit_: int) -> QueryResults[ScheduledRunsForEffectRow]:
     def _decode_hook(row: asyncpg.Record) -> ScheduledRunsForEffectRow:
         return ScheduledRunsForEffectRow(id_=row[0], schedule_name=row[1], effect=row[2], status=row[3], error=row[4], started_at=row[5], finished_at=row[6])
 

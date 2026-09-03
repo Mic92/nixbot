@@ -31,7 +31,7 @@ WITH cleared_failures AS (
     WHERE build_id = sqlc.arg(build_id)::bigint
       AND (sqlc.narg(attr)::text IS NULL OR attr = sqlc.narg(attr))
 ), reset_effect_rows AS (
-    UPDATE build_effects SET status = 'pending', error = NULL,
+    UPDATE effect_runs SET status = 'pending', error = NULL,
         finished_at = NULL, log_size = 0, log_truncated = FALSE
     WHERE build_id = sqlc.arg(build_id)::bigint
       AND sqlc.narg(attr)::text IS NULL
@@ -50,7 +50,7 @@ WHERE builds.id = sqlc.arg(build_id)::bigint;
 WITH flag AS (
     UPDATE builds SET effects_started = FALSE WHERE id = sqlc.arg(build_id)
 )
-UPDATE build_effects SET status = 'pending', error = NULL,
+UPDATE effect_runs SET status = 'pending', error = NULL,
     finished_at = NULL, log_size = 0,
     log_truncated = FALSE
 WHERE build_id = sqlc.arg(build_id)
@@ -107,15 +107,11 @@ SELECT build_id, attr, system, drv_path, outputs, status
 FROM build_attributes WHERE build_id = ANY(sqlc.arg(build_ids)::bigint[]);
 
 -- name: FailInterruptedEffects :many
-UPDATE build_effects SET status = 'failed',
+-- build_id is null for schedule runs.
+UPDATE effect_runs SET status = 'failed',
     error = 'interrupted by a service restart', finished_at = now()
 WHERE status = 'running' AND started_at < sqlc.arg(started_before)
 RETURNING build_id, name;
-
--- name: FailInterruptedScheduledRuns :exec
-UPDATE scheduled_effect_runs SET status = 'failed',
-    error = 'interrupted by a service restart', finished_at = now()
-WHERE status = 'running' AND started_at < sqlc.arg(started_before);
 
 -- name: CleanupOldRows :many
 -- One retention sweep: builds (cascading to attributes/log rows),
@@ -132,10 +128,10 @@ WITH del_builds AS (
       AND status IN ('succeeded', 'failed', 'cancelled')
     RETURNING builds.id
 ), del_runs AS (
-    DELETE FROM scheduled_effect_runs
-    WHERE finished_at IS NOT NULL
+    DELETE FROM effect_runs
+    WHERE build_id IS NULL AND finished_at IS NOT NULL
       AND finished_at < now() - make_interval(days => sqlc.arg(retention_days)::int)
-    RETURNING scheduled_effect_runs.id
+    RETURNING effect_runs.id
 ), pruned_statuses AS (
     DELETE FROM failed_statuses
     WHERE to_timestamp(timestamp)
@@ -151,7 +147,11 @@ WITH del_builds AS (
 )
 SELECT 'build' AS kind, del_builds.id FROM del_builds
 UNION ALL
-SELECT 'scheduled_run' AS kind, del_runs.id FROM del_runs;
+SELECT 'effect_run' AS kind, del_runs.id FROM del_runs
+UNION ALL
+-- Cascade-deleted with their build, still visible in this snapshot.
+SELECT 'effect_run' AS kind, r.id FROM effect_runs r
+WHERE r.build_id IN (SELECT del_builds.id FROM del_builds);
 
 -- name: AllBuildIds :many
 SELECT id FROM builds;
@@ -183,11 +183,16 @@ WITH cancelled AS (
 SELECT cancelled.status_generation FROM cancelled;
 
 -- name: DropRemovedEffects :exec
-DELETE FROM build_effects WHERE build_id = $1
+DELETE FROM effect_runs WHERE build_id = $1
 AND NOT (name = ANY(sqlc.arg(names)::text[]));
 
 -- name: EffectStatus :one
-SELECT status FROM build_effects WHERE build_id = $1 AND name = $2;
+SELECT status FROM effect_runs WHERE build_id = $1 AND kind = 'push' AND name = $2;
+
+-- name: BuildEffectRunIds :many
+-- For unlinking logs on reset. NULL names = all of the build's runs.
+SELECT id FROM effect_runs WHERE build_id = sqlc.arg(build_id)
+  AND (sqlc.narg(names)::text[] IS NULL OR name = ANY(sqlc.narg(names)::text[]));
 
 -- name: SucceededAttributeOutputs :many
 SELECT attr, outputs FROM build_attributes

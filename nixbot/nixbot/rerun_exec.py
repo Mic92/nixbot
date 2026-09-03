@@ -197,7 +197,7 @@ async def rerun_effects(
         # previous run's logs here too, so pending rows show no stale
         # output.
         await q.reset_effects_state(o.pool, build_id=build.id_, names=names)
-        o.reset_effect_logs(build.id_, names)
+        await o.reset_effect_logs(build.id_, names)
         async with rerun_worktree(o, info, build, "effects", credentials) as (
             event,
             worktree_path,

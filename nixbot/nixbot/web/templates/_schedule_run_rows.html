@@ -2,7 +2,7 @@
 {% for r in runs %}
   <tr data-id="{{ r.id }}">
     <td>
-      {{ status_icon(r.status) }}<a href="{{ repo_path(project) }}/schedules/runs/{{ r.id }}">#{{ r.id }}</a>
+      {{ status_icon(r.status) }}<a href="{{ repo_path(project) }}/effects/runs/{{ r.id }}">#{{ r.id }}</a>
     </td>
     <td class="muted">
       <time datetime="{{ r.started_at.isoformat() }}" title="{{ r.started_at }}">{{ r.started_at | timeago }}</time>

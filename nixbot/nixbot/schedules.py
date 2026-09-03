@@ -17,13 +17,11 @@ from typing import TYPE_CHECKING, Any, cast
 
 from .config import ScheduledEffectConfig, ScheduleWhen
 from .db_gen import scheduled as q
-from .effects import list_scheduled_effects
 from .sql_util import expect, row_dicts
 
 if TYPE_CHECKING:
     import asyncpg
 
-    from .effects import EffectsContext
 
 logger = logging.getLogger(__name__)
 
@@ -46,13 +44,6 @@ def parse_schedules_from_json(
             effects=schedule_data.get("effects", []),
         )
     return result
-
-
-async def discover_schedules(
-    ctx: EffectsContext,
-) -> dict[str, ScheduledEffectConfig]:
-    """The onSchedule definitions on a default-branch checkout."""
-    return parse_schedules_from_json(await list_scheduled_effects(ctx))
 
 
 def is_due(when: ScheduleWhen, schedule_name: str, now: datetime) -> bool:
@@ -247,18 +238,26 @@ class ScheduledEffectsStore:
                 self.pool,
                 project_id=due.project_id,
                 schedule_name=due.schedule_name,
-                effect=due.effect,
+                name=due.effect,
             )
         )
 
     async def finish_run(
-        self, run_id: int, *, success: bool, error: str | None = None
+        self,
+        run_id: int,
+        *,
+        success: bool,
+        error: str | None = None,
+        log_size: int = 0,
+        log_truncated: bool = False,
     ) -> None:
         await q.finish_scheduled_run(
             self.pool,
             id_=run_id,
             status="succeeded" if success else "failed",
             error=error,
+            log_size=log_size,
+            log_truncated=log_truncated,
         )
 
     async def latest_runs_for_project(self, project_id: int) -> list[dict]:

@@ -26,8 +26,6 @@ from .effects import (
     EffectsContext,
     effect_push_url,
     effects_context,
-    list_effects,
-    run_effect,
     should_run_effects,
 )
 from .events import effects_event_for_build
@@ -141,7 +139,7 @@ async def discover_effects(
     try:
         # A bad effect DAG (cycle, unknown dependency) fails discovery
         # here and its reason ends up in the log.
-        return await list_effects(ctx)
+        return await o.effects.list_effects(ctx)
     except (EffectError, OSError):
         # OSError: nix/git missing from PATH. Effects are best-effort
         # and must not fail the (already reported) build.
@@ -346,13 +344,17 @@ async def _run_one_effect(
 ) -> None:
     """One effect with its own row and log."""
     # A rerun resets the existing effect row.
-    await builds_q.start_effect(o.pool, build_id=build.id_, name=name, status="running")
+    run_id = await builds_q.start_effect(
+        o.pool, build_id=build.id_, name=name, status="running"
+    )
+    if run_id is None:  # build row gone
+        return
     # A green commit status on a failed deploy hides the failure. Report
     # per-effect status so the forge reflects the real outcome.
     await o.reporter.effect_started(event, build, name)
-    async with o.open_log(build.id_, f"effect:{name}") as writer:
+    async with o.open_effect_log(run_id) as writer:
         try:
-            success = await run_effect(ctx, name, writer.write)
+            success = await o.effects.run_effect(ctx, name, writer.write)
         except Exception as e:
             # Any escape would leave the row running forever
             # (nothing re-runs effects) and kill the loop for the

@@ -16,7 +16,6 @@ from nixbot_effects import EffectError
 
 from nixbot import build_run as build_run_mod
 from nixbot import db
-from nixbot import effects_run as effects_run_mod
 from nixbot.build_scheduler import (
     AttributeResult,
     AttributeStatus,
@@ -27,7 +26,7 @@ from nixbot.db import BuildStatus
 from nixbot.db_gen import builds as builds_q
 from nixbot.effects import EffectMeta, EffectsContext
 from nixbot.events import BuildResult, ChangeEvent, EvalReport, RepoInfo
-from nixbot.executor import attribute_log_path, effect_log_path
+from nixbot.executor import attribute_log_path, effect_run_log_path
 from nixbot.gcroots import GcrootRegistrationError
 from nixbot.gitrepo import FetchCredentials, RepoManager
 from nixbot.memory import EvalWorkerConfig
@@ -37,7 +36,14 @@ from nixbot.orchestrator import AttributeExecutor, EvalRunnerLike, Orchestrator
 from nixbot.recovery import fail_interrupted_effects
 from nixbot.work_queue import WorkItem, WorkQueue
 
-from .support import FakeCache, attribute_statuses, git, insert_project, mk_job
+from .support import (
+    FakeCache,
+    FakeEffects,
+    attribute_statuses,
+    git,
+    insert_project,
+    mk_job,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -291,23 +297,14 @@ def patch_effects(
     monkeypatch: pytest.MonkeyPatch,
     run_effect: object | None = None,
     effects: dict[str, EffectMeta] | None = None,
-) -> list[str]:
-    """Replace effect discovery/run with a fake "deploy" effect.
-
-    Returns the list that records executed effect names. A custom
-    run_effect replaces the recording default."""
-    ran: list[str] = []
-
-    async def fake_list(ctx: object) -> dict[str, EffectMeta]:
-        return effects or {"deploy": EffectMeta()}
-
-    async def fake_run(ctx: object, name: str, log_write: object = None) -> bool:
-        ran.append(name)
-        return True
-
-    monkeypatch.setattr(effects_run_mod, "list_effects", fake_list)
-    monkeypatch.setattr(effects_run_mod, "run_effect", run_effect or fake_run)
-    return ran
+) -> FakeEffects:
+    """FakeEffects with a "deploy" effect for orchestrators made after
+    this. A custom run_effect replaces the recording default."""
+    fake = FakeEffects(push=effects or {"deploy": EffectMeta()})
+    if run_effect is not None:
+        fake.run_effect = run_effect  # type: ignore[method-assign,assignment]
+    monkeypatch.setattr("nixbot.orchestrator.default_effects", lambda: fake)
+    return fake
 
 
 @pytest.fixture
@@ -321,7 +318,7 @@ def run_effect_build(
     the recorded effect runs for further assertions."""
 
     async def run() -> tuple[BuildRecord | None, Orchestrator, RepoInfo, list[str]]:
-        ran = patch_effects(monkeypatch)
+        ran = patch_effects(monkeypatch).ran
         orchestrator, _, project = await make_env(
             FakeEvalRunner([mk_job("a")]), FakeExecutor()
         )
@@ -340,7 +337,7 @@ def run_effect_build(
 
 async def effect_statuses(pool: asyncpg.Pool, build_id: int) -> dict[str, str]:
     rows = await pool.fetch(
-        "SELECT name, status FROM build_effects WHERE build_id = $1", build_id
+        "SELECT name, status FROM effect_runs WHERE build_id = $1", build_id
     )
     return {r["name"]: r["status"] for r in rows}
 
@@ -1184,7 +1181,7 @@ async def test_pr_worktree_config_cannot_grant_effects(
     git(upstream, "checkout", "main")
     base = git(upstream, "rev-parse", "HEAD")
 
-    ran = patch_effects(monkeypatch)
+    ran = patch_effects(monkeypatch).ran
     orchestrator, reporter, project = await make_env(
         FakeEvalRunner([mk_job("a")]),
         FakeExecutor(),
@@ -1226,8 +1223,8 @@ async def test_rerun_effects_runs_effects_again(
     )
     # A stale row from an effect no longer in the flake.
     await pool.execute(
-        "INSERT INTO build_effects (build_id, name, status) "
-        "VALUES ($1, 'removed', 'failed')",
+        "INSERT INTO effect_runs (project_id, kind, build_id, name, status) "
+        "VALUES ((SELECT project_id FROM builds WHERE id = $1), 'push', $1, 'removed', 'failed')",
         build.id_,
     )
     await orchestrator.rerun_effects(project, build)
@@ -1238,7 +1235,7 @@ async def test_rerun_effects_runs_effects_again(
         "SELECT count(*) FROM work_queue WHERE kind = 'refresh-schedules'"
     )
     rows = await pool.fetch(
-        "SELECT name, status FROM build_effects WHERE build_id = $1",
+        "SELECT name, status FROM effect_runs WHERE build_id = $1",
         build.id_,
     )
     assert [(r["name"], r["status"]) for r in rows] == [("deploy", "succeeded")]
@@ -1265,7 +1262,7 @@ async def test_rerun_effects_cancels_hung_effect(
         await asyncio.Event().wait()
         return True
 
-    monkeypatch.setattr(effects_run_mod, "run_effect", hung_run)
+    orchestrator.effects.run_effect = hung_run  # type: ignore[method-assign,assignment]
     await orchestrator.rerun_effects(project, build)
     queue = WorkQueue(pool)
     item = await queue.claim_next()
@@ -1277,14 +1274,16 @@ async def test_rerun_effects_cancels_hung_effect(
     await asyncio.sleep(0)
     assert (build.id_, "deploy") in orchestrator.running_effects
 
-    ran2 = patch_effects(monkeypatch)
+    fresh = FakeEffects(push={"deploy": EffectMeta()})
+    orchestrator.effects = fresh
+    ran2 = fresh.ran
     await asyncio.wait_for(orchestrator.rerun_effects(project, build), timeout=5)
     await hung_item
     await queue.finish(item.id)
     await drain_effect_items(orchestrator, project, pool)
     assert ran2 == ["deploy"]
     status = await pool.fetchval(
-        "SELECT status FROM build_effects WHERE build_id = $1 AND name = 'deploy'",
+        "SELECT status FROM effect_runs WHERE build_id = $1 AND name = 'deploy'",
         build.id_,
     )
     assert status == "succeeded"
@@ -1329,7 +1328,7 @@ async def test_rerun_single_effect(
     statuses = {
         r["name"]: r["status"]
         for r in await pool.fetch(
-            "SELECT name, status FROM build_effects WHERE build_id = $1", build.id_
+            "SELECT name, status FROM effect_runs WHERE build_id = $1", build.id_
         )
     }
     assert statuses == {
@@ -1338,7 +1337,7 @@ async def test_rerun_single_effect(
         "other": "succeeded",
     }
     other_finished = await pool.fetchval(
-        "SELECT finished_at FROM build_effects WHERE build_id = $1 AND name = 'other'",
+        "SELECT finished_at FROM effect_runs WHERE build_id = $1 AND name = 'other'",
         build.id_,
     )
 
@@ -1350,7 +1349,7 @@ async def test_rerun_single_effect(
     statuses = {
         r["name"]: r["status"]
         for r in await pool.fetch(
-            "SELECT name, status FROM build_effects WHERE build_id = $1", build.id_
+            "SELECT name, status FROM effect_runs WHERE build_id = $1", build.id_
         )
     }
     assert statuses == {
@@ -1360,7 +1359,7 @@ async def test_rerun_single_effect(
     }
     assert (
         await pool.fetchval(
-            "SELECT finished_at FROM build_effects "
+            "SELECT finished_at FROM effect_runs "
             "WHERE build_id = $1 AND name = 'other'",
             build.id_,
         )
@@ -1512,7 +1511,7 @@ async def test_effect_items_resume_only_pending(
     # Crash mid-run: the sweep settles the row. The requeued
     # item must skip it.
     await pool.execute(
-        "UPDATE build_effects SET status = 'running' WHERE build_id = $1",
+        "UPDATE effect_runs SET status = 'running' WHERE build_id = $1",
         build.id_,
     )
     await fail_interrupted_effects(pool, datetime.now(UTC) + timedelta(minutes=1))
@@ -1520,7 +1519,7 @@ async def test_effect_items_resume_only_pending(
     assert ran == ["deploy"]
     # Crash before the run: the pending row resumes.
     await pool.execute(
-        "UPDATE build_effects SET status = 'pending' WHERE build_id = $1",
+        "UPDATE effect_runs SET status = 'pending' WHERE build_id = $1",
         build.id_,
     )
     await orchestrator.run_effect_item(project, build, "deploy")
@@ -1557,7 +1556,7 @@ async def test_effect_crash_settles_the_row(
     await drain_effect_items(orchestrator, project, pool)
     assert build is not None
     row = await pool.fetchrow(
-        "SELECT status, finished_at FROM build_effects WHERE build_id = $1",
+        "SELECT status, finished_at FROM effect_runs WHERE build_id = $1",
         build.id_,
     )
     assert row is not None
@@ -1616,7 +1615,7 @@ async def test_concurrent_effects_use_independent_worktrees(
     rows = {
         r["name"]: r["status"]
         for r in await pool.fetch(
-            "SELECT name, status FROM build_effects WHERE build_id = $1", build.id_
+            "SELECT name, status FROM effect_runs WHERE build_id = $1", build.id_
         )
     }
     assert rows == {"deploy-alaska": "succeeded", "deploy-kk": "succeeded"}
@@ -1694,7 +1693,7 @@ async def test_effect_item_not_claimable_until_dep_settles(
     assert second.payload["name"] == "deploy"
     await orchestrator.run_effect_item(project, build, "deploy")
     row = await pool.fetchrow(
-        "SELECT status FROM build_effects WHERE build_id = $1 AND name = 'deploy'",
+        "SELECT status FROM effect_runs WHERE build_id = $1 AND name = 'deploy'",
         build.id_,
     )
     assert row["status"] == "dependency_failed"
@@ -1726,7 +1725,7 @@ async def test_effect_dep_failure_skips_dependent(
     rows = {
         r["name"]: (r["status"], r["error"])
         for r in await pool.fetch(
-            "SELECT name, status, error FROM build_effects WHERE build_id = $1",
+            "SELECT name, status, error FROM effect_runs WHERE build_id = $1",
             build.id_,
         )
     }
@@ -1803,17 +1802,14 @@ async def test_effect_dep_cycle_fails_discovery(
     """A dependency cycle is a repo mistake: discovery fails, no effect
     rows are created, and the (already reported) build stays green."""
 
-    async def cyclic_list(ctx: object) -> dict[str, EffectMeta]:
-        msg = "dependency cycle between effects"
-        raise EffectError(msg)
-
-    patch_effects(monkeypatch)
-    monkeypatch.setattr(effects_run_mod, "list_effects", cyclic_list)
+    patch_effects(monkeypatch).push_error = EffectError(
+        "dependency cycle between effects"
+    )
     _, _, build = await _effects_build(make_env, upstream, "eff-cycle")
     assert await build_status(pool, build.id_) == BuildStatus.SUCCEEDED
     assert (
         await pool.fetchval(
-            "SELECT count(*) FROM build_effects WHERE build_id = $1", build.id_
+            "SELECT count(*) FROM effect_runs WHERE build_id = $1", build.id_
         )
         == 0
     )
@@ -2003,7 +1999,7 @@ async def test_reuse_for_default_branch_push_runs_effects(
     PR run never started effects) and report the effects on the main
     commit, not the build's stored PR-head commit."""
 
-    ran = patch_effects(monkeypatch)
+    ran = patch_effects(monkeypatch).ran
     add_commit(upstream, "reuse-deploy")
     pr_sha = git(upstream, "rev-parse", "HEAD")
     orchestrator, reporter, project = await make_env(
@@ -2181,7 +2177,10 @@ async def test_effect_log_does_not_collide_with_attribute_log(
     await drain_effect_items(orchestrator, project, pool)
     state_dir = orchestrator.config.state_dir
     attr_log = attribute_log_path(state_dir, build.id_, "effect-deploy")
-    effect_log = effect_log_path(state_dir, build.id_, "deploy")
+    run_id = await pool.fetchval(
+        "SELECT id FROM effect_runs WHERE build_id = $1 AND name = 'deploy'", build.id_
+    )
+    effect_log = effect_run_log_path(state_dir, run_id)
     assert attr_log != effect_log
     assert attr_log.exists()
     assert effect_log.exists()
@@ -2236,11 +2235,7 @@ async def test_effects_phase_error_keeps_succeeded_build(
     """An exception after the final fan-out (effects discovery here)
     must not flip an already-succeeded build to failed."""
 
-    async def boom_list(ctx: object) -> list[str]:
-        msg = "state api down"
-        raise RuntimeError(msg)
-
-    monkeypatch.setattr(effects_run_mod, "list_effects", boom_list)
+    patch_effects(monkeypatch).push_error = RuntimeError("state api down")
     add_commit(upstream, "late-boom")
     orchestrator, reporter, project = await make_env(
         FakeEvalRunner([mk_job("a")]),

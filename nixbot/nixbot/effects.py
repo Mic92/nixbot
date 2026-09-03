@@ -25,7 +25,7 @@ import os
 from dataclasses import dataclass
 from fnmatch import fnmatch
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 from urllib.parse import urlsplit
 
 import nixbot_effects
@@ -224,3 +224,27 @@ async def run_scheduled_effect(
         log_write,
         lambda: nixbot_effects.run_scheduled_effect(ctx, schedule_name, effect),
     )
+
+
+class EffectsBackend(Protocol):
+    """How the orchestrator evaluates and runs effects. Tests fake it."""
+
+    async def list_effects(self, ctx: EffectsContext) -> dict[str, EffectMeta]: ...
+    async def list_scheduled_effects(self, ctx: EffectsContext) -> dict: ...
+    async def run_effect(
+        self, ctx: EffectsContext, effect: str, log_write: LogWrite | None = None
+    ) -> bool: ...
+    async def run_scheduled_effect(
+        self,
+        ctx: EffectsContext,
+        schedule_name: str,
+        effect: str,
+        log_write: LogWrite | None = None,
+    ) -> bool: ...
+
+
+class NixEffects:
+    list_effects = staticmethod(list_effects)
+    list_scheduled_effects = staticmethod(list_scheduled_effects)
+    run_effect = staticmethod(run_effect)
+    run_scheduled_effect = staticmethod(run_scheduled_effect)

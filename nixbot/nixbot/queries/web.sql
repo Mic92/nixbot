@@ -116,9 +116,19 @@ WHERE a.build_id = $1 AND a.finished_at IS NOT NULL
                                    sqlc.arg(after_id)::bigint))
 ORDER BY a.finished_at, a.id;
 
+-- name: EffectRunDetail :one
+-- Any kind. The build number is joined for the log page header.
+SELECT r.id, r.kind, r.build_id, r.schedule_name, r.name AS effect, r.status,
+       r.error, r.started_at, r.finished_at, b.number AS build_number
+FROM effect_runs r LEFT JOIN builds b ON b.id = r.build_id
+WHERE r.id = $1 AND r.project_id = $2;
+
+-- name: EffectRunId :one
+SELECT id FROM effect_runs WHERE build_id = $1 AND kind = 'push' AND name = $2;
+
 -- name: WebEffects :many
 -- Worst first.
-SELECT * FROM build_effects WHERE build_id = $1
+SELECT * FROM effect_runs WHERE build_id = $1
 ORDER BY array_position(
     ARRAY['failed', 'dependency_failed', 'running', 'pending', 'succeeded', 'skipped'],
     status), name;

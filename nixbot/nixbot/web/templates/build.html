@@ -168,7 +168,7 @@
               <td class="attr-status">{{ status_icon(e.status) }}</td>
               <td class="attr-name">
                 {% if e.log_size or e.status == "running" %}
-                  <a href="{{ build_path(project, build.number) }}/logs/effect:{{ e.name | urlencode }}"><code>{{ e.name }}</code></a>
+                  <a href="{{ repo_path(project) }}/effects/runs/{{ e.id }}"><code>{{ e.name }}</code></a>
                 {% else %}
                   <code>{{ e.name }}</code>
                 {% endif %}

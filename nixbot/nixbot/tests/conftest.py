@@ -8,7 +8,13 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from .support import db_pool, ephemeral_postgres, init_upstream, truncate_work_queue
+from .support import (
+    FakeEffects,
+    db_pool,
+    ephemeral_postgres,
+    init_upstream,
+    truncate_work_queue,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterator
@@ -47,15 +53,6 @@ def fresh_work_queue(postgres_dsn: str) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _no_effects_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stub effects/schedule discovery, which would evaluate the flake
-    with real nix. Tests that want effects patch these again."""
-
-    async def no_effects(_ctx: object) -> dict:
-        return {}
-
-    async def no_schedules(_ctx: object) -> dict:
-        return {}
-
-    monkeypatch.setattr("nixbot.effects_run.list_effects", no_effects)
-    monkeypatch.setattr("nixbot.schedule_runner.discover_schedules", no_schedules)
+def _fake_effects(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Real discovery would evaluate the flake with nix."""
+    monkeypatch.setattr("nixbot.orchestrator.default_effects", FakeEffects)

@@ -26,19 +26,21 @@ WHERE last_run IS NULL
    OR last_run < date_trunc('minute', sqlc.arg(now)::timestamptz);
 
 -- name: StartScheduledRun :one
-INSERT INTO scheduled_effect_runs (project_id, schedule_name, effect)
-VALUES ($1, $2, $3) RETURNING id;
+INSERT INTO effect_runs (project_id, kind, schedule_name, name)
+VALUES ($1, 'schedule', $2, $3) RETURNING id;
 
 -- name: FinishScheduledRun :exec
-UPDATE scheduled_effect_runs
-SET status = $2, error = sqlc.narg(error), finished_at = now() WHERE id = $1;
+UPDATE effect_runs
+SET status = $2, error = sqlc.narg(error), log_size = $3, log_truncated = $4,
+    finished_at = now()
+WHERE id = $1;
 
 -- name: LatestScheduledRuns :many
-SELECT DISTINCT ON (schedule_name, effect)
-       id, schedule_name, effect, status, error,
+SELECT DISTINCT ON (schedule_name, name)
+       id, schedule_name, name AS effect, status, error,
        started_at, finished_at
-FROM scheduled_effect_runs WHERE project_id = $1
-ORDER BY schedule_name, effect, started_at DESC;
+FROM effect_runs WHERE project_id = $1 AND kind = 'schedule'
+ORDER BY schedule_name, name, started_at DESC;
 
 -- name: ProjectSchedules :many
 SELECT schedule_name, effect, when_spec, last_run
@@ -49,20 +51,14 @@ ORDER BY schedule_name, effect;
 UPDATE scheduled_effects SET last_run = $4
 WHERE project_id = $1 AND schedule_name = $2 AND effect = $3;
 
--- name: ScheduledRunExists :one
-SELECT id FROM scheduled_effect_runs WHERE id = $1 AND project_id = $2;
-
--- name: ScheduledRunDetail :one
-SELECT id, schedule_name, effect, status, error, started_at, finished_at
-FROM scheduled_effect_runs WHERE id = $1 AND project_id = $2;
-
 -- name: ScheduledRunsForEffect :many
 -- Run history for one (schedule, effect); cursor on id for infinite
 -- scroll (id order matches started_at order for a single effect).
-SELECT id, schedule_name, effect, status, error, started_at, finished_at
-FROM scheduled_effect_runs
+SELECT id, schedule_name, name AS effect, status, error, started_at, finished_at
+FROM effect_runs
 WHERE project_id = sqlc.arg(project_id)
+  AND kind = 'schedule'
   AND schedule_name = sqlc.arg(schedule_name)
-  AND effect = sqlc.arg(effect)
+  AND name = sqlc.arg(effect)
   AND (sqlc.narg(before)::bigint IS NULL OR id < sqlc.narg(before))
 ORDER BY id DESC LIMIT sqlc.arg(limit_)::bigint;

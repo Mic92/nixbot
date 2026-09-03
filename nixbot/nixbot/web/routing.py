@@ -3,7 +3,7 @@
 GitLab nested groups put "/" into the owner (e.g. "group/sub"), which
 plain `{owner}` parameters cannot match. The `owner` convertor accepts
 one or more path segments, but never segments that start a fixed route
-suffix (builds/rows/attrs/schedules). Otherwise a multi-segment owner
+suffix (builds/rows/attrs/schedules/effects). Otherwise a multi-segment owner
 would swallow `/builds/{number}` and misroute deeper URLs to the repo
 page. The `segment` convertor is the single-segment variant for the
 project name: without it, `/repos/f/a/b/rows` would parse as
@@ -17,7 +17,7 @@ from __future__ import annotations
 from starlette.convertors import Convertor, register_url_convertor
 
 # Literal segments that follow {name} in project routes.
-_RESERVED = ("builds", "rows", "attrs", "schedules", r"badge\.svg")
+_RESERVED = ("builds", "rows", "attrs", "schedules", "effects", r"badge\.svg")
 _SEGMENT = r"(?:(?!(?:" + "|".join(_RESERVED) + r")(?:/|$))[^/]+)"
 
 

@@ -254,13 +254,13 @@ async def test_failed_rebuild_settles_pending_effects(pool: asyncpg.Pool) -> Non
 
     build_id = await make_build(pool, "fx-failed-rebuild")
     await pool.execute(
-        "INSERT INTO build_effects (build_id, name, status) "
-        "VALUES ($1, 'deploy', 'pending')",
+        "INSERT INTO effect_runs (project_id, kind, build_id, name, status) "
+        "VALUES ((SELECT project_id FROM builds WHERE id = $1), 'push', $1, 'deploy', 'pending')",
         build_id,
     )
     await db.set_build_status(pool, build_id, "failed")
     row = await pool.fetchrow(
-        "SELECT status, error FROM build_effects WHERE build_id = $1",
+        "SELECT status, error FROM effect_runs WHERE build_id = $1",
         build_id,
     )
     assert row["status"] == "failed"
@@ -293,27 +293,24 @@ async def test_interrupted_effects_fail_on_recovery(pool: asyncpg.Pool) -> None:
 
     build_id = await make_build(pool, "fx-sweep")
     await pool.execute(
-        "INSERT INTO build_effects (build_id, name) VALUES ($1, 'deploy')",
+        "INSERT INTO effect_runs (project_id, kind, build_id, name) VALUES ((SELECT project_id FROM builds WHERE id = $1), 'push', $1, 'deploy')",
         build_id,
     )
     project_id = await pool.fetchval(
         "SELECT project_id FROM builds WHERE id = $1", build_id
     )
     await pool.execute(
-        "INSERT INTO scheduled_effect_runs (project_id, schedule_name, "
-        "effect) VALUES ($1, 's', 'beat')",
+        "INSERT INTO effect_runs (project_id, kind, schedule_name, name) "
+        "VALUES ($1, 'schedule', 's', 'beat')",
         project_id,
     )
     await fail_interrupted_effects(pool, datetime.now(UTC) + timedelta(minutes=1))
-    for table, column in [
-        ("build_effects", "build_id"),
-        ("scheduled_effect_runs", "project_id"),
-    ]:
-        row = await pool.fetchrow(
-            f"SELECT status, error, finished_at FROM {table} "  # noqa: S608
-            f"WHERE {column} = $1",
-            build_id if column == "build_id" else project_id,
-        )
+    rows = await pool.fetch(
+        "SELECT status, error, finished_at FROM effect_runs WHERE project_id = $1",
+        project_id,
+    )
+    assert len(rows) == 2  # noqa: PLR2004
+    for row in rows:
         assert row["status"] == "failed"
         assert "interrupted" in row["error"]
         assert row["finished_at"] is not None
@@ -329,11 +326,11 @@ async def test_interrupted_effects_sweep_spares_live_effects(
     build_id = await make_build(pool, "fx-live")
     process_start = datetime.now(UTC)
     await pool.execute(
-        "INSERT INTO build_effects (build_id, name) VALUES ($1, 'deploy')",
+        "INSERT INTO effect_runs (project_id, kind, build_id, name) VALUES ((SELECT project_id FROM builds WHERE id = $1), 'push', $1, 'deploy')",
         build_id,
     )
     await fail_interrupted_effects(pool, process_start)
     status = await pool.fetchval(
-        "SELECT status FROM build_effects WHERE build_id = $1", build_id
+        "SELECT status FROM effect_runs WHERE build_id = $1", build_id
     )
     assert status == "running"

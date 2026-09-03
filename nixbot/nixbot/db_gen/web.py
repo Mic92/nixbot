@@ -7,6 +7,7 @@ from __future__ import annotations
 
 __all__: collections.abc.Sequence[str] = (
     "AttributeStatusRow",
+    "EffectRunDetailRow",
     "MetricsAttributeCountsRow",
     "MetricsBuildCountsRow",
     "MetricsBuildDurationRow",
@@ -23,6 +24,8 @@ __all__: collections.abc.Sequence[str] = (
     "WebRepoOverviewRow",
     "attribute_error",
     "attribute_status",
+    "effect_run_detail",
+    "effect_run_id",
     "metrics_attribute_counts",
     "metrics_build_counts",
     "metrics_build_duration",
@@ -123,6 +126,20 @@ class WebRecentBuildsRow:
 class WebNeighborNumbersRow:
     prev: int
     next: int
+
+
+@dataclasses.dataclass()
+class EffectRunDetailRow:
+    id_: int
+    kind: str
+    build_id: int | None
+    schedule_name: str | None
+    effect: str
+    status: str
+    error: str | None
+    started_at: datetime.datetime
+    finished_at: datetime.datetime | None
+    build_number: int | None
 
 
 @dataclasses.dataclass()
@@ -359,8 +376,19 @@ WHERE a.build_id = $1 AND a.finished_at IS NOT NULL
 ORDER BY a.finished_at, a.id
 """
 
+EFFECT_RUN_DETAIL: typing.Final[str] = """-- name: EffectRunDetail :one
+SELECT r.id, r.kind, r.build_id, r.schedule_name, r.name AS effect, r.status,
+       r.error, r.started_at, r.finished_at, b.number AS build_number
+FROM effect_runs r LEFT JOIN builds b ON b.id = r.build_id
+WHERE r.id = $1 AND r.project_id = $2
+"""
+
+EFFECT_RUN_ID: typing.Final[str] = """-- name: EffectRunId :one
+SELECT id FROM effect_runs WHERE build_id = $1 AND kind = 'push' AND name = $2
+"""
+
 WEB_EFFECTS: typing.Final[str] = """-- name: WebEffects :many
-SELECT id, build_id, name, status, error, log_size, log_truncated, started_at, finished_at, deps FROM build_effects WHERE build_id = $1
+SELECT id, project_id, kind, build_id, schedule_name, name, status, error, deps, log_size, log_truncated, started_at, finished_at FROM effect_runs WHERE build_id = $1
 ORDER BY array_position(
     ARRAY['failed', 'dependency_failed', 'running', 'pending', 'succeeded', 'skipped'],
     status), name
@@ -701,9 +729,23 @@ def web_attributes_finished_after(conn: ConnectionLike, *, build_id: int, after:
     return QueryResults(conn, WEB_ATTRIBUTES_FINISHED_AFTER, _decode_hook, build_id, after, after_id)
 
 
-def web_effects(conn: ConnectionLike, *, build_id: int) -> QueryResults[models.BuildEffect]:
-    def _decode_hook(row: asyncpg.Record) -> models.BuildEffect:
-        return models.BuildEffect(id_=row[0], build_id=row[1], name=row[2], status=row[3], error=row[4], log_size=row[5], log_truncated=row[6], started_at=row[7], finished_at=row[8], deps=row[9])
+async def effect_run_detail(conn: ConnectionLike, *, id_: int, project_id: int) -> EffectRunDetailRow | None:
+    row = await conn.fetchrow(EFFECT_RUN_DETAIL, id_, project_id)
+    if row is None:
+        return None
+    return EffectRunDetailRow(id_=row[0], kind=row[1], build_id=row[2], schedule_name=row[3], effect=row[4], status=row[5], error=row[6], started_at=row[7], finished_at=row[8], build_number=row[9])
+
+
+async def effect_run_id(conn: ConnectionLike, *, build_id: int | None, name: str) -> int | None:
+    row = await conn.fetchrow(EFFECT_RUN_ID, build_id, name)
+    if row is None:
+        return None
+    return row[0]
+
+
+def web_effects(conn: ConnectionLike, *, build_id: int | None) -> QueryResults[models.EffectRun]:
+    def _decode_hook(row: asyncpg.Record) -> models.EffectRun:
+        return models.EffectRun(id_=row[0], project_id=row[1], kind=row[2], build_id=row[3], schedule_name=row[4], name=row[5], status=row[6], error=row[7], deps=row[8], log_size=row[9], log_truncated=row[10], started_at=row[11], finished_at=row[12])
 
     return QueryResults(conn, WEB_EFFECTS, _decode_hook, build_id)
 

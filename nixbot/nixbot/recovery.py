@@ -37,6 +37,7 @@ import asyncpg
 from . import db
 from .build_scheduler import AttributeResult, AttributeStatus
 from .db_gen import maintenance as q
+from .executor import effect_run_log_path
 from .models import CacheStatus, NixEvalJobSuccess
 
 if TYPE_CHECKING:
@@ -162,9 +163,7 @@ async def fail_interrupted_effects(
     (process start) are swept: the sweep runs concurrently with the
     work loop, and newer rows are live effects. Returns the settled
     rows for the caller to report."""
-    settled = await q.fail_interrupted_effects(pool, started_before=started_before)
-    await q.fail_interrupted_scheduled_runs(pool, started_before=started_before)
-    return settled
+    return await q.fail_interrupted_effects(pool, started_before=started_before)
 
 
 async def check_store_paths(paths: list[str], nix_db: Path = NIX_DB) -> set[str]:
@@ -224,14 +223,14 @@ async def cleanup_old_builds(
     directories past the retention horizon. Returns deleted count."""
     rows = await q.cleanup_old_rows(pool, retention_days=retention_days)
     deleted_ids = [r.id_ for r in rows if r.kind == "build"]
-    old_run_ids = [r.id_ for r in rows if r.kind == "scheduled_run"]
+    old_run_ids = [r.id_ for r in rows if r.kind == "effect_run"]
     for build_id in deleted_ids:
         log_dir = state_dir / "logs" / str(build_id)
         with contextlib.suppress(OSError):
             shutil.rmtree(log_dir)
     for run_id in old_run_ids:
         with contextlib.suppress(OSError):
-            (state_dir / "logs" / "scheduled" / f"{run_id}.zst").unlink()
+            effect_run_log_path(state_dir, run_id).unlink()
     if deleted_ids:
         logger.info("retention cleanup", extra={"deleted_builds": len(deleted_ids)})
     return len(deleted_ids)
@@ -253,6 +252,10 @@ async def cleanup_orphan_log_dirs(
     logs_root = state_dir / "logs"
     if not logs_root.is_dir():
         return
+    # Pre-effect_runs layouts: logs/scheduled/<id>.zst and
+    # logs/<build>/effects/. Their rows now point at logs/effects/<id>.
+    with contextlib.suppress(OSError):
+        shutil.rmtree(logs_root / "scheduled")
     cutoff = time.time() - grace_seconds
     candidates: list[tuple[int, str]] = []
     for entry in os.scandir(logs_root):
@@ -267,6 +270,8 @@ async def cleanup_orphan_log_dirs(
         return
     build_ids = set(await q.all_build_ids(pool))
     for build_id, path in candidates:
-        if build_id not in build_ids:
-            with contextlib.suppress(OSError):
+        with contextlib.suppress(OSError):
+            if build_id not in build_ids:
                 shutil.rmtree(path)
+            else:
+                shutil.rmtree(Path(path) / "effects")

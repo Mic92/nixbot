@@ -17,6 +17,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import (
     HTMLResponse,
     PlainTextResponse,
+    RedirectResponse,
     Response,
     StreamingResponse,
 )
@@ -32,7 +33,12 @@ from ..build_scheduler import TERMINAL_FAILURES  # noqa: TID252
 from ..db_gen import maintenance as maint_gen  # noqa: TID252
 from ..db_gen import scheduled as sched_gen  # noqa: TID252
 from ..db_gen import web as gen  # noqa: TID252
-from ..executor import container_path, log_path_for_key, read_log  # noqa: TID252
+from ..executor import (  # noqa: TID252
+    attribute_log_path,
+    container_path,
+    effect_run_log_path,
+    read_log,
+)
 from ..logstore import LogContainerReader, is_container  # noqa: TID252
 from ..sql_util import row_dict, row_dicts  # noqa: TID252
 from ..status import NO_LOG_STATUSES  # noqa: TID252
@@ -51,9 +57,8 @@ class LogRegistry:
 
     def __init__(self) -> None:
         self._writers: dict[tuple[int, str], LogWriter] = {}
-        # Scheduled-effect runs have no build_id. Key them by run id in
-        # a separate map so the namespaces cannot collide.
-        self._scheduled: dict[int, LogWriter] = {}
+        # Effect runs (any kind) are keyed by their effect_runs id.
+        self._effects: dict[int, LogWriter] = {}
 
     def register(self, build_id: int, attr: str, writer: LogWriter) -> None:
         self._writers[(build_id, attr)] = writer
@@ -64,14 +69,14 @@ class LogRegistry:
     def get(self, build_id: int, attr: str) -> LogWriter | None:
         return self._writers.get((build_id, attr))
 
-    def register_scheduled(self, run_id: int, writer: LogWriter) -> None:
-        self._scheduled[run_id] = writer
+    def register_effect(self, run_id: int, writer: LogWriter) -> None:
+        self._effects[run_id] = writer
 
-    def unregister_scheduled(self, run_id: int) -> None:
-        self._scheduled.pop(run_id, None)
+    def unregister_effect(self, run_id: int) -> None:
+        self._effects.pop(run_id, None)
 
-    def get_scheduled(self, run_id: int) -> LogWriter | None:
-        return self._scheduled.get(run_id)
+    def get_effect(self, run_id: int) -> LogWriter | None:
+        return self._effects.get(run_id)
 
 
 _COLOR_CLASSES = {}
@@ -453,7 +458,7 @@ async def _failure_summary(
             continue
         # The file may not exist yet (never ran, or pending after a
         # reset); _log_text handles that.
-        path = log_path_for_key(ctx.state_dir, build["id"], a["attr"])
+        path = attribute_log_path(ctx.state_dir, build["id"], a["attr"])
         text = await _log_text(registry, build, a["attr"], path)
         failures.append(
             {
@@ -508,7 +513,7 @@ class _LogRoutes:
         attr: str,
     ) -> tuple[dict, dict, Path | None]:
         project, build = await self._build_or_404(request, forge, owner, name, number)
-        path = log_path_for_key(self.ctx.state_dir, build["id"], attr)
+        path = attribute_log_path(self.ctx.state_dir, build["id"], attr)
         return project, build, path
 
     async def log_raw_text(  # noqa: PLR0913
@@ -554,43 +559,73 @@ class _LogRoutes:
             return await self.log_viewer(request, forge, owner, name, number, shadowed)
         return await self.log_raw_text(request, forge, owner, name, number, attr, tail)
 
-    def _scheduled_log_path(self, run_id: int) -> Path:
-        return self.ctx.state_dir / "logs" / "scheduled" / f"{run_id}.zst"
+    def _effect_log_path(self, run_id: int) -> Path:
+        return effect_run_log_path(self.ctx.state_dir, run_id)
 
-    async def _scheduled_run_text(self, run_id: int) -> str | None:
-        """Decoded log of a scheduled run: live writer snapshot while it
+    async def _effect_run_text(self, run_id: int) -> str | None:
+        """Decoded log of an effect run: live writer snapshot while it
         runs, otherwise the on-disk file. None when no log exists."""
-        writer = self.registry.get_scheduled(run_id)
+        writer = self.registry.get_effect(run_id)
         if writer is not None:
             data = await writer.snapshot()
         else:
-            path = self._scheduled_log_path(run_id)
+            path = self._effect_log_path(run_id)
             if not await asyncio.to_thread(path.exists):
                 return None
             data = await asyncio.to_thread(read_log, path)
         return data.decode(errors="replace")
 
-    async def scheduled_run_log(
+    async def _run_or_404(
+        self, request: Request, forge: str, owner: str, name: str, run_id: int
+    ) -> tuple[dict, dict]:
+        project = await self.ctx.repo_or_404(forge, owner, name, request)
+        run = await gen.effect_run_detail(
+            self.ctx.pool, id_=run_id, project_id=project["id"]
+        )
+        if run is None:
+            raise HTTPException(status_code=404)
+        return project, row_dict(run)
+
+    async def effect_run_log(  # noqa: PLR0913
         self,
         request: Request,
         forge: str,
         owner: str,
         name: str,
         run_id: int,
+        tail: int | None = Query(None, ge=1),
     ) -> PlainTextResponse:
-        """Log of one scheduled-effect run as plain text."""
-        project = await self.ctx.repo_or_404(forge, owner, name, request)
-        row = await sched_gen.scheduled_run_exists(
-            self.ctx.pool, id_=run_id, project_id=project["id"]
-        )
-        if row is None:
-            raise HTTPException(status_code=404)
-        text = await self._scheduled_run_text(run_id)
+        """Log of one effect run as plain text."""
+        await self._run_or_404(request, forge, owner, name, run_id)
+        text = await self._effect_run_text(run_id)
         if text is None:
             raise HTTPException(status_code=404)
-        return PlainTextResponse(await asyncio.to_thread(strip_ansi, text))
+        return PlainTextResponse(
+            await asyncio.to_thread(_plain, text, tail, ansi=False)
+        )
 
-    async def scheduled_run_viewer(
+    async def build_effect_log_redirect(  # noqa: PLR0913
+        self,
+        request: Request,
+        forge: str,
+        owner: str,
+        name: str,
+        number: int,
+        effect: str,
+        suffix: str = "",
+    ) -> RedirectResponse:
+        """Old per-build effect log URL, still emitted in forge statuses."""
+        _, build = await self._build_or_404(request, forge, owner, name, number)
+        run_id = await gen.effect_run_id(
+            self.ctx.pool, build_id=build["id"], name=effect
+        )
+        if run_id is None:
+            raise HTTPException(status_code=404)
+        return RedirectResponse(
+            f"/repos/{forge}/{owner}/{name}/effects/runs/{run_id}{suffix}"
+        )
+
+    async def effect_run_viewer(
         self,
         request: Request,
         forge: str,
@@ -598,24 +633,19 @@ class _LogRoutes:
         name: str,
         run_id: int,
     ) -> HTMLResponse:
-        """ANSI-rendered HTML log of one scheduled-effect run."""
-        project = await self.ctx.repo_or_404(forge, owner, name, request)
-        run = await sched_gen.scheduled_run_detail(
-            self.ctx.pool, id_=run_id, project_id=project["id"]
-        )
-        if run is None:
-            raise HTTPException(status_code=404)
+        """ANSI-rendered HTML log of one effect run."""
+        project, run = await self._run_or_404(request, forge, owner, name, run_id)
         # Live page renders no snapshot: the stream replays full history
         # on connect (mirrors log_viewer).
-        live = self.registry.get_scheduled(run_id) is not None
+        live = self.registry.get_effect(run_id) is not None
         content = ""
         waiting = False
         unavailable = False
         if not live:
-            text = await self._scheduled_run_text(run_id)
+            text = await self._effect_run_text(run_id)
             if text is not None:
                 content = await asyncio.to_thread(render_log_lines, text)
-            elif run.status == "running":
+            elif run["status"] in ("pending", "running"):
                 # Started but the writer is not registered yet (fetch /
                 # checkout runs before the first log byte). Poll until it
                 # appears instead of claiming the log is gone.
@@ -624,18 +654,26 @@ class _LogRoutes:
                 # Terminal run whose log was pruned: placeholder, not a
                 # 404, so the history link still resolves.
                 unavailable = True
+        build = None
+        if run["build_id"] is not None:
+            build = await self.ctx.queries.build_by_number(
+                project["id"], run["build_number"]
+            )
         return await self.ctx.render(
-            "scheduled_log.html",
+            "effect_log.html",
             request=request,
             project=project,
-            run=row_dict(run),
+            run=run,
+            build=build,
             content=content,
             live=live,
             waiting=waiting,
             unavailable=unavailable,
+            can_control=build is not None
+            and await self.ctx.can_control(request, build),
         )
 
-    async def scheduled_run_stream(
+    async def effect_run_stream(
         self,
         request: Request,
         forge: str,
@@ -644,14 +682,9 @@ class _LogRoutes:
         run_id: int,
     ) -> StreamingResponse:
         """SSE: history from disk, then live chunks until completion."""
-        project = await self.ctx.repo_or_404(forge, owner, name, request)
-        row = await sched_gen.scheduled_run_exists(
-            self.ctx.pool, id_=run_id, project_id=project["id"]
-        )
-        if row is None:
-            raise HTTPException(status_code=404)
-        writer = self.registry.get_scheduled(run_id)
-        path = self._scheduled_log_path(run_id)
+        await self._run_or_404(request, forge, owner, name, run_id)
+        writer = self.registry.get_effect(run_id)
+        path = self._effect_log_path(run_id)
         return StreamingResponse(
             _stream_events(writer, path), media_type="text/event-stream"
         )
@@ -944,7 +977,7 @@ class _LogRoutes:
         groups: list[dict] = []
         if len(q.strip()) >= 2:  # noqa: PLR2004
             for a in await self.ctx.queries.attributes(build["id"]):
-                path = log_path_for_key(self.ctx.state_dir, build["id"], a["attr"])
+                path = attribute_log_path(self.ctx.state_dir, build["id"], a["attr"])
                 reader = await _load_container(path)
                 if reader is None:
                     continue
@@ -988,21 +1021,9 @@ class _LogRoutes:
         project, build, path = await self._resolve(
             request, forge, owner, name, number, attr
         )
-        # Effect statuses live in build_effects, not attributes.
-        is_effect = attr.startswith("effect:")
-        attr_row: dict[str, Any] = {}
-        if is_effect:
-            attr_status = await maint_gen.effect_status(
-                self.ctx.pool,
-                build_id=build["id"],
-                name=attr.removeprefix("effect:"),
-            )
-        else:
-            row = await gen.attribute_status(
-                self.ctx.pool, build_id=build["id"], attr=attr
-            )
-            attr_row = row_dict(row) if row else {}
-            attr_status = row.status if row else None
+        row = await gen.attribute_status(self.ctx.pool, build_id=build["id"], attr=attr)
+        attr_row: dict[str, Any] = row_dict(row) if row else {}
+        attr_status = row.status if row else None
         # Live pages render no snapshot: the stream replays full
         # history on connect, the client would throw it away.
         writer = self.registry.get(build["id"], attr)
@@ -1051,7 +1072,6 @@ class _LogRoutes:
             build=build,
             attr_status=attr_status,
             attr_row=attr_row,
-            is_effect=is_effect,
             attr=attr,
             content=content,
             toc=toc,
@@ -1077,6 +1097,12 @@ def create_log_router(ctx: WebContext, registry: LogRegistry) -> APIRouter:
     # viewer catch-all. /logs/raw/{attr} is the unambiguous raw route;
     # the .txt suffix stays as a fallback for existing consumers.
     router.get(f"{_BASE}/search")(routes.build_search)
+    # Effect logs moved to /effects/runs/{id}. Keep the per-build URLs
+    # that forge statuses and old links point at.
+    for suffix in (".txt", "/stream", ""):
+        router.get(f"{_BASE}/logs/effect:{{effect:path}}{suffix}")(
+            functools.partial(routes.build_effect_log_redirect, suffix=suffix)
+        )
     router.get(f"{_BASE}/logs/raw/{{attr:path}}")(routes.log_raw_text)
     router.get(f"{_BASE}/logs/{{attr}}.txt")(routes.log_raw_text_legacy)
     router.get(f"{_BASE}/logs/{{attr:path}}/stream")(routes.log_stream)
@@ -1090,18 +1116,16 @@ def create_log_router(ctx: WebContext, registry: LogRegistry) -> APIRouter:
     router.get(f"{_BASE}/logs/{{attr:path}}", response_class=HTMLResponse)(
         routes.log_viewer
     )
-    # Same ordering discipline as the attribute routes above: the .txt
-    # and /stream suffixes and the runs list precede the int {run_id}
-    # viewer so it cannot swallow them.
-    sched_base = "/repos/{forge}/{owner:owner}/{name:segment}/schedules"
-    router.get(f"{sched_base}/runs", response_class=HTMLResponse)(
+    repo_base = "/repos/{forge}/{owner:owner}/{name:segment}"
+    router.get(f"{repo_base}/schedules/runs", response_class=HTMLResponse)(
         routes.scheduled_runs_history
     )
-    router.get(f"{sched_base}/runs/{{run_id:int}}.txt")(routes.scheduled_run_log)
-    router.get(f"{sched_base}/runs/{{run_id:int}}/stream")(routes.scheduled_run_stream)
-    router.get(f"{sched_base}/runs/{{run_id:int}}", response_class=HTMLResponse)(
-        routes.scheduled_run_viewer
-    )
+    # .txt and /stream precede the int {run_id} viewer so it cannot
+    # swallow them.
+    runs = f"{repo_base}/effects/runs/{{run_id:int}}"
+    router.get(f"{runs}.txt")(routes.effect_run_log)
+    router.get(f"{runs}/stream")(routes.effect_run_stream)
+    router.get(runs, response_class=HTMLResponse)(routes.effect_run_viewer)
     return router
 
 

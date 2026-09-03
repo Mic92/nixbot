@@ -7,7 +7,7 @@ from __future__ import annotations
 __all__: collections.abc.Sequence[str] = (
     "Build",
     "BuildAttribute",
-    "BuildEffect",
+    "EffectRun",
     "Project",
     "ScheduledEffect",
 )
@@ -66,17 +66,20 @@ class BuildAttribute:
 
 
 @dataclasses.dataclass()
-class BuildEffect:
+class EffectRun:
     id_: int
-    build_id: int
+    project_id: int
+    kind: str
+    build_id: int | None
+    schedule_name: str | None
     name: str
     status: str
     error: str | None
+    deps: str | None
     log_size: int
     log_truncated: bool
     started_at: datetime.datetime
     finished_at: datetime.datetime | None
-    deps: str | None
 
 
 @dataclasses.dataclass()
