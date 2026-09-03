@@ -12,31 +12,17 @@ in
 { primaryRepo, ... }:
 {
   onPush.default.outputs = {
-    # Fire-and-forget: the target enqueues a detached flakelet update,
-    # which restarts nixbot and with it this effect runner.
+    # The update restarts nixbot and with it this effect runner, so do
+    # not wait for the result. Authorized by rule "nixbot" in
+    # Mic92/dotfiles nixosModules/flakelet-relay.
     effects.deploy = hci-effects.runIf (primaryRepo.branch or null == "main") (
       hci-effects.mkEffect {
         name = "deploy";
-        idTokenAudiences = [ "step-ca-ssh" ];
-        inputs = [
-          pkgs.step-cli
-          pkgs.openssh
-        ];
+        idTokenAudiences = [ "flakelet-relay" ];
+        inputs = [ (pkgs.callPackage ./flakelet-push.nix { }) ];
         effectScript = ''
-          export STEPPATH=$PWD/.step
-          step ca bootstrap --ca-url https://ca.r \
-            --fingerprint 759759ea7dc7d635d761ce19a07bc0b3ab02212318e05b49d2b194c60414b84a
-
-          ssh-keygen -t ed25519 -N "" -q -f ./id_deploy
-          step ssh certificate --sign --provisioner nixbot \
-            --token "$(nixbot-id-token step-ca-ssh)" \
-            deploy ./id_deploy.pub
-
-          ssh -i ./id_deploy \
-            -o CertificateFile=./id_deploy-cert.pub \
-            -o UserKnownHostsFile=$PWD/known_hosts \
-            -o StrictHostKeyChecking=accept-new \
-            flakelet-deploy@eve.r
+          export FLAKELET_RELAY_TOKEN_COMMAND="nixbot-id-token flakelet-relay"
+          flakelet-push --relay-srv thalheim.io deploy --detach eve/nixbot
         '';
       }
     );
