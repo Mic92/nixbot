@@ -10,8 +10,8 @@ rustPlatform.buildRustPackage {
   src = fetchFromGitHub {
     owner = "Mic92";
     repo = "flakelet-relay";
-    rev = "521f8072bcdcfca712d5598a9979d5b7557eab72";
-    hash = "sha256-3fLTA1nRvw7zZilI9mEeuqOvGEW8+VeE+82K7jdhaJw=";
+    rev = "524322d75971302890969b941b2cbfe165d8aac3";
+    hash = "sha256-iMP8MG/0iycvrQ1z43IRvQJc7/HldhcS+sM2NKqmoqs=";
   };
   cargoHash = "sha256-gjNXc8rQZM5QKcVu/TV5RJzLdhC8XVhtRICrq1ZtK+A=";
   cargoBuildFlags = [
