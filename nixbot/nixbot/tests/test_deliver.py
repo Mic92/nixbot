@@ -20,6 +20,7 @@ from nixbot.forge import ForgeError
 from nixbot.forge_pr import PullRequestInfo
 from nixbot.repos import repo_info
 from nixbot.webhooks import PrClosed, PrComment, PrLabeled
+from nixbot.work_queue import MAX_WORK_ATTEMPTS
 
 from .support import FakeEffects, git, insert_build
 from .test_service import git_repo, make_service, seed_project, service  # noqa: F401
@@ -49,7 +50,8 @@ class FakeForgePr:
     def __init__(self, pr: PullRequestInfo, perms: dict[str, str]) -> None:
         self.pr = pr
         self.perms = perms
-        self.fail = False
+        # HTTP status of the next pull_request() calls, popped per call.
+        self.fail: list[int] = []
         self.comments: list[str] = []
 
     async def comment(self, _info: Any, _n: int, body: str, _marker: Any) -> None:
@@ -57,8 +59,9 @@ class FakeForgePr:
 
     async def pull_request(self, _info: Any, number: int) -> PullRequestInfo:
         if self.fail:
-            msg = "boom"
-            raise ForgeError(msg, status_code=502)
+            status = self.fail.pop(0)
+            msg = f"boom {status}"
+            raise ForgeError(msg, status_code=status)
         assert number == self.pr.number
         return self.pr
 
@@ -199,13 +202,34 @@ async def test_permission_denied_records_reason(env: dict[str, Any]) -> None:
     assert env["ran"] == []
 
 
-async def test_forge_failure_fails_rows(env: dict[str, Any]) -> None:
-    svc, build_id = env["service"], env["build_id"]
-    env["forge"].fail = True
+async def test_forge_outage_is_retried(env: dict[str, Any]) -> None:
+    """A 5xx from the forge requeues the delivery with backoff instead of
+    dropping the event. A 404 is final."""
+    svc, build_id, pool = env["service"], env["build_id"], env["service"].pool
+    env["forge"].fail = [502, 503]
+    await _deliver(svc, build_id, "github:alice")
+    rows = await _rows(svc, build_id)
+    assert rows["plan"]["status"] == "succeeded"
+    item = await pool.fetchrow(
+        "SELECT status, attempts FROM work_queue WHERE kind = 'deliver'"
+        " ORDER BY id DESC LIMIT 1"
+    )
+    assert (item["status"], item["attempts"]) == ("done", 2)
+
+    env["forge"].fail = [404]
     await _deliver(svc, build_id, "github:alice")
     rows = await _rows(svc, build_id)
     assert {r["status"] for r in rows.values()} == {"failed"}
     assert "forge lookup failed" in rows["plan"]["skip_reason"]
+
+
+async def test_forge_outage_gives_up(env: dict[str, Any]) -> None:
+    svc, build_id = env["service"], env["build_id"]
+    env["forge"].fail = [502] * (MAX_WORK_ATTEMPTS + 1)
+    await _deliver(svc, build_id, "github:alice")
+    rows = await _rows(svc, build_id)
+    assert "forge lookup failed" in rows["plan"]["skip_reason"]
+    assert env["forge"].fail == [502]
     assert env["ran"] == []
 
 

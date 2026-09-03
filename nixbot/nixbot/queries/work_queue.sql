@@ -1,8 +1,10 @@
 -- Work queue (work_queue.py).
 
 -- name: EnqueueWorkItem :one
-INSERT INTO work_queue (kind, dedup_key, payload)
-VALUES ($1, $2, sqlc.arg(payload)::jsonb)
+INSERT INTO work_queue (kind, dedup_key, payload, not_before)
+VALUES ($1, $2, sqlc.arg(payload)::jsonb,
+        CASE WHEN sqlc.arg(delay)::double precision > 0
+             THEN now() + make_interval(secs => sqlc.arg(delay)::double precision) END)
 ON CONFLICT (kind, dedup_key, md5(payload::text))
 WHERE status = 'pending'
 DO NOTHING
@@ -34,6 +36,7 @@ UPDATE work_queue SET status = 'running', claimed_at = now()
 WHERE id = (
     SELECT id FROM work_queue w
     WHERE w.status = 'pending'
+      AND (w.not_before IS NULL OR w.not_before <= now())
       AND NOT EXISTS (
         SELECT 1 FROM work_queue r
         WHERE r.dedup_key = w.dedup_key
@@ -54,12 +57,25 @@ WHERE id = (
     FOR UPDATE SKIP LOCKED
     LIMIT 1
 )
-RETURNING id, kind, dedup_key, payload;
+RETURNING id, kind, dedup_key, payload, attempts;
 
 -- name: FinishWorkItem :exec
 UPDATE work_queue
 SET status = $2, error = sqlc.narg(error), finished_at = now()
 WHERE id = $1;
+
+-- name: RetryWorkItem :execrows
+-- Back to pending after a transient failure, keeping its place in the
+-- per-key FIFO. No row when an identical pending item exists already.
+UPDATE work_queue w SET status = 'pending', claimed_at = NULL,
+    attempts = w.attempts + 1, error = sqlc.arg(error)::text,
+    not_before = now() + make_interval(secs => sqlc.arg(delay)::double precision)
+WHERE w.id = sqlc.arg(id)::bigint AND NOT EXISTS (
+    SELECT 1 FROM work_queue p
+    WHERE p.kind = w.kind AND p.dedup_key = w.dedup_key
+      AND md5(p.payload::text) = md5(w.payload::text)
+      AND p.status = 'pending' AND p.id <> w.id
+);
 
 -- name: SettleInterruptedWork :exec
 -- Startup sweep over rows the previous process died holding: requeue

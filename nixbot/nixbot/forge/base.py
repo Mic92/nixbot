@@ -30,6 +30,12 @@ class ForgeError(Exception):
         super().__init__(message)
         self.status_code = status_code
 
+    @property
+    def transient(self) -> bool:
+        """Worth retrying later: network errors, 5xx, rate limits."""
+        c = self.status_code
+        return c is None or c >= 500 or c == 429  # noqa: PLR2004
+
 
 def check_response(response: httpx.Response, forge_name: str) -> None:
     """Raise ForgeError for HTTP error responses."""

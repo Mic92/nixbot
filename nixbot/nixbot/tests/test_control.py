@@ -19,12 +19,7 @@ from nixbot.bootstrap import build_service
 from nixbot.db_gen import builds as builds_q
 from nixbot.events import BuildResult, ChangeEvent, NullStatusReporter
 from nixbot.executor import attribute_log_path
-from nixbot.service import (
-    MAX_REPORT_ATTEMPTS,
-    RetryingReporter,
-    _report_delay,
-    repo_info,
-)
+from nixbot.service import RetryingReporter, repo_info
 from nixbot.status import StatusPostError, _raise_for_status
 from nixbot.visibility import AccessCache, VisibilityService
 from nixbot.web.control_routes import (
@@ -32,6 +27,7 @@ from nixbot.web.control_routes import (
     create_control_router,
 )
 from nixbot.web.token_routes import create_token_router
+from nixbot.work_queue import MAX_WORK_ATTEMPTS, work_retry_delay
 
 from .support import (
     WebHarness,
@@ -805,20 +801,18 @@ def test_retry_after_parsing() -> None:
     _raise_for_status(httpx.Response(201), "acme/widget")  # must not raise
 
 
-def test_report_delay_honors_retry_after() -> None:
+def test_work_retry_delay_honors_retry_after() -> None:
     # The forge hint dominates the attempt backoff and is capped.
-    assert _report_delay(1, None) == 0
-    assert _report_delay(2, None) == 30
-    assert _report_delay(2, time.time() + 240) == pytest.approx(240, abs=2)
-    assert _report_delay(1, time.time() + 7200) == 3600
+    assert work_retry_delay(1, None, 30) == 30
+    assert work_retry_delay(2, None, 30) == 60
+    assert work_retry_delay(2, 240, 30) == 240
+    assert work_retry_delay(1, 7200, 30) == 3600
+    assert work_retry_delay(20, None, 30) == 900
 
 
-async def test_report_retry(
-    postgres_dsn: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_report_retry(postgres_dsn: str, tmp_path: Path) -> None:
     """A failed terminal status post is retried from database state and
-    gives up after MAX_REPORT_ATTEMPTS instead of looping."""
-    monkeypatch.setattr("nixbot.service.REPORT_BACKOFF_SECONDS", 0)
+    gives up after MAX_WORK_ATTEMPTS instead of looping."""
 
     config = make_config(postgres_dsn, tmp_path / "state")
     service, _app = await build_service(config)
@@ -868,12 +862,12 @@ async def test_report_retry(
         fail = True
         await wrapper.build_finished(event, build, BuildResult("succeeded", 0, []))
         await service.drain_work()
-        assert len(posts) == MAX_REPORT_ATTEMPTS + 1  # inline + retries
-        failed = await pool.fetchval(
-            "SELECT count(*) FROM work_queue "
+        assert len(posts) == MAX_WORK_ATTEMPTS + 1  # inline + retries
+        row = await pool.fetchrow(
+            "SELECT count(*), max(attempts) AS attempts FROM work_queue "
             "WHERE kind = 'report' AND status = 'failed'"
         )
-        assert failed == MAX_REPORT_ATTEMPTS
+        assert (row["count"], row["attempts"]) == (1, MAX_WORK_ATTEMPTS - 1)
     finally:
         await pool.close()
 
