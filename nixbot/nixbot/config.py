@@ -383,6 +383,8 @@ class Config(BaseModel):
     session_lifetime: int = 30 * 24 * 60 * 60
     # TTL for the per-user accessible-repo-set cache in seconds.
     repo_acl_cache_ttl: int = 60 * 60
+    # First retry delay for work that failed on a flaky forge, doubled per attempt.
+    work_retry_backoff: float = 30
 
     http_port: int = 8010
     http_unix_socket: Path | None = None

@@ -277,7 +277,9 @@ effects.
 
 Comments by bots (GitHub apps, nixbot's own account on Gitea/GitLab) are
 ignored. A `/command` for an effect that is still running from an earlier
-comment is answered with a note instead of being queued twice.
+comment is answered with a note instead of being queued twice. Deliveries are
+queued in the database and retried with backoff while the forge API is
+unavailable; webhooks sent while nixbot itself is down are not replayed.
 
 The event is passed to the script as JSON in `$NIXBOT_EVENT_JSON`
 (`/run/event.json`) and, for the common fields, as environment variables:

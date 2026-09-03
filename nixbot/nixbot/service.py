@@ -33,7 +33,6 @@ from .events import (
     effects_event_for_build,
     event_for_build,
 )
-from .forge import ForgeError
 from .forge_pr import ForgePrClient
 from .gitrepo import (
     CredentialsProvider,
@@ -59,7 +58,13 @@ from .webhooks import (
     is_merge_queue_branch,
     should_build_branch,
 )
-from .work_queue import WorkItem, WorkQueue
+from .work_queue import (
+    MAX_WORK_ATTEMPTS,
+    TransientError,
+    WorkItem,
+    WorkQueue,
+    work_retry_delay,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Coroutine, Sequence
@@ -98,27 +103,6 @@ class PullBasedCredentialsProvider:
             ssh_private_key_file=repo.ssh_private_key_file,
             ssh_known_hosts_file=repo.ssh_known_hosts_file,
         )
-
-
-MAX_REPORT_ATTEMPTS = 5
-REPORT_BACKOFF_SECONDS = 30
-MAX_REPORT_DELAY_SECONDS = 3600
-
-
-def _report_payload(build_id: int, attempt: int, error: Exception) -> dict[str, Any]:
-    payload: dict[str, Any] = {"build_id": build_id, "attempt": attempt}
-    # Forges send Retry-After on rate limits. Honoring it is required
-    # (e.g. GitHub secondary limits escalate when ignored).
-    retry_after = getattr(error, "retry_after", None)
-    if retry_after is not None:
-        payload["retry_at"] = time.time() + min(retry_after, MAX_REPORT_DELAY_SECONDS)
-    return payload
-
-
-def _report_delay(attempt: int, retry_at: float | None) -> float:
-    backoff = min(REPORT_BACKOFF_SECONDS * (attempt - 1), 300)
-    hinted = max(0.0, retry_at - time.time()) if retry_at is not None else 0.0
-    return min(max(backoff, hinted), MAX_REPORT_DELAY_SECONDS)
 
 
 @dataclass
@@ -190,7 +174,14 @@ class RetryingReporter:
                 "status post failed; queueing a retry", extra={"build_id": build.id_}
             )
             await self.service.enqueue_work(
-                "report", f"report-{build.id_}", _report_payload(build.id_, 1, e)
+                "report",
+                f"report-{build.id_}",
+                {"build_id": build.id_},
+                delay=work_retry_delay(
+                    1,
+                    getattr(e, "retry_after", None),
+                    self.service.config.work_retry_backoff,
+                ),
             )
 
 
@@ -255,47 +246,21 @@ class CIService:
     async def submit(self, event: WebhookEvent) -> None:
         if isinstance(event, PrClosed):
             await self._submit_pr_closed(event)
-            return
-        if isinstance(event, PrComment):
-            try:
-                if await self.forge_pr.is_self(event.actor):
-                    return
-            except ForgeError:
-                logger.warning("bot user lookup failed", exc_info=True)
+        elif isinstance(event, PrComment):
             await self._deliver_for_pr(
-                event.forge,
-                event.forge_repo_id,
-                Delivery(
-                    kind="comment",
-                    build_id=0,
-                    actor=event.actor,
-                    pr_number=event.pr_number,
-                    command=event.command,
-                    args=event.args,
-                ),
+                event, "comment", command=event.command, args=event.args
             )
-            return
-        if isinstance(event, PrLabeled):
-            await self._deliver_for_pr(
-                event.forge,
-                event.forge_repo_id,
-                Delivery(
-                    kind="pull_request",
-                    build_id=0,
-                    actor=event.actor,
-                    pr_number=event.pr_number,
-                ),
-            )
-            return
-        if isinstance(event, CheckRerequested):
+        elif isinstance(event, PrLabeled):
+            await self._deliver_for_pr(event, "pull_request")
+        elif isinstance(event, CheckRerequested):
             await self._submit_rerequest(event)
-            return
-        await self._submit_change(event)
+        else:
+            await self._submit_change(event)
 
     async def _submit_pr_closed(self, event: PrClosed) -> None:
         if not event.merged:
-            # No cancel on merge: the merge push reuses the PR build
-            # (same post-merge tree hash).
+            # A merged PR is not cancelled: the merge commit has the same
+            # tree, so its push reuses the PR build.
             project = await self.repo_store.by_forge_id(
                 event.forge, event.forge_repo_id
             )
@@ -308,37 +273,40 @@ class CIService:
                 forge_repo_id=event.forge_repo_id,
                 pr_number=event.pr_number,
             )
-        await self._deliver_for_pr(
-            event.forge,
-            event.forge_repo_id,
-            Delivery(
-                kind="pull_request_closed",
-                build_id=0,
-                actor=event.actor,
-                pr_number=event.pr_number,
-            ),
-        )
+        await self._deliver_for_pr(event, "pull_request_closed")
 
     async def _deliver_for_pr(
-        self, forge: str, forge_repo_id: str, d: Delivery
+        self,
+        event: PrClosed | PrComment | PrLabeled,
+        kind: str,
+        *,
+        command: str | None = None,
+        args: str | None = None,
     ) -> None:
-        """Attach a PR-scoped delivery to the PR's latest build. PRs nixbot
+        """Queue a PR event against the PR's latest build. PRs nixbot
         never built (filtered, disabled) get no event effects."""
-        project = await self.repo_store.by_forge_id(forge, forge_repo_id)
-        if project is None or not project.enabled or d.pr_number is None:
+        project = await self.repo_store.by_forge_id(event.forge, event.forge_repo_id)
+        if project is None or not project.enabled:
             return
         build = await ev_q.latest_build_for_pr(
-            self.pool, project_id=project.id_, pr_number=d.pr_number
+            self.pool, project_id=project.id_, pr_number=event.pr_number
         )
         if build is None:
             return
         # pull_request means "this PR head built green" (docs/EFFECTS.md).
-        if d.kind == "pull_request" and build.status != BuildStatus.SUCCEEDED:
+        if kind == "pull_request" and build.status != BuildStatus.SUCCEEDED:
             return
-        d = dataclasses.replace(d, build_id=build.id_)
-        # Per PR: deliveries for one PR are matched in order.
+        d = Delivery(
+            kind=kind,
+            build_id=build.id_,
+            actor=event.actor,
+            pr_number=event.pr_number,
+            command=command,
+            args=args,
+        )
+        # One queue key per PR so its events are matched in order.
         await self.enqueue_work(
-            "deliver", f"deliver-{project.id_}-pr-{d.pr_number}", d.as_payload()
+            "deliver", f"deliver-{project.id_}-pr-{event.pr_number}", d.as_payload()
         )
 
     async def _submit_rerequest(self, event: CheckRerequested) -> None:
@@ -506,9 +474,9 @@ class CIService:
         )
 
     async def enqueue_work(
-        self, kind: str, dedup_key: str, payload: dict[str, Any]
+        self, kind: str, dedup_key: str, payload: dict[str, Any], *, delay: float = 0
     ) -> None:
-        await WorkQueue(self.pool).enqueue(kind, dedup_key, payload)
+        await WorkQueue(self.pool).enqueue(kind, dedup_key, payload, delay=delay)
         self._work_event.set()
 
     def wake_work(self) -> None:
@@ -539,6 +507,28 @@ class CIService:
     async def _execute_work(self, queue: WorkQueue, item: WorkItem) -> None:
         try:
             await self._dispatch_work(item)
+        except TransientError as e:
+            delay = work_retry_delay(
+                item.attempts + 1, e.retry_after, self.config.work_retry_backoff
+            )
+            if item.attempts + 1 < MAX_WORK_ATTEMPTS and await queue.retry(
+                item.id, delay=delay, error=str(e)
+            ):
+                logger.warning(
+                    "work item failed, retrying",
+                    extra={
+                        "work_id": item.id,
+                        "kind": item.kind,
+                        "in": delay,
+                        "error": str(e),
+                    },
+                )
+            else:
+                logger.exception(
+                    "work item failed, giving up",
+                    extra={"work_id": item.id, "kind": item.kind, "error": str(e)},
+                )
+                await queue.finish(item.id, error=str(e))
         except Exception as e:
             logger.exception("work item failed", extra={"work_id": item.id})
             await queue.finish(item.id, error=str(e) or type(e).__name__)
@@ -570,13 +560,13 @@ class CIService:
                 payload["build_id"], payload["name"], payload.get("kind", "push")
             )
         elif item.kind == "deliver":
-            await deliver(self, Delivery.from_payload(payload))
-        elif item.kind == "report":
-            await self._re_report(
-                payload["build_id"],
-                payload.get("attempt", 1),
-                payload.get("retry_at"),
+            await deliver(
+                self,
+                Delivery(**payload),
+                last_attempt=item.attempts + 1 >= MAX_WORK_ATTEMPTS,
             )
+        elif item.kind == "report":
+            await self._re_report(payload["build_id"])
         elif item.kind == "refresh-schedules":
             await schedule_runner.refresh_schedules(
                 self, payload["project_id"], payload["rev"]
@@ -596,14 +586,8 @@ class CIService:
             msg = f"unknown work kind {item.kind!r}"
             raise ValueError(msg)
 
-    async def _re_report(
-        self, build_id: int, attempt: int, retry_at: float | None = None
-    ) -> None:
-        """Re-post the build summary from database state. Waits for the
-        larger of the attempt backoff and the forge's Retry-After."""
-        delay = _report_delay(attempt, retry_at)
-        if delay > 0:
-            await asyncio.sleep(delay)
+    async def _re_report(self, build_id: int) -> None:
+        """Re-post the build summary from database state."""
         build = await builds_q.get_build(self.orchestrator.pool, id_=build_id)
         if build is None:
             return
@@ -614,12 +598,10 @@ class CIService:
         rows = await builds_q.attribute_statuses(self.pool, build_id=build_id)
         reporter = self.orchestrator.reporter
         if isinstance(reporter, RetryingReporter):
-            # Post via the inner reporter: the wrapper would enqueue a
-            # competing attempt-1 item on failure.
+            # The wrapper would enqueue a competing item on failure.
             reporter = reporter.inner
         try:
-            # Empty results: only the summary is re-posted. Per-attribute
-            # statuses were already posted (or cached) inline.
+            # Per-attribute statuses were already posted (or cached) inline.
             await reporter.build_finished(
                 event,
                 build,
@@ -631,13 +613,9 @@ class CIService:
                 ),
             )
         except Exception as e:
-            if attempt < MAX_REPORT_ATTEMPTS:
-                await self.enqueue_work(
-                    "report",
-                    f"report-{build_id}",
-                    _report_payload(build_id, attempt + 1, e),
-                )
-            raise
+            raise TransientError(
+                str(e), retry_after=getattr(e, "retry_after", None)
+            ) from e
 
     async def _restart_event_effect(self, payload: dict[str, Any]) -> None:
         build = await builds_q.get_build(self.pool, id_=payload["build_id"])
