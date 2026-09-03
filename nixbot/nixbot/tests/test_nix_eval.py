@@ -144,6 +144,34 @@ def test_full_command_composition(tmp_path: Path) -> None:
     assert cmd[0] == "nix-eval-jobs"
 
 
+def test_memory_limit_never_below_worker_budget(tmp_path: Path) -> None:
+    # Regression (#182): a host-derived cgroup limit smaller than the
+    # configured worker budget OOM-killed evals at that limit.
+    settings = EvalSettings(
+        gc_roots_dir=tmp_path,
+        worker_count=2,
+        max_memory_size_mib=4096,
+        cgroup_limit_mib=2048,
+    )
+    assert settings.memory_limit_mib == 3 * 4096
+    settings.cgroup_limit_mib = 50000
+    assert settings.memory_limit_mib == 50000
+
+
+def test_memory_info_uses_memavailable(tmp_path: Path) -> None:
+    # Regression (#182): MemFree excludes page cache and is near zero on
+    # any long-running host, which collapsed the eval cgroup to 2 GiB.
+    meminfo = tmp_path / "meminfo"
+    meminfo.write_text(
+        "MemTotal:       16384000 kB\n"
+        "MemFree:          102400 kB\n"
+        "MemAvailable:   10240000 kB\n"
+    )
+    info = get_memory_info(meminfo_path=meminfo, arcstats_path=tmp_path / "absent")
+    assert info.total_memory_mib == 16000
+    assert info.available_memory_mib == 10000
+
+
 def test_memory_info_zfs_arc(tmp_path: Path) -> None:
     arcstats = tmp_path / "arcstats"
     arcstats.write_text("name type data\nsize 4 2147483648\n")

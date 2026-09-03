@@ -78,8 +78,9 @@ class EvalSettings:
 
     worker_count: int = 1
     max_memory_size_mib: int = 4096
-    # See EvalWorkerConfig.cgroup_limit_mib. None derives it from the
-    # worker budget.
+    # See EvalWorkerConfig.cgroup_limit_mib. The worker budget is the
+    # floor: a smaller cgroup would OOM-kill an eval that stays within
+    # its configured limits.
     cgroup_limit_mib: int | None = None
     show_trace: bool = False
     # bwrap sandbox. Disable only in tests.
@@ -100,9 +101,10 @@ class EvalSettings:
 
     @property
     def memory_limit_mib(self) -> int:
+        budget = self.max_memory_size_mib * (self.worker_count + 1)
         if self.cgroup_limit_mib is not None:
-            return self.cgroup_limit_mib
-        return self.max_memory_size_mib * (self.worker_count + 1)
+            return max(budget, self.cgroup_limit_mib)
+        return budget
 
 
 @dataclass

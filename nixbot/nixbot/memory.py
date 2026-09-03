@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import logging
 import multiprocessing
-import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -37,19 +36,34 @@ class MemoryInfo:
     zfs_arc_used: int = 0
 
 
+def _read_meminfo(path: Path) -> dict[str, int]:
+    """Parse /proc/meminfo into MiB values."""
+    fields: dict[str, int] = {}
+    with path.open() as f:
+        for line in f:
+            key, _, rest = line.partition(":")
+            parts = rest.split()
+            if parts:
+                fields[key] = int(parts[0]) // 1024
+    return fields
+
+
 def get_memory_info(
+    meminfo_path: Path = Path("/proc/meminfo"),
     arcstats_path: Path = Path("/proc/spl/kstat/zfs/arcstats"),
 ) -> MemoryInfo:
-    """Get memory information on Linux, including reclaimable ZFS ARC."""
+    """Get memory information on Linux, including reclaimable ZFS ARC.
+
+    MemAvailable, not MemFree: page cache is reclaimable and MemFree is
+    near zero on any host that has been up for a while.
+    """
     try:
-        total_pages = os.sysconf("SC_PHYS_PAGES")
-        page_size = os.sysconf("SC_PAGE_SIZE")
-        available_pages = os.sysconf("SC_AVPHYS_PAGES")
-        total_memory_mib = (total_pages * page_size) // (1024 * 1024)
-        available_memory_mib = (available_pages * page_size) // (1024 * 1024)
-    except (ValueError, OSError):
+        meminfo = _read_meminfo(meminfo_path)
+        total_memory_mib = meminfo["MemTotal"]
+        available_memory_mib = meminfo["MemAvailable"]
+    except (OSError, KeyError, ValueError):
         logger.warning(
-            "could not get memory info via sysconf, using conservative estimates"
+            "could not read %s, using conservative memory estimates", meminfo_path
         )
         total_memory_mib = 8192
         available_memory_mib = 4096
