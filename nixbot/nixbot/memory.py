@@ -1,12 +1,13 @@
-"""Eval worker count and memory-limit sizing.
-
-Only the Linux path is needed, the service is Linux-only.
-"""
+"""Eval worker count and memory-limit sizing."""
 
 from __future__ import annotations
 
 import logging
 import multiprocessing
+import os
+import re
+import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -48,23 +49,55 @@ def _read_meminfo(path: Path) -> dict[str, int]:
     return fields
 
 
+# Pages Darwin hands out without swapping, the closest analogue to
+# Linux MemAvailable.
+_VM_STAT_AVAILABLE = (
+    "Pages free",
+    "Pages inactive",
+    "Pages speculative",
+    "Pages purgeable",
+)
+
+
+def parse_vm_stat(output: str) -> int:
+    """Available MiB from Darwin `vm_stat` output."""
+    m = re.search(r"page size of (\d+) bytes", output)
+    if m is None:
+        msg = "vm_stat: no page size"
+        raise ValueError(msg)
+    page_size = int(m.group(1))
+    pages = 0
+    for line in output.splitlines():
+        key, _, value = line.partition(":")
+        if key.strip() in _VM_STAT_AVAILABLE:
+            pages += int(value.strip().rstrip("."))
+    return pages * page_size // (1024 * 1024)
+
+
+def _darwin_memory_info() -> tuple[int, int]:
+    total = os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE") // (1024 * 1024)
+    out = subprocess.run(["vm_stat"], capture_output=True, text=True, check=True).stdout
+    return total, parse_vm_stat(out)
+
+
 def get_memory_info(
     meminfo_path: Path = Path("/proc/meminfo"),
     arcstats_path: Path = Path("/proc/spl/kstat/zfs/arcstats"),
 ) -> MemoryInfo:
-    """Get memory information on Linux, including reclaimable ZFS ARC.
+    """Get total and available memory, including reclaimable ZFS ARC.
 
     MemAvailable, not MemFree: page cache is reclaimable and MemFree is
     near zero on any host that has been up for a while.
     """
     try:
-        meminfo = _read_meminfo(meminfo_path)
-        total_memory_mib = meminfo["MemTotal"]
-        available_memory_mib = meminfo["MemAvailable"]
-    except (OSError, KeyError, ValueError):
-        logger.warning(
-            "could not read %s, using conservative memory estimates", meminfo_path
-        )
+        if sys.platform == "darwin":
+            total_memory_mib, available_memory_mib = _darwin_memory_info()
+        else:
+            meminfo = _read_meminfo(meminfo_path)
+            total_memory_mib = meminfo["MemTotal"]
+            available_memory_mib = meminfo["MemAvailable"]
+    except (OSError, KeyError, ValueError, subprocess.SubprocessError):
+        logger.warning("could not read memory info, using conservative estimates")
         total_memory_mib = 8192
         available_memory_mib = 4096
 

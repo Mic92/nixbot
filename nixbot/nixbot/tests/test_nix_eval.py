@@ -21,6 +21,7 @@ from nixbot.memory import (
     MemoryInfo,
     calculate_eval_workers,
     get_memory_info,
+    parse_vm_stat,
 )
 from nixbot.nix_eval import (
     EvalError,
@@ -170,6 +171,21 @@ def test_memory_info_uses_memavailable(tmp_path: Path) -> None:
     info = get_memory_info(meminfo_path=meminfo, arcstats_path=tmp_path / "absent")
     assert info.total_memory_mib == 16000
     assert info.available_memory_mib == 10000
+
+
+def test_parse_vm_stat() -> None:
+    out = (
+        "Mach Virtual Memory Statistics: (page size of 16384 bytes)\n"
+        "Pages free:                               10000.\n"
+        "Pages active:                            500000.\n"
+        "Pages inactive:                           20000.\n"
+        "Pages speculative:                         2000.\n"
+        "Pages throttled:                              0.\n"
+        "Pages wired down:                        100000.\n"
+        "Pages purgeable:                            768.\n"
+        '"Translation faults":                 123456789.\n'
+    )
+    assert parse_vm_stat(out) == (10000 + 20000 + 2000 + 768) * 16384 // 2**20
 
 
 def test_memory_info_zfs_arc(tmp_path: Path) -> None:
