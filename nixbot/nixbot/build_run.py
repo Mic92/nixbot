@@ -17,6 +17,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from . import db
+from .after_build import after_build
 from .build_scheduler import (
     AttributeResult,
     AttributeStatus,
@@ -394,7 +395,9 @@ async def _run_build_inner(
     )
     # Builds start as soon as the first eval batch arrives.
     build_task = asyncio.create_task(
-        build_attributes(o, event, build, worktree_path, jobs_queue)
+        build_attributes(
+            o, event, build, worktree_path, jobs_queue, credentials=credentials
+        )
     )
     cancel_wait = asyncio.ensure_future(cancel_event.wait())
     try:
@@ -426,16 +429,13 @@ async def _run_build_inner(
         # missed (e.g. eval runners without on_jobs support).
         await jobs_queue.put(list(eval_result.jobs))
         await jobs_queue.put(None)
-        status = await build_task
+        await build_task
     except BaseException:
         # Reap both tasks or the build task leaks forever blocked
         # on the jobs queue and the evaluator process outlives the
         # build (nix_eval kills the evaluator on cancellation).
         await _reap(eval_task, build_task)
         raise
-
-    if status == BuildStatus.SUCCEEDED:
-        await o.maybe_run_effects(event, build, worktree_path, credentials)
 
 
 async def _reusable_eval_jobs(
@@ -485,11 +485,15 @@ async def _try_reuse_eval(
     await db.set_build_status(o.pool, build.id_, BuildStatus.BUILDING)
     await o.reporter.eval_finished(event, build, EvalReport(success=True, jobs=reused))
     # cache_failures=False: see _ReadOnlyFailedBuildCache.
-    status = await build_attributes(
-        o, event, build, worktree_path, reused, cache_failures=False
+    await build_attributes(
+        o,
+        event,
+        build,
+        worktree_path,
+        reused,
+        credentials=credentials,
+        cache_failures=False,
     )
-    if status == BuildStatus.SUCCEEDED:
-        await o.maybe_run_effects(event, build, worktree_path, credentials)
     return True
 
 
@@ -500,6 +504,7 @@ async def build_attributes(  # noqa: PLR0913
     worktree_path: Path,
     jobs: Sequence[NixEvalJob] | asyncio.Queue[list[NixEvalJob] | None],
     *,
+    credentials: FetchCredentials | None,
     cache_failures: bool = True,
 ) -> str:
     """Schedule the attribute builds, persist their results, and
@@ -576,12 +581,9 @@ async def build_attributes(  # noqa: PLR0913
         eval_success=True,
     )
     o.release_run(build.id_)
-
-    if status == BuildStatus.SUCCEEDED:
-        await o.refresh_schedules(event)
-    refreshed = await q.get_build(o.pool, id_=build.id_)
-    if refreshed is not None:
-        await o.deliver_events(event, refreshed)
+    await after_build(
+        o, event, build, status, worktree_path=worktree_path, credentials=credentials
+    )
     return status
 
 
