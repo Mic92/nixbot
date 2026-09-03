@@ -12,14 +12,14 @@ import time
 from functools import partial
 from typing import TYPE_CHECKING
 
-from .effects import EffectsContext, effects_context, run_scheduled_effect
+from .effects import EffectsContext, effects_context
 from .effects_run import effect_checkout
 from .executor import failure_excerpt
 from .repos import repo_info
 from .schedules import (
     DueEffect,
     ScheduledEffectsStore,
-    discover_schedules,
+    parse_schedules_from_json,
 )
 from .workload_identity import EffectIdentity
 
@@ -96,7 +96,9 @@ async def refresh_schedules(s: CIService, project_id: int, rev: str) -> None:
             repo=info.name,
             extra_sandbox_paths=s.config.effects_extra_sandbox_paths,
         )
-        schedules = await discover_schedules(ctx)
+        schedules = parse_schedules_from_json(
+            await s.orchestrator.effects.list_scheduled_effects(ctx)
+        )
         await ScheduledEffectsStore(s.pool).replace_schedules(project_id, schedules)
     finally:
         await s.orchestrator.repos.remove_worktree(worktree)
@@ -177,7 +179,7 @@ async def _run_scheduled_inner(
             ctx.bind_id_token_audiences = partial(
                 s.orchestrator.task_tokens.bind_audiences, task_token
             )
-            return await run_scheduled_effect(
+            return await s.orchestrator.effects.run_scheduled_effect(
                 ctx, due.schedule_name, due.effect, log.write
             )
     finally:

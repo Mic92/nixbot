@@ -35,6 +35,7 @@ from .canceller import (
 )
 from .db import BuildStatus
 from .db_gen import maintenance as q
+from .effects import EffectsBackend, NixEffects
 from .effects_state import TaskTokens
 from .events import (
     BuildResult,
@@ -80,6 +81,10 @@ if TYPE_CHECKING:
     OutputWriter = Callable[[Path, str, str, str, str, str, str], Path]
 
 logger = logging.getLogger(__name__)
+
+
+def default_effects() -> EffectsBackend:
+    return NixEffects()
 
 
 class EvalRunnerLike(Protocol):
@@ -130,7 +135,8 @@ class Orchestrator:
     running_effects: dict[tuple[int, str], effects_run.RunningEffect] = field(
         default_factory=dict
     )
-    # Injectable for tests. Defaults to the real implementations.
+    # Injectable, default_effects is late-bound so tests can replace it.
+    effects: EffectsBackend = field(default_factory=lambda: default_effects())  # noqa: PLW0108
     register_gcroot: GcrootRegistrar = gcroots.register_gcroot
     write_output_path: OutputWriter = outputs.write_output_path
     # Store-path validity probe for eval reuse. Injectable for tests.

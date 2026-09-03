@@ -17,13 +17,11 @@ from typing import TYPE_CHECKING, Any, cast
 
 from .config import ScheduledEffectConfig, ScheduleWhen
 from .db_gen import scheduled as q
-from .effects import list_scheduled_effects
 from .sql_util import expect, row_dicts
 
 if TYPE_CHECKING:
     import asyncpg
 
-    from .effects import EffectsContext
 
 logger = logging.getLogger(__name__)
 
@@ -46,13 +44,6 @@ def parse_schedules_from_json(
             effects=schedule_data.get("effects", []),
         )
     return result
-
-
-async def discover_schedules(
-    ctx: EffectsContext,
-) -> dict[str, ScheduledEffectConfig]:
-    """The onSchedule definitions on a default-branch checkout."""
-    return parse_schedules_from_json(await list_scheduled_effects(ctx))
 
 
 def is_due(when: ScheduleWhen, schedule_name: str, now: datetime) -> bool:

@@ -26,8 +26,6 @@ from .effects import (
     EffectsContext,
     effect_push_url,
     effects_context,
-    list_effects,
-    run_effect,
     should_run_effects,
 )
 from .events import effects_event_for_build
@@ -141,7 +139,7 @@ async def discover_effects(
     try:
         # A bad effect DAG (cycle, unknown dependency) fails discovery
         # here and its reason ends up in the log.
-        return await list_effects(ctx)
+        return await o.effects.list_effects(ctx)
     except (EffectError, OSError):
         # OSError: nix/git missing from PATH. Effects are best-effort
         # and must not fail the (already reported) build.
@@ -356,7 +354,7 @@ async def _run_one_effect(
     await o.reporter.effect_started(event, build, name)
     async with o.open_effect_log(run_id) as writer:
         try:
-            success = await run_effect(ctx, name, writer.write)
+            success = await o.effects.run_effect(ctx, name, writer.write)
         except Exception as e:
             # Any escape would leave the row running forever
             # (nothing re-runs effects) and kill the loop for the
