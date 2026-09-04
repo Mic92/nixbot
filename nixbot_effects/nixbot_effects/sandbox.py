@@ -155,7 +155,7 @@ def effect_checkout_mount(
     if effect_checkout is None:
         msg = (
             f"effect declares {EFFECT_CHECKOUT_ATTR} but the runner"
-            " provided no checkout clone"
+            " provided no checkout clone (nbo: pass --effect-checkout DIR)"
         )
         raise EffectError(msg)
     if etc_dir is not None:

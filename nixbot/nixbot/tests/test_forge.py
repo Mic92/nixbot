@@ -111,7 +111,13 @@ def test_filter_repos(filters: RepoFilters, expected_indices: list[int]) -> None
 
 def github_transport(
     hook_url: str = "https://buildbot.example.com/webhooks/github",
-    events: tuple[str, ...] = ("push", "pull_request", "check_run", "check_suite"),
+    events: tuple[str, ...] = (
+        "push",
+        "pull_request",
+        "check_run",
+        "check_suite",
+        "issue_comment",
+    ),
 ) -> httpx.MockTransport:
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -551,7 +557,13 @@ async def test_gitea_hook_registration(pool: asyncpg.Pool) -> None:
     hook = forge.created[0]
     assert hook["config"]["url"] == "https://ci.example.com/webhooks/gitea"
     # PR head pushes arrive as pull_request_sync, not pull_request.
-    assert hook["events"] == ["push", "pull_request", "pull_request_sync"]
+    assert hook["events"] == [
+        "push",
+        "pull_request",
+        "pull_request_sync",
+        "pull_request_comment",
+        "pull_request_label",
+    ]
     secret = await secrets_store.secret_for_repo("hook-1")
     assert hook["config"]["secret"] == secret
     # Legacy hooks removed only when they match OUR base URL,

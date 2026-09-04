@@ -22,6 +22,7 @@ import hashlib
 import hmac
 import json
 import logging
+import re
 import urllib.parse
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -123,6 +124,18 @@ class ChangeRequest:
     pr_number: int | None = None
     pr_author: str | None = None
     base_sha: str | None = None
+    actor: str | None = None
+
+
+def _actor(forge: str, payload: dict[str, Any]) -> str | None:
+    """Who triggered the webhook: `sender.login` (GitHub, Gitea),
+    `user.username` (GitLab MR) or `user_username` (GitLab push)."""
+    login = (
+        (payload.get("sender") or {}).get("login")
+        or (payload.get("user") or {}).get("username")
+        or payload.get("user_username")
+    )
+    return f"{forge}:{login}" if login else None
 
 
 @dataclass(frozen=True)
@@ -130,6 +143,73 @@ class PrClosed:
     forge: str
     forge_repo_id: str
     pr_number: int
+    merged: bool = False
+    actor: str | None = None
+
+
+@dataclass(frozen=True)
+class PrLabeled:
+    """Labels of an open pull request changed. Re-delivers
+    `pull_request` so `when.labels` gates can open without a push."""
+
+    forge: str
+    forge_repo_id: str
+    pr_number: int
+    actor: str | None = None
+
+
+_COMMAND_RE = re.compile(r"^/([a-z0-9_-]+)(?:[ \t]+(.*))?$")
+
+
+@dataclass(frozen=True)
+class PrComment:
+    """A new `/command args` comment on an open pull request."""
+
+    forge: str
+    forge_repo_id: str
+    pr_number: int
+    actor: str
+    command: str
+    args: str
+
+
+def _pr_comment(
+    forge: str, repo_id: str, pr_number: int | None, actor: str | None, body: str
+) -> PrComment | None:
+    first = body.split("\n", 1)[0].strip()
+    m = _COMMAND_RE.match(first)
+    if m is None or pr_number is None or not actor:
+        return None
+    return PrComment(
+        forge=forge,
+        forge_repo_id=repo_id,
+        pr_number=pr_number,
+        actor=actor,
+        command=m.group(1),
+        args=(m.group(2) or "").strip(),
+    )
+
+
+def _parse_issue_comment(
+    forge: str, repo_id: str, payload: dict[str, Any]
+) -> PrComment | None:
+    """GitHub `issue_comment` / Gitea `issue_comment` (X-Gitea-Event-Type
+    pull_request_comment) share this shape."""
+    issue = payload.get("issue") or {}
+    comment = payload.get("comment") or {}
+    if payload.get("action") != "created":
+        return None
+    if forge == "github" and not issue.get("pull_request"):
+        return None
+    if (comment.get("user") or {}).get("type") == "Bot" or issue.get("state") != "open":
+        return None
+    return _pr_comment(
+        forge,
+        repo_id,
+        issue.get("number"),
+        _actor(forge, payload),
+        comment.get("body") or "",
+    )
 
 
 @dataclass(frozen=True)
@@ -146,7 +226,7 @@ class CheckRerequested:
     name: str | None = None
 
 
-WebhookEvent = ChangeRequest | PrClosed | CheckRerequested
+WebhookEvent = ChangeRequest | PrClosed | PrComment | PrLabeled | CheckRerequested
 
 
 def _pr_action_builds(action: str, payload: dict[str, Any], sync_action: str) -> bool:
@@ -170,11 +250,22 @@ def _parse_pr_event(
         return None
     action = payload.get("action", "")
     if action == "closed":
-        if pr.get("merged"):
-            # No cancel on merge: the merge push reuses the PR build
-            # (same post-merge tree hash).
+        return PrClosed(
+            forge=forge,
+            forge_repo_id=repo_id,
+            pr_number=number,
+            merged=bool(pr.get("merged")),
+            actor=_actor(forge, payload),
+        )
+    if action in ("labeled", "unlabeled", "label_updated", "label_cleared"):
+        if pr.get("state") != "open":
             return None
-        return PrClosed(forge=forge, forge_repo_id=repo_id, pr_number=number)
+        return PrLabeled(
+            forge=forge,
+            forge_repo_id=repo_id,
+            pr_number=number,
+            actor=_actor(forge, payload),
+        )
     if not _pr_action_builds(action, payload, sync_action):
         return None
     # No commit_message: the [skip ci] check must not run on the PR
@@ -192,6 +283,7 @@ def _parse_pr_event(
         # on. Merge into the branch tip (fetched alongside) so the PR is
         # tested against the current base.
         base_sha=f"refs/heads/{base_ref}" if base_ref else base.get("sha"),
+        actor=_actor(forge, payload),
     )
 
 
@@ -216,9 +308,12 @@ def parse_github_event(  # noqa: PLR0911
             branch=ref.removeprefix("refs/heads/"),
             commit_sha=head,
             commit_message=head_commit.get("message", ""),
+            actor=_actor("github", payload),
         )
     if event_type == "pull_request":
         return _parse_pr_event("github", repo_id, payload, "synchronize")
+    if event_type == "issue_comment":
+        return _parse_issue_comment("github", repo_id, payload)
     if event_type in ("check_run", "check_suite"):
         return _parse_github_check_event(event_type, repo_id, payload)
     return None
@@ -249,7 +344,9 @@ def _parse_github_check_event(
     )
 
 
-def parse_gitea_event(event_type: str, payload: dict[str, Any]) -> WebhookEvent | None:
+def parse_gitea_event(  # noqa: PLR0911
+    event_type: str, payload: dict[str, Any]
+) -> WebhookEvent | None:
     repo = payload.get("repository") or {}
     repo_id = str(repo.get("id", ""))
     if not repo_id:
@@ -277,15 +374,87 @@ def parse_gitea_event(event_type: str, payload: dict[str, Any]) -> WebhookEvent 
             branch=ref.removeprefix("refs/heads/"),
             commit_sha=head,
             commit_message=head_commit.get("message", ""),
+            actor=_actor("gitea", payload),
         )
     # Gitea delivers PR head updates as a separate "pull_request_sync"
     # hook event (action "synchronized").
-    if event_type in ("pull_request", "pull_request_sync"):
+    if event_type in ("pull_request", "pull_request_sync", "pull_request_label"):
         return _parse_pr_event("gitea", repo_id, payload, "synchronized")
+    if event_type == "issue_comment" and payload.get("is_pull"):
+        return _parse_issue_comment("gitea", repo_id, payload)
     return None
 
 
 # --- FastAPI wiring -----------------------------------------------------------------
+
+
+def _parse_gitlab_note(repo_id: str, payload: dict[str, Any]) -> PrComment | None:
+    attrs = payload.get("object_attributes") or {}
+    mr = payload.get("merge_request") or {}
+    if (
+        attrs.get("noteable_type") != "MergeRequest"
+        or attrs.get("action", "create") != "create"
+        or attrs.get("system")
+        or mr.get("state") != "opened"
+    ):
+        return None
+    return _pr_comment(
+        "gitlab",
+        repo_id,
+        mr.get("iid"),
+        _actor("gitlab", payload),
+        attrs.get("note") or "",
+    )
+
+
+def _parse_gitlab_mr(repo_id: str, payload: dict[str, Any]) -> WebhookEvent | None:
+    attrs = payload.get("object_attributes") or {}
+    number = attrs.get("iid")
+    if number is None:
+        return None
+    action = attrs.get("action", "")
+    if action in ("close", "merge"):
+        return PrClosed(
+            forge="gitlab",
+            forge_repo_id=repo_id,
+            pr_number=number,
+            merged=action == "merge",
+            actor=_actor("gitlab", payload),
+        )
+    if action not in ("open", "update", "reopen"):
+        return None
+    # Metadata-only updates (labels, title, milestone) carry no
+    # oldrev. Only head-moving updates trigger a build.
+    if action == "update" and not attrs.get("oldrev"):
+        if "labels" in (payload.get("changes") or {}):
+            return PrLabeled(
+                forge="gitlab",
+                forge_repo_id=repo_id,
+                pr_number=number,
+                actor=_actor("gitlab", payload),
+            )
+        return None
+    # No commit_message. See parse_github_event.
+    target_branch = attrs.get("target_branch", "")
+    # payload["user"] is the event actor, not the MR author (only
+    # the author's numeric id is in the payload). pr_author grants
+    # restart/cancel rights, so attribute the actor only where they
+    # own the change: "open" (author) and head-moving "update"
+    # (pusher), never "reopen" by someone else.
+    actor = (payload.get("user") or {}).get("username", "")
+    pr_author = f"gitlab:{actor}" if actor and action in ("open", "update") else None
+    return ChangeRequest(
+        forge="gitlab",
+        forge_repo_id=repo_id,
+        branch=target_branch,
+        commit_sha=(attrs.get("last_commit") or {}).get("id", ""),
+        pr_number=number,
+        pr_author=pr_author,
+        # The payload has no base sha. The target branch head was
+        # fetched alongside, so merge against its ref.
+        base_sha=f"refs/heads/{target_branch}" if target_branch else None,
+        actor=f"gitlab:{actor}" if actor else None,
+    )
 
 
 def parse_gitlab_event(  # noqa: PLR0911
@@ -315,44 +484,12 @@ def parse_gitlab_event(  # noqa: PLR0911
             branch=ref.removeprefix("refs/heads/"),
             commit_sha=head,
             commit_message=head_commit.get("message", ""),
+            actor=_actor("gitlab", payload),
         )
+    if event_type == "Note Hook":
+        return _parse_gitlab_note(repo_id, payload)
     if event_type == "Merge Request Hook":
-        attrs = payload.get("object_attributes") or {}
-        number = attrs.get("iid")
-        if number is None:
-            return None
-        action = attrs.get("action", "")
-        if action == "close":
-            return PrClosed(forge="gitlab", forge_repo_id=repo_id, pr_number=number)
-        # No cancel on merge. See parse_github_event.
-        if action not in ("open", "update", "reopen"):
-            return None
-        # Metadata-only updates (labels, title, milestone) carry no
-        # oldrev. Only head-moving updates trigger a build.
-        if action == "update" and not attrs.get("oldrev"):
-            return None
-        # No commit_message. See parse_github_event.
-        target_branch = attrs.get("target_branch", "")
-        # payload["user"] is the event actor, not the MR author (only
-        # the author's numeric id is in the payload). pr_author grants
-        # restart/cancel rights, so attribute the actor only where they
-        # own the change: "open" (author) and head-moving "update"
-        # (pusher), never "reopen" by someone else.
-        actor = (payload.get("user") or {}).get("username", "")
-        pr_author = (
-            f"gitlab:{actor}" if actor and action in ("open", "update") else None
-        )
-        return ChangeRequest(
-            forge="gitlab",
-            forge_repo_id=repo_id,
-            branch=target_branch,
-            commit_sha=(attrs.get("last_commit") or {}).get("id", ""),
-            pr_number=number,
-            pr_author=pr_author,
-            # The payload has no base sha. The target branch head was
-            # fetched alongside, so merge against its ref.
-            base_sha=f"refs/heads/{target_branch}" if target_branch else None,
-        )
+        return _parse_gitlab_mr(repo_id, payload)
     return None
 
 

@@ -189,6 +189,37 @@
           {% endfor %}
         </table>
       {% endif %}
+      {% if event_effects %}
+        <h2 class="section">Event effects</h2>
+        <table class="attrs">
+          <caption class="visually-hidden">event effects</caption>
+          <thead class="visually-hidden">
+            <tr>
+              <th scope="col">status</th>
+              <th scope="col">effect</th>
+              <th scope="col">actor</th>
+              <th scope="col">duration</th>
+            </tr>
+          </thead>
+          {% for e in event_effects %}
+            <tr>
+              <td class="attr-status">{{ status_icon(e.status) }}</td>
+              <td class="attr-name">
+                <span class="muted">{{ e.kind }} ·</span>
+                {% if e.log_size or e.status == "running" %}
+                  <a href="{{ repo_path(project) }}/effects/runs/{{ e.id }}"><code>{{ e.name }}</code></a>
+                {% else %}
+                  <code>{{ e.name }}</code>
+                {% endif %}
+                {% if e.skip_reason %}<span class="muted">— {{ e.skip_reason }}</span>{% endif %}
+              </td>
+              <td class="muted">{{ e.actor or "" }}</td>
+              <td class="attr-duration">{{ e | duration if e.status not in ("skipped", "pending") }}</td>
+            </tr>
+            {% if e.error %}{{ error_row(e.error) }}{% endif %}
+          {% endfor %}
+        </table>
+      {% endif %}
     </section>
   </main>
 {% endblock body %}

@@ -16,6 +16,7 @@ RETURNING id;
 INSERT INTO work_queue (kind, dedup_key, payload)
 SELECT 'effect', u.dedup_key,
        jsonb_build_object('build_id', sqlc.arg(build_id)::bigint,
+                          'kind', sqlc.arg(kind)::text,
                           'name', u.name)
 FROM (SELECT unnest(sqlc.arg(names)::text[]) AS name,
              unnest(sqlc.arg(dedup_keys)::text[]) AS dedup_key) AS u
@@ -42,9 +43,10 @@ WHERE id = (
       )
       AND NOT (w.kind = 'effect' AND EXISTS (
         SELECT 1 FROM effect_runs e
-        JOIN effect_runs d ON d.build_id = e.build_id
+        JOIN effect_runs d ON d.build_id = e.build_id AND d.kind = 'push'
             AND d.name IN (SELECT jsonb_array_elements_text(e.deps))
         WHERE e.build_id = (w.payload->>'build_id')::bigint
+          AND e.kind = 'push' AND w.payload->>'kind' = 'push'
           AND e.name = w.payload->>'name'
           AND d.status IN ('pending', 'running')
       ))

@@ -5,7 +5,12 @@ CLI in `cli.py` is a thin standalone wrapper.
 """
 
 from .errors import EffectError
-from .eval import list_effects, list_event_effects, list_scheduled_effects
+from .eval import (
+    list_all_event_effects,
+    list_effects,
+    list_event_effects,
+    list_scheduled_effects,
+)
 from .graph import EffectMeta, EventEffectMeta
 from .options import EffectsOptions
 from .run import run_effect, run_event_effect, run_scheduled_effect
@@ -15,6 +20,7 @@ __all__ = [
     "EffectMeta",
     "EffectsOptions",
     "EventEffectMeta",
+    "list_all_event_effects",
     "list_effects",
     "list_event_effects",
     "list_scheduled_effects",

@@ -60,7 +60,16 @@ async def register_repo_hook(  # noqa: PLR0913
         "active": True,
         # "pull_request" alone does not cover pushes to an open
         # PR; Gitea delivers those as "pull_request_sync".
-        "events": ["push", "pull_request", "pull_request_sync"],
+        # "pull_request_comment" feeds onEvent.comment, unlike
+        # "issue_comment" it skips plain issues. "pull_request_label"
+        # re-delivers onEvent.pull_request.
+        "events": [
+            "push",
+            "pull_request",
+            "pull_request_sync",
+            "pull_request_comment",
+            "pull_request_label",
+        ],
         "type": "gitea",
         "config": {
             "url": target_url,

@@ -140,6 +140,13 @@ class BotRepoAccessFetcher:
         if gitlab is not None:
             self._checkers["gitlab"] = partial(self._gitlab, gitlab)
 
+    async def permission(self, forge: str, login: str, repo: RepoRef) -> _Level | None:
+        """One user on one repo. Raises ForgeError on API failure."""
+        checker = self._checkers.get(forge)
+        if checker is None:
+            return None
+        return await checker(login, repo)
+
     async def repo_access(self, user: User, repos: Sequence[RepoRef]) -> RepoAccess:
         checker = self._checkers.get(user.provider)
         if checker is None:

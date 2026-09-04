@@ -245,6 +245,9 @@ async def _settle_aborted(
         BuildResult(status, build.status_generation, []),
         eval_success=None if status == BuildStatus.CANCELLED else False,
     )
+    refreshed = await q.get_build(o.pool, id_=build.id_)
+    if refreshed is not None:
+        await o.deliver_events(event, refreshed)
 
 
 async def _record_eval_success(
@@ -576,6 +579,9 @@ async def build_attributes(  # noqa: PLR0913
 
     if status == BuildStatus.SUCCEEDED:
         await o.refresh_schedules(event)
+    refreshed = await q.get_build(o.pool, id_=build.id_)
+    if refreshed is not None:
+        await o.deliver_events(event, refreshed)
     return status
 
 

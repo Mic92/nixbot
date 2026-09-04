@@ -11,13 +11,19 @@ status updates, and secure authentication.
    - Add this user as a collaborator with **Administrator** permission to every
      repository you want to build. Repo admin is required for:
      - **Webhooks**: Gitea only lets repo admins manage webhooks. Without admin
-       the repository is still discovered, but the webhook (push, pull_request,
-       pull_request_sync events) must be created manually.
+       the repository is still discovered, but the webhook must be created
+       manually: POST to `https://<domain>/webhooks/gitea` with the events push,
+       pull_request, pull_request_sync, and for
+       [onEvent effects](EFFECTS.md#onevent) also pull_request_comment and
+       pull_request_label.
      - **Per-user visibility**: nixbot decides who may see a private repository
        by asking `GET /repos/{owner}/{repo}/collaborators/{user}/permission`
        with this token. This endpoint is only available to repo admins (or site
        admins). Without admin, private repositories are hidden from everyone but
        nixbot instance admins.
+     - **onEvent permissions**: `when.permission` and the `permission` field in
+       event payloads come from the same endpoint. Without admin they are
+       `null`, so `/command` effects gated on a permission never run.
    - Private repositories are invisible to the token until the user is added.
 
 2. **Generate an access token**:
@@ -25,6 +31,9 @@ status updates, and secure authentication.
    - Go to Settings → Applications → Generate New Token
    - Required permissions:
      - `write:repository` - To create webhooks and update commit statuses
+     - `write:issue` - To post pull request comments from
+       [onEvent effects](EFFECTS.md#onevent) (`nixbot-pr-comment`) and reply to
+       `/command` comments
      - `read:user` - To list the repositories the user has access to
    - Save the token securely
 

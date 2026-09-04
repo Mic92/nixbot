@@ -20,8 +20,10 @@ from . import db, discovery, restart_dispatch, schedule_runner
 from .config import ScheduleWhen
 from .db import BuildStatus
 from .db_gen import builds as builds_q
+from .db_gen import events as ev_q
 from .db_gen import failed as failed_q
 from .db_gen import maintenance as q
+from .deliver import Delivery, EventListingCache, deliver
 from .events import (
     BuildResult,
     ChangeEvent,
@@ -30,6 +32,8 @@ from .events import (
     effects_event_for_build,
     event_for_build,
 )
+from .forge import ForgeError
+from .forge_pr import ForgePrClient
 from .gitrepo import (
     CredentialsProvider,
     FetchCredentials,
@@ -48,6 +52,8 @@ from .webhooks import (
     ChangeRequest,
     CheckRerequested,
     PrClosed,
+    PrComment,
+    PrLabeled,
     WebhookEvent,
     is_merge_queue_branch,
     should_build_branch,
@@ -211,6 +217,11 @@ class CIService:
     # Process start (DB clock when constructed via bootstrap): effect
     # rows started after this are live deploys, not crash leftovers.
     _started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    event_listings: EventListingCache = field(default_factory=EventListingCache)
+
+    @property
+    def forge_pr(self) -> ForgePrClient:
+        return ForgePrClient(self.github, self.gitea, self.gitlab)
 
     def credentials_provider(self, forge: str) -> CredentialsProvider:
         return self.credentials_providers.get(forge, _STATIC_CREDENTIALS)
@@ -242,6 +253,48 @@ class CIService:
 
     async def submit(self, event: WebhookEvent) -> None:
         if isinstance(event, PrClosed):
+            await self._submit_pr_closed(event)
+            return
+        if isinstance(event, PrComment):
+            try:
+                if await self.forge_pr.is_self(event.actor):
+                    return
+            except ForgeError:
+                logger.warning("bot user lookup failed", exc_info=True)
+            await self._deliver_for_pr(
+                event.forge,
+                event.forge_repo_id,
+                Delivery(
+                    kind="comment",
+                    build_id=0,
+                    actor=event.actor,
+                    pr_number=event.pr_number,
+                    command=event.command,
+                    args=event.args,
+                ),
+            )
+            return
+        if isinstance(event, PrLabeled):
+            await self._deliver_for_pr(
+                event.forge,
+                event.forge_repo_id,
+                Delivery(
+                    kind="pull_request",
+                    build_id=0,
+                    actor=event.actor,
+                    pr_number=event.pr_number,
+                ),
+            )
+            return
+        if isinstance(event, CheckRerequested):
+            await self._submit_rerequest(event)
+            return
+        await self._submit_change(event)
+
+    async def _submit_pr_closed(self, event: PrClosed) -> None:
+        if not event.merged:
+            # No cancel on merge: the merge push reuses the PR build
+            # (same post-merge tree hash).
             project = await self.repo_store.by_forge_id(
                 event.forge, event.forge_repo_id
             )
@@ -254,11 +307,38 @@ class CIService:
                 forge_repo_id=event.forge_repo_id,
                 pr_number=event.pr_number,
             )
+        await self._deliver_for_pr(
+            event.forge,
+            event.forge_repo_id,
+            Delivery(
+                kind="pull_request_closed",
+                build_id=0,
+                actor=event.actor,
+                pr_number=event.pr_number,
+            ),
+        )
+
+    async def _deliver_for_pr(
+        self, forge: str, forge_repo_id: str, d: Delivery
+    ) -> None:
+        """Attach a PR-scoped delivery to the PR's latest build. PRs nixbot
+        never built (filtered, disabled) get no event effects."""
+        project = await self.repo_store.by_forge_id(forge, forge_repo_id)
+        if project is None or not project.enabled or d.pr_number is None:
             return
-        if isinstance(event, CheckRerequested):
-            await self._submit_rerequest(event)
+        build = await ev_q.latest_build_for_pr(
+            self.pool, project_id=project.id_, pr_number=d.pr_number
+        )
+        if build is None:
             return
-        await self._submit_change(event)
+        # pull_request means "this PR head built green" (docs/EFFECTS.md).
+        if d.kind == "pull_request" and build.status != BuildStatus.SUCCEEDED:
+            return
+        d = dataclasses.replace(d, build_id=build.id_)
+        # Per PR: deliveries for one PR are matched in order.
+        await self.enqueue_work(
+            "deliver", f"deliver-{project.id_}-pr-{d.pr_number}", d.as_payload()
+        )
 
     async def _submit_rerequest(self, event: CheckRerequested) -> None:
         """GitHub "Re-run" button → existing restart paths. Per-attr
@@ -332,6 +412,7 @@ class CIService:
             pr_author=change.pr_author,
             base_sha=change.base_sha,
             commit_message=change.commit_message,
+            actor=change.actor,
         )
         await self.orchestrator.handle_change_event(event, credentials)
 
@@ -417,6 +498,9 @@ class CIService:
         await WorkQueue(self.pool).enqueue(kind, dedup_key, payload)
         self._work_event.set()
 
+    def wake_work(self) -> None:
+        self._work_event.set()
+
     async def work_loop(self) -> None:
         """Single dispatcher: claims queued intent and executes it."""
         queue = WorkQueue(self.pool)
@@ -467,7 +551,11 @@ class CIService:
                 self, payload["build_id"], payload.get("name")
             )
         elif item.kind == "effect":
-            await self._run_effect_item(payload["build_id"], payload["name"])
+            await self._run_effect_item(
+                payload["build_id"], payload["name"], payload.get("kind", "push")
+            )
+        elif item.kind == "deliver":
+            await deliver(self, Delivery.from_payload(payload))
         elif item.kind == "report":
             await self._re_report(
                 payload["build_id"],
@@ -536,7 +624,7 @@ class CIService:
                 )
             raise
 
-    async def _run_effect_item(self, build_id: int, name: str) -> None:
+    async def _run_effect_item(self, build_id: int, name: str, kind: str) -> None:
         build = await builds_q.get_build(self.orchestrator.pool, id_=build_id)
         if build is None:
             return
@@ -546,13 +634,16 @@ class CIService:
         info = repo_info(project)
         credentials = await self.credentials_provider(info.forge).get(info.clone_url)
         try:
-            await self.orchestrator.run_effect_item(info, build, name, credentials)
+            await self.orchestrator.run_effect_item(
+                info, build, name, kind, credentials
+            )
         except Exception as e:
             # Setup failures (fetch/checkout) happen before the
             # runner settles the row.
             await builds_q.finish_effect(
                 self.pool,
                 build_id=build_id,
+                kind=kind,
                 name=name,
                 status="failed",
                 error=str(e) or type(e).__name__,

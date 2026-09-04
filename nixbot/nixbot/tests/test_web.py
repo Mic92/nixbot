@@ -6,6 +6,7 @@ ephemeral Postgres via the httpx ASGI test client."""
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import re
 from datetime import UTC, datetime, timedelta
@@ -43,6 +44,7 @@ from nixbot.web.logs import (
     strip_ansi,
 )
 from nixbot.web.state_routes import create_state_router
+from nixbot.web.task_routes import create_task_router
 from nixbot.web.templating import (
     branch_url,
     commit_url,
@@ -67,6 +69,7 @@ if TYPE_CHECKING:
 
     from fastapi import FastAPI
 
+    from nixbot.events import RepoInfo
     from nixbot.visibility import VisibilityService
 
 
@@ -1666,6 +1669,26 @@ def test_build_page_shows_effects(client: WebHarness) -> None:
     assert "effects/restart" not in pr_text
 
 
+def test_build_page_shows_event_effects(client: WebHarness) -> None:
+    async def seed() -> None:
+        ctx = client.ctx
+        build_id = await ctx.pool.fetchval("SELECT id FROM builds WHERE number = 3")
+        await ctx.pool.execute(
+            "INSERT INTO effect_runs (project_id, kind, build_id, name, status,"
+            " skip_reason, actor, finished_at)"
+            " SELECT project_id, 'pull_request', id, 'plan', 'skipped',"
+            " 'needs write access (actor github:mallory: none)', 'github:mallory',"
+            " now() FROM builds WHERE id = $1",
+            build_id,
+        )
+
+    client.loop.run_until_complete(seed())
+    text = client.get("/repos/github/acme/widget/builds/3").text
+    assert "Event effects" in text
+    assert "pull_request ·" in text
+    assert "needs write access" in text
+
+
 def test_effect_log_raw_text(client: WebHarness, tmp_path: Path) -> None:
     async def seed_effect_log() -> None:
         ctx = client.ctx
@@ -1781,6 +1804,47 @@ def test_effects_state_api(client: WebHarness, tmp_path: Path) -> None:
     client.loop.run_until_complete(run())
     # Scoped under the project directory, name percent-encoded.
     assert (tmp_path / "effects-state" / "7" / "known-hosts").exists()
+
+
+def test_pr_comment_api(client: WebHarness) -> None:
+    tokens = TaskTokens()
+    posted: list[tuple] = []
+
+    class FakeForgePr:
+        async def comment(
+            self, info: RepoInfo, number: int, body: str, marker: str | None
+        ) -> None:
+            posted.append((info.name, number, body, marker))
+
+    client.ctx.forge_pr = FakeForgePr()  # type: ignore[assignment]
+    client.app.include_router(create_task_router(client.ctx, tokens))
+    project_id = client.loop.run_until_complete(
+        client.ctx.pool.fetchval("SELECT id FROM projects WHERE name = 'widget'")
+    )
+    push = EffectIdentity(
+        forge="github",
+        owner="acme",
+        repo="widget",
+        effect="plan",
+        branch="main",
+        event="push",
+    )
+    pr_token = tokens.issue(
+        project_id, dataclasses.replace(push, event="pull_request", pr_number=5)
+    )
+    push_token = tokens.issue(project_id, push)
+    url = "/api/v1/pr-comment"
+
+    async def run() -> None:
+        body = {"body": "plan ok", "marker": "plan"}
+        assert (await client.http.post(url, json=body)).status_code == 401
+        push = {"Authorization": f"Bearer {push_token}"}
+        assert (await client.http.post(url, json=body, headers=push)).status_code == 403
+        auth = {"Authorization": f"Bearer {pr_token}"}
+        assert (await client.http.post(url, json=body, headers=auth)).status_code == 200
+
+    client.loop.run_until_complete(run())
+    assert posted == [("acme/widget", 5, "plan ok", "plan")]
 
 
 def test_workload_identity_api(client: WebHarness, tmp_path: Path) -> None:

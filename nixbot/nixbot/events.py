@@ -44,6 +44,9 @@ class ChangeEvent:
     pr_author: str | None = None
     base_sha: str | None = None
     commit_message: str = ""
+    # Who caused this event, forge qualified ("github:alice"). None
+    # for polled changes.
+    actor: str | None = None
 
 
 def event_for_build(repo: RepoInfo, build: BuildRecord) -> ChangeEvent:
@@ -54,6 +57,7 @@ def event_for_build(repo: RepoInfo, build: BuildRecord) -> ChangeEvent:
         branch=build.branch,
         commit_sha=build.commit_sha,
         pr_number=build.pr_number,
+        actor=build.actor,
     )
 
 

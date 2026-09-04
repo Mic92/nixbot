@@ -336,6 +336,13 @@ class RepoManager:
             credentials=credentials,
         )
 
+    async def rev_parse(self, project_key: str, rev: str) -> str:
+        """Resolve a ref on the bare clone."""
+        out = await run_git(
+            ["rev-parse", "--verify", rev], cwd=self.clone_path(project_key)
+        )
+        return out.strip()
+
     async def show_file(
         self,
         project_key: str,

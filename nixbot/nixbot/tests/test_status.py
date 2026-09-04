@@ -121,6 +121,8 @@ BUILD = BuildRecord(
     effects_branch=None,
     effects_pr_number=None,
     eval_duration_ms=None,
+    actor=None,
+    merged_pr_number=None,
 )
 
 

@@ -231,6 +231,29 @@ async def list_event_effects(
     return effects
 
 
+async def list_all_event_effects(
+    opts: EffectsOptions,
+) -> dict[str, dict[str, EventEffectMeta]]:
+    """Every onEvent kind in one evaluation (service-side listing cache).
+    Kinds without effects are omitted."""
+    hci = await _effects_expr(opts, "hci.onEvent or {}")
+    walks = " ".join(
+        f"{kind} = {_walk_expr(f'(root_.{kind} or {{}})')};" for kind in KINDS
+    )
+    expr = f"let root_ = {hci}; in {{ {walks} }}"
+    result: dict[str, dict[str, EventEffectMeta]] = {}
+    for kind, listing in (await _nix_eval_json(expr, opts)).items():
+        effects = {}
+        for name, info in listing.items():
+            validate_when(name, info["when"])
+            effects[name] = EventEffectMeta(
+                when=info["when"], lock=info["lock"], checkout=info["checkout"]
+            )
+        if effects:
+            result[kind] = effects
+    return result
+
+
 async def list_scheduled_effects(opts: EffectsOptions) -> dict[str, Any]:
     """All onSchedule definitions: schedule name -> {when, effects}."""
     expr = f"""
