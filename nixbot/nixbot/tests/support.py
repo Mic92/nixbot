@@ -40,6 +40,7 @@ from nixbot.models import CacheStatus, NixEvalJobSuccess
 
 def make_config(dsn: str, state_dir: Path, **kwargs: Any) -> Config:
     """A minimal valid Config for service-level tests."""
+    kwargs.setdefault("work_retry_backoff", 0)
     return Config(
         db_url=dsn,
         build_systems=["x86_64-linux"],

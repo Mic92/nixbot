@@ -12,6 +12,7 @@ __all__: collections.abc.Sequence[str] = (
     "enqueue_effect_items",
     "enqueue_work_item",
     "finish_work_item",
+    "retry_work_item",
     "settle_interrupted_work",
 )
 
@@ -31,12 +32,15 @@ class ClaimNextWorkItemRow:
     kind: str
     dedup_key: str
     payload: str
+    attempts: int
 
 
 ENQUEUE_WORK_ITEM: typing.Final[str] = """-- name: EnqueueWorkItem :one
 
-INSERT INTO work_queue (kind, dedup_key, payload)
-VALUES ($1, $2, $3::jsonb)
+INSERT INTO work_queue (kind, dedup_key, payload, not_before)
+VALUES ($1, $2, $3::jsonb,
+        CASE WHEN $4::double precision > 0
+             THEN now() + make_interval(secs => $4::double precision) END)
 ON CONFLICT (kind, dedup_key, md5(payload::text))
 WHERE status = 'pending'
 DO NOTHING
@@ -61,6 +65,7 @@ UPDATE work_queue SET status = 'running', claimed_at = now()
 WHERE id = (
     SELECT id FROM work_queue w
     WHERE w.status = 'pending'
+      AND (w.not_before IS NULL OR w.not_before <= now())
       AND NOT EXISTS (
         SELECT 1 FROM work_queue r
         WHERE r.dedup_key = w.dedup_key
@@ -81,13 +86,25 @@ WHERE id = (
     FOR UPDATE SKIP LOCKED
     LIMIT 1
 )
-RETURNING id, kind, dedup_key, payload
+RETURNING id, kind, dedup_key, payload, attempts
 """
 
 FINISH_WORK_ITEM: typing.Final[str] = """-- name: FinishWorkItem :exec
 UPDATE work_queue
 SET status = $2, error = $3, finished_at = now()
 WHERE id = $1
+"""
+
+RETRY_WORK_ITEM: typing.Final[str] = """-- name: RetryWorkItem :execrows
+UPDATE work_queue w SET status = 'pending', claimed_at = NULL,
+    attempts = w.attempts + 1, error = $1::text,
+    not_before = now() + make_interval(secs => $2::double precision)
+WHERE w.id = $3::bigint AND NOT EXISTS (
+    SELECT 1 FROM work_queue p
+    WHERE p.kind = w.kind AND p.dedup_key = w.dedup_key
+      AND md5(p.payload::text) = md5(w.payload::text)
+      AND p.status = 'pending' AND p.id <> w.id
+)
 """
 
 SETTLE_INTERRUPTED_WORK: typing.Final[str] = """-- name: SettleInterruptedWork :exec
@@ -115,8 +132,8 @@ WHERE finished_at IS NOT NULL
 """
 
 
-async def enqueue_work_item(conn: ConnectionLike, *, kind: str, dedup_key: str, payload: str) -> int | None:
-    row = await conn.fetchrow(ENQUEUE_WORK_ITEM, kind, dedup_key, payload)
+async def enqueue_work_item(conn: ConnectionLike, *, kind: str, dedup_key: str, payload: str, delay: float) -> int | None:
+    row = await conn.fetchrow(ENQUEUE_WORK_ITEM, kind, dedup_key, payload, delay)
     if row is None:
         return None
     return row[0]
@@ -130,11 +147,16 @@ async def claim_next_work_item(conn: ConnectionLike) -> ClaimNextWorkItemRow | N
     row = await conn.fetchrow(CLAIM_NEXT_WORK_ITEM)
     if row is None:
         return None
-    return ClaimNextWorkItemRow(id_=row[0], kind=row[1], dedup_key=row[2], payload=row[3])
+    return ClaimNextWorkItemRow(id_=row[0], kind=row[1], dedup_key=row[2], payload=row[3], attempts=row[4])
 
 
 async def finish_work_item(conn: ConnectionLike, *, id_: int, status: str, error: str | None) -> None:
     await conn.execute(FINISH_WORK_ITEM, id_, status, error)
+
+
+async def retry_work_item(conn: ConnectionLike, *, error: str, delay: float, id_: int) -> int:
+    r = await conn.execute(RETRY_WORK_ITEM, error, delay, id_)
+    return int(n) if (p := r.split()) and (n := p[-1]).isdigit() else 0
 
 
 async def settle_interrupted_work(conn: ConnectionLike) -> None:

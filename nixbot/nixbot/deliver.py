@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Any
 
 from nixbot_effects import EffectError, EventEffectMeta
@@ -22,7 +22,9 @@ from .db_gen import events as ev_q
 from .db_gen import work_queue as wq
 from .effects import effects_context
 from .forge import ForgeError
+from .gitrepo import GitError
 from .repos import repo_info
+from .work_queue import TransientError
 
 if TYPE_CHECKING:
     from .db import BuildRecord
@@ -36,8 +38,9 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class Delivery:
-    """What the hook site knows. PR metadata and permissions are
-    filled in by `deliver`."""
+    """An event to deliver, as stored in the work queue. Only what the
+    webhook or build knew; PR metadata and permissions are looked up
+    when it is delivered."""
 
     kind: str
     build_id: int
@@ -49,11 +52,7 @@ class Delivery:
     failed_attrs: list[str] | None = None
 
     def as_payload(self) -> dict[str, Any]:
-        return {k: v for k, v in self.__dict__.items() if v is not None}
-
-    @classmethod
-    def from_payload(cls, p: dict[str, Any]) -> Delivery:
-        return cls(**p)
+        return {k: v for k, v in asdict(self).items() if v is not None}
 
 
 @dataclass
@@ -64,15 +63,14 @@ class EventListing:
 
 
 class EventListingCache:
-    """`onEvent` of a project's default branch, per rev. All kinds come
-    from one evaluation, so a project without onEvent costs one nix
-    eval per default-branch push and nothing per delivery after. A
-    failed evaluation is cached too."""
+    """The default branch's `onEvent` effects per project, evaluated once
+    per default-branch rev. Deliveries in between reuse the result, so a
+    project without onEvent pays one nix eval per push to the default
+    branch. Evaluation errors are cached the same way."""
 
     def __init__(self) -> None:
         self._cache: dict[int, EventListing] = {}
-        # Concurrent deliveries of one project share one evaluation
-        # (and one worktree path).
+        # One evaluation (and worktree) per project at a time.
         self._locks: dict[int, asyncio.Lock] = {}
 
     async def get(
@@ -142,13 +140,13 @@ def build_payload(base_url: str, info: RepoInfo, build: BuildRecord) -> dict[str
 def event_dedup_key(
     project_id: int, build_id: int, kind: str, name: str, lock: str | None
 ) -> str:
-    # Same lock key scheme as onPush effects so both serialise together.
+    # onPush effects use the same lock key, so a lock is shared across both.
     if lock is not None:
         return f"effect-lock-{project_id}-{lock}"
     return f"build-{build_id}-{kind}-{name}"
 
 
-async def deliver(s: CIService, d: Delivery) -> None:
+async def deliver(s: CIService, d: Delivery, *, last_attempt: bool = False) -> None:
     build = await builds_q.get_build(s.pool, id_=d.build_id)
     if build is None:
         return
@@ -158,12 +156,15 @@ async def deliver(s: CIService, d: Delivery) -> None:
     info = repo_info(project)
     credentials = await s.credentials_provider(info.forge).get(info.clone_url)
     repos = s.orchestrator.repos
-    await repos.fetch(
-        info.key,
-        info.clone_url,
-        [f"+refs/heads/{info.default_branch}:refs/heads/{info.default_branch}"],
-        credentials,
-    )
+    try:
+        await repos.fetch(
+            info.key,
+            info.clone_url,
+            [f"+refs/heads/{info.default_branch}:refs/heads/{info.default_branch}"],
+            credentials,
+        )
+    except GitError as e:
+        raise TransientError(str(e)) from e
     code_rev = await repos.rev_parse(info.key, f"refs/heads/{info.default_branch}")
     cached = await s.event_listings.get(s, info, code_rev, credentials)
     listing = cached.effects.get(d.kind, {})
@@ -182,9 +183,14 @@ async def deliver(s: CIService, d: Delivery) -> None:
     if not listing:
         return
     try:
+        if d.command is not None and d.actor and await s.forge_pr.is_self(d.actor):
+            return
         payload = await _payload(s, project, info, build, d)
     except ForgeError as e:
-        # Never degrade to "no permission": record why nothing ran.
+        if e.transient and not last_attempt:
+            raise TransientError(str(e)) from e
+        # Record why nothing ran rather than matching with missing data,
+        # which would look like "no permission".
         logger.warning(
             "delivery failed", extra={"build_id": build.id_, "error": str(e)}
         )
@@ -225,8 +231,8 @@ async def _match_and_enqueue(  # noqa: PLR0913
 ) -> None:
     names: list[str] = []
     keys: list[str] = []
-    # Rows running right now cannot take a second run. Tell the
-    # commenter instead of dropping the command silently.
+    # Effects still running from an earlier event. A /command for one
+    # of them gets a reply instead of silently doing nothing.
     busy: list[str] = []
     payload_json = json.dumps(payload)
     for name, meta in listing.items():
