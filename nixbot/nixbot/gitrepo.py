@@ -361,6 +361,17 @@ class RepoManager:
         except GitError:
             return None
 
+    async def changed_files(
+        self, project_key: str, base_rev: str, head_rev: str
+    ) -> list[str]:
+        """Files the head changed against the merge base, as `when.modified`
+        sees them."""
+        out = await run_git(
+            ["diff", "--name-only", f"{base_rev}...{head_rev}"],
+            cwd=self.clone_path(project_key),
+        )
+        return out.split()
+
     async def create_worktree(
         self,
         project_key: str,

@@ -377,6 +377,22 @@ async def check_effect(opts: EffectsOptions, effect: str) -> None:
             await build_derivation(drv, opts)
 
 
+async def check_scheduled_effect(
+    opts: EffectsOptions, schedule: str, effect: str
+) -> None:
+    """Build an onSchedule effect's dependencies without running it."""
+    with_gcroot = _with_gcroot()
+    async with with_gcroot as gcroot:
+        drv = await instantiate_effect_deps(
+            f"let e = ({await scheduled_effect_function(opts)})"
+            f".{schedule}.outputs.effects.{effect}; in",
+            opts,
+            gcroot,
+        )
+        if drv:
+            await build_derivation(drv, opts)
+
+
 async def check_event_effect(opts: EffectsOptions, kind: str, effect: str) -> None:
     """Build an onEvent effect's dependencies without running it."""
     with_gcroot = _with_gcroot()

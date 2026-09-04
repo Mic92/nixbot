@@ -8,6 +8,7 @@ from .errors import EffectError
 from .eval import (
     check_effect,
     check_event_effect,
+    check_scheduled_effect,
     list_all_event_effects,
     list_effects,
     list_event_effects,
@@ -24,6 +25,7 @@ __all__ = [
     "EventEffectMeta",
     "check_effect",
     "check_event_effect",
+    "check_scheduled_effect",
     "list_all_event_effects",
     "list_effects",
     "list_event_effects",

@@ -1188,6 +1188,7 @@ async def test_pr_worktree_config_cannot_grant_effects(
     base = git(upstream, "rev-parse", "HEAD")
 
     fake = patch_effects(monkeypatch)
+    fake.schedules = {"nightly": {"when": {}, "effects": ["gc"]}}
     ran = fake.ran
     orchestrator, reporter, project = await make_env(
         FakeEvalRunner([mk_job("a")]),
@@ -1211,12 +1212,13 @@ async def test_pr_worktree_config_cannot_grant_effects(
     )
     # Listed for visibility (Mic92/nixbot#106), never queued or reported.
     assert await effect_statuses(pool, build.id_) == {"deploy": "skipped"}
-    # The gated effect's dependencies were still built as a check.
-    assert fake.checked == ["deploy"]
+    # The gated effect and the scheduled effect were built as checks.
+    assert sorted(fake.checked) == ["deploy", "schedule.nightly.gc"]
     assert await effect_statuses(pool, build.id_, "check") == {
-        "push.deploy": "succeeded"
+        "push.deploy": "succeeded",
+        "schedule.nightly.gc": "succeeded",
     }
-    # The PR gets an effects status for its checks: started 1, 0 failed.
+    # The PR gets an effects status for its checks: started 2, 0 failed.
     kinds = [e[0] for e in reporter.events if e[0].startswith("effect")]
     assert kinds == ["effects-started", "effects-finished"]
 

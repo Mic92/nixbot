@@ -13,7 +13,7 @@ from .errors import EffectError
 
 KINDS = ("pull_request", "pull_request_closed", "comment", "build_finished")
 WHEN_KEYS = frozenset(
-    {"permission", "labels", "branches", "commands", "status", "transition"}
+    {"permission", "labels", "branches", "commands", "modified", "status", "transition"}
 )
 _LEVELS = {None: 0, "none": 0, "read": 1, "write": 2, "admin": 3}
 _TRANSITIONS = {"broke", "fixed"}
@@ -90,6 +90,18 @@ def _commands(when: dict[str, Any], payload: Payload) -> str | None:
     return None if cmd in want else f"command /{cmd} not in {', '.join(want)}"
 
 
+def _modified(when: dict[str, Any], payload: Payload) -> str | None:
+    globs = when.get("modified")
+    if not globs:
+        return None
+    files = payload.get("modifiedFiles")
+    if files is None:
+        return "modified files are only known for pull request events"
+    if any(fnmatchcase(f, g) for g in globs for f in files):
+        return None
+    return f"no modified file matches {', '.join(globs)}"
+
+
 def _status(when: dict[str, Any], payload: Payload) -> str | None:
     want = when.get("status")
     if not want:
@@ -115,7 +127,15 @@ def _transition(when: dict[str, Any], payload: Payload) -> str | None:
     return None if ok else f"not a {want} transition ({prev or 'none'} -> {now})"
 
 
-_CHECKS = (_commands, _permission, _labels, _branches, _status, _transition)
+_CHECKS = (
+    _commands,
+    _permission,
+    _labels,
+    _branches,
+    _modified,
+    _status,
+    _transition,
+)
 
 
 def skip_reason(when: dict[str, Any], payload: Payload) -> str | None:
@@ -135,6 +155,7 @@ def event_payload(  # noqa: PLR0913
     author: str | None = None,
     author_permission: str | None = None,
     labels: list[str] | None = None,
+    modified: list[str] | None = None,
     command: str | None = None,
     args: str = "",
     status: str = "succeeded",
@@ -162,6 +183,8 @@ def event_payload(  # noqa: PLR0913
                 else permission,
             },
         }
+        # A pull request always has a file list, even an empty one.
+        payload["modifiedFiles"] = modified or []
     if command is not None:
         payload["command"] = command
         payload["args"] = args

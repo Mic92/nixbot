@@ -1,9 +1,11 @@
 """Effect checks, stored as effect_runs of kind 'check'. Every build
-evaluates the onPush/onEvent effects of its own commit and builds their
-dependencies without running them, the way hercules-ci-agent treats a
-`runIf false` effect. That turns a pull request red when it breaks an
-effect, before the effect would run on the default branch. Check names
-are `<kind>.<effect>`, kind being `push` or an event kind."""
+evaluates the onPush/onEvent/onSchedule effects of its own commit and
+builds their dependencies without running them, the way hercules-ci-agent
+treats a `runIf false` effect. That turns a pull request red when it
+breaks an effect, before the effect would run on the default branch.
+Check names are `<kind>.<effect>`; kind is `push`, an event kind, or
+`schedule.<schedule>`.
+"""
 
 from __future__ import annotations
 
@@ -29,6 +31,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 KIND = "check"
+# Prefix of a schedule check name: schedule.<schedule>.<effect>.
+SCHEDULE = "schedule"
 
 
 def build_context(
@@ -77,19 +81,25 @@ async def discover_checks(
     worktree_path: Path,
     gated_push_effects: list[str],
 ) -> list[str] | None:
-    """Names of the checks this build should run: all onEvent effects of
-    the built commit, plus the onPush effects that are gated off on this
-    ref and so would otherwise go untested. None if onEvent does not
-    evaluate."""
+    """Names of the checks this build should run: all onEvent and
+    onSchedule effects of the built commit, plus the onPush effects that
+    are gated off on this ref and so would otherwise go untested. None if
+    the definitions do not evaluate."""
     ctx = build_context(o, event, worktree_path)
     try:
         listing = await o.effects.list_all_event_effects(ctx)
+        schedules = await o.effects.list_scheduled_effects(ctx)
     except (EffectError, OSError) as e:
         await record_eval_error(o, build, "onEvent", e)
         return None
     await record_eval_error(o, build, "onEvent", None)
     names = [f"push.{n}" for n in gated_push_effects]
     names += [f"{kind}.{n}" for kind, effects in listing.items() for n in effects]
+    names += [
+        f"schedule.{schedule}.{n}"
+        for schedule, meta in schedules.items()
+        for n in meta.get("effects", ())
+    ]
     return names
 
 
@@ -109,6 +119,18 @@ async def enqueue_checks(
     )
 
 
+async def _check(o: Orchestrator, ctx: EffectsContext, name: str) -> None:
+    """Dispatch a check name back to the effect it was listed from."""
+    kind, _, effect = name.partition(".")
+    if kind == "push":
+        await o.effects.check_effect(ctx, effect)
+    elif kind == SCHEDULE:
+        schedule, _, effect = effect.partition(".")
+        await o.effects.check_scheduled_effect(ctx, schedule, effect)
+    else:
+        await o.effects.check_event_effect(ctx, kind, effect)
+
+
 async def run_check_item(
     o: Orchestrator,
     info: RepoInfo,
@@ -119,7 +141,6 @@ async def run_check_item(
     row = await q.effect_run(o.pool, build_id=build.id_, kind=KIND, name=name)
     if row is None or row.status != "pending":
         return
-    kind, _, effect = name.partition(".")
     run_id = await builds_q.start_effect(
         o.pool, build_id=build.id_, kind=KIND, name=name, status="running"
     )
@@ -134,10 +155,7 @@ async def run_check_item(
             ):
                 ctx = build_context(o, event, worktree_path)
                 ctx.log = writer.write
-                if kind == "push":
-                    await o.effects.check_effect(ctx, effect)
-                else:
-                    await o.effects.check_event_effect(ctx, kind, effect)
+                await _check(o, ctx, name)
                 success = True
         except EffectError as e:
             await writer.write(f"error: {e}\n".encode())

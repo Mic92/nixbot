@@ -109,6 +109,11 @@ class FakeEffects:
     async def check_event_effect(self, _ctx: Any, kind: str, effect: str) -> None:
         self.checked.append(f"{kind}.{effect}")
 
+    async def check_scheduled_effect(
+        self, _ctx: Any, schedule: str, effect: str
+    ) -> None:
+        self.checked.append(f"schedule.{schedule}.{effect}")
+
     async def run_effect(self, _ctx: Any, effect: str, _log: Any = None) -> bool:
         self.ran.append(effect)
         return True
