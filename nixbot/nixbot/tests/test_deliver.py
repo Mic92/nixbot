@@ -9,11 +9,12 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 import pytest
-from nixbot_effects import EventEffectMeta
+from nixbot_effects import EffectError, EventEffectMeta
 
 from nixbot.db import get_or_create_build
 from nixbot.db_gen import builds as builds_q
 from nixbot.db_gen import maintenance as maint_q
+from nixbot.deliver import EventListingCache
 from nixbot.events import ChangeEvent
 from nixbot.forge import ForgeError
 from nixbot.forge_pr import PullRequestInfo
@@ -548,3 +549,37 @@ async def test_build_outcome_and_restart_leave_event_history(
         "succeeded",
         "cancelled",
     )
+
+
+async def test_restart_event_effect_reruns_with_stored_payload(
+    env: dict[str, Any],
+) -> None:
+    svc, build_id = env["service"], env["build_id"]
+    await _deliver(svc, build_id, "github:alice")
+    assert (await _rows(svc, build_id))["preview"]["lock"] == "preview-7"
+    env["ran"].clear()
+    await svc.restart_effects(build_id, "plan", kind="pull_request")
+    await svc.drain_work()
+    [(kind, name, payload, _)] = env["ran"]
+    assert (kind, name, payload["pullRequest"]["number"]) == ("pull_request", "plan", 7)
+    # Skipped rows have a payload too and may be forced this way.
+    await svc.restart_effects(build_id, "preview", kind="pull_request")
+    await svc.drain_work()
+    assert (await _rows(svc, build_id))["preview"]["status"] == "succeeded"
+
+
+async def test_listing_failure_recorded_on_build(env: dict[str, Any]) -> None:
+    svc, build_id = env["service"], env["build_id"]
+
+    fake = svc.orchestrator.effects
+    fake.events_error = EffectError("error: attribute 'typo' missing")
+    svc.event_listings = EventListingCache()  # as if main moved
+    await _deliver(svc, build_id, "github:alice")
+    errors = await builds_q.effect_eval_errors(svc.pool, build_id=build_id)
+    assert [(x.source, "typo" in x.error) for x in errors] == [("delivery", True)]
+    assert env["ran"] == []
+    # Fixed on the default branch: the next delivery clears it.
+    fake.events_error = None
+    svc.event_listings = EventListingCache()  # as if main moved
+    await _deliver(svc, build_id, "github:alice")
+    assert await builds_q.effect_eval_errors(svc.pool, build_id=build_id) == []

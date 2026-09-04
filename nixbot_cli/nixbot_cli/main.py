@@ -392,9 +392,9 @@ def cmd_build_restart(client: NixbotClient, args: argparse.Namespace) -> int:
         print(f"restarting effects of build #{number}")
     elif args.effect:
         detail = client.build(repo, number)
-        for effect in [_match_effect(detail["effects"], sel) for sel in args.effect]:
-            client.restart_effects(repo, number, effect)
-            print(f"restarting effect {effect} of build #{number}")
+        for e in [_match_effect(detail["effects"], sel) for sel in args.effect]:
+            client.restart_effects(repo, number, e["name"], e.get("kind", "push"))
+            print(f"restarting effect {e['name']} of build #{number}")
     elif args.attr:
         rows = client.build(repo, number)["attributes"]
         for attr in [_match_attr(rows, a)["attr"] for a in args.attr]:
@@ -429,17 +429,23 @@ def cmd_build_cancel(client: NixbotClient, args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-def _match_effect(effects: list[dict], selector: str) -> str:
-    """Effect name by exact match or unambiguous substring."""
-    names = [e["name"] for e in effects]
-    if selector in names:
-        return selector
-    matches = [n for n in names if selector in n]
+def _match_effect(effects: list[dict], selector: str) -> dict:
+    """Effect row by exact name (or kind/name for event effects) or
+    unambiguous substring."""
+
+    def label(e: dict) -> str:
+        kind = e.get("kind", "push")
+        return e["name"] if kind == "push" else f"{kind}/{e['name']}"
+
+    exact = [e for e in effects if selector in (e["name"], label(e))]
+    if len(exact) == 1:
+        return exact[0]
+    matches = [e for e in effects if selector in label(e)]
     if not matches:
         msg = f"no effect matches {selector!r}"
         raise UsageError(msg)
     if len(matches) > 1:
-        msg = f"{selector!r} is ambiguous: {', '.join(matches)}"
+        msg = f"{selector!r} is ambiguous: {', '.join(label(e) for e in matches)}"
         raise UsageError(msg)
     return matches[0]
 

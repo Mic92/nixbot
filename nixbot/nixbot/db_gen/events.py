@@ -7,10 +7,12 @@ from __future__ import annotations
 
 __all__: collections.abc.Sequence[str] = (
     "QueryResults",
+    "ResetEventEffectRow",
     "SupersedeEventEffectsRow",
     "failed_attr_names",
     "latest_build_for_pr",
     "previous_finished_status",
+    "reset_event_effect",
     "supersede_event_effects",
     "upsert_event_effect",
 )
@@ -38,19 +40,27 @@ class SupersedeEventEffectsRow:
     name: str
 
 
+@dataclasses.dataclass()
+class ResetEventEffectRow:
+    id_: int
+    lock: str | None
+
+
 UPSERT_EVENT_EFFECT: typing.Final[str] = """-- name: UpsertEventEffect :one
 
 INSERT INTO effect_runs (project_id, kind, build_id, name, status, skip_reason,
-                         payload, code_rev, actor, started_at, finished_at)
+                         payload, code_rev, actor, lock, started_at, finished_at)
 SELECT b.project_id, $1::text, b.id, $2::text,
        $3::text, $4::text,
        $5::jsonb, $6::text, $7::text,
+       $8::text,
        now(), CASE WHEN $3::text = 'pending' THEN NULL ELSE now() END
-FROM builds b WHERE b.id = $8::bigint
+FROM builds b WHERE b.id = $9::bigint
 ON CONFLICT (build_id, kind, name) DO UPDATE SET
     status = EXCLUDED.status, skip_reason = EXCLUDED.skip_reason,
     payload = EXCLUDED.payload, code_rev = EXCLUDED.code_rev,
-    actor = EXCLUDED.actor, error = NULL, log_size = 0, log_truncated = FALSE,
+    actor = EXCLUDED.actor, lock = EXCLUDED.lock,
+    error = NULL, log_size = 0, log_truncated = FALSE,
     started_at = EXCLUDED.started_at, finished_at = EXCLUDED.finished_at
 WHERE effect_runs.status NOT IN ('running')
 RETURNING id
@@ -80,6 +90,15 @@ WHERE w.kind = 'effect' AND w.status = 'pending'
   AND w.payload->>'kind' = $1::text
   AND w.payload->>'name' = c.name
 RETURNING c.build_id, c.name
+"""
+
+RESET_EVENT_EFFECT: typing.Final[str] = """-- name: ResetEventEffect :one
+UPDATE effect_runs SET status = 'pending', error = NULL, log_size = 0,
+    log_truncated = FALSE, started_at = now(), finished_at = NULL
+WHERE build_id = $1::bigint AND kind = $2::text
+  AND name = $3::text
+  AND owner = 'delivery' AND payload IS NOT NULL
+RETURNING id, lock
 """
 
 LATEST_BUILD_FOR_PR: typing.Final[str] = """-- name: LatestBuildForPr :one
@@ -148,8 +167,8 @@ class QueryResults[T]:
         return self._decode_hook(record)
 
 
-async def upsert_event_effect(conn: ConnectionLike, *, kind: str, name: str, status: str, skip_reason: str | None, payload: str, code_rev: str, actor: str | None, build_id: int) -> int | None:
-    row = await conn.fetchrow(UPSERT_EVENT_EFFECT, kind, name, status, skip_reason, payload, code_rev, actor, build_id)
+async def upsert_event_effect(conn: ConnectionLike, *, kind: str, name: str, status: str, skip_reason: str | None, payload: str, code_rev: str, actor: str | None, lock: str | None, build_id: int) -> int | None:
+    row = await conn.fetchrow(UPSERT_EVENT_EFFECT, kind, name, status, skip_reason, payload, code_rev, actor, lock, build_id)
     if row is None:
         return None
     return row[0]
@@ -160,6 +179,13 @@ def supersede_event_effects(conn: ConnectionLike, *, kind: str, project_id: int,
         return SupersedeEventEffectsRow(build_id=row[0], name=row[1])
 
     return QueryResults(conn, SUPERSEDE_EVENT_EFFECTS, _decode_hook, kind, project_id, build_id, command, pr_number, branch)
+
+
+async def reset_event_effect(conn: ConnectionLike, *, build_id: int, kind: str, name: str) -> ResetEventEffectRow | None:
+    row = await conn.fetchrow(RESET_EVENT_EFFECT, build_id, kind, name)
+    if row is None:
+        return None
+    return ResetEventEffectRow(id_=row[0], lock=row[1])
 
 
 async def latest_build_for_pr(conn: ConnectionLike, *, project_id: int, pr_number: int) -> models.Build | None:

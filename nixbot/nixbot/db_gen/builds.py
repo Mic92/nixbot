@@ -17,11 +17,13 @@ __all__: collections.abc.Sequence[str] = (
     "attribute_statuses",
     "backfill_pr_author",
     "bump_build_status",
+    "clear_effect_eval_error",
     "complete_attribute",
     "create_build",
     "create_failed_build",
     "detach_build_from_pr",
     "effect_dep_statuses",
+    "effect_eval_errors",
     "effects_for_build",
     "effects_summary",
     "eval_job_rows",
@@ -34,11 +36,13 @@ __all__: collections.abc.Sequence[str] = (
     "mark_attribute_building",
     "mark_effects_started",
     "record_attributes",
+    "record_effect_eval_error",
     "record_skipped_effects",
     "set_build_status",
     "set_eval_warnings",
     "settle_unfinished_attributes",
     "start_effect",
+    "start_pending_checks",
     "start_pending_effects",
 )
 
@@ -182,7 +186,7 @@ WITH failed_effects AS (
     UPDATE effect_runs SET status = 'failed',
         error = 'build did not succeed', finished_at = now()
     WHERE effect_runs.build_id = $4::bigint
-      AND effect_runs.kind = 'push'
+      AND effect_runs.owner = 'build'
       AND effect_runs.status = 'pending'
       AND $1::text IN ('failed', 'cancelled')
 )
@@ -318,6 +322,22 @@ ON CONFLICT (build_id, kind, name) DO UPDATE SET
     deps = EXCLUDED.deps
 """
 
+START_PENDING_CHECKS: typing.Final[str] = """-- name: StartPendingChecks :exec
+WITH dropped AS (
+    DELETE FROM effect_runs
+    WHERE build_id = $2::bigint AND kind = 'check'
+      AND status <> 'running' AND NOT (name = ANY($1::text[]))
+)
+INSERT INTO effect_runs (project_id, kind, build_id, name, status)
+SELECT b.project_id, 'check', b.id, u.name, 'pending'
+FROM builds b, unnest($1::text[]) AS u(name)
+WHERE b.id = $2::bigint
+ON CONFLICT (build_id, kind, name) DO UPDATE SET
+    status = 'pending', error = NULL, log_size = 0,
+    log_truncated = FALSE, started_at = now(), finished_at = NULL
+WHERE effect_runs.status <> 'running'
+"""
+
 RECORD_SKIPPED_EFFECTS: typing.Final[str] = """-- name: RecordSkippedEffects :exec
 INSERT INTO effect_runs (project_id, kind, build_id, name, status, finished_at)
 SELECT b.project_id, 'push', b.id, u.name, 'skipped', now()
@@ -342,6 +362,13 @@ WHERE build_id = $5 AND kind = $6 AND name = $7
 """
 
 EFFECTS_SUMMARY: typing.Final[str] = """-- name: EffectsSummary :one
+WITH rows AS (
+    SELECT r.status FROM effect_runs r
+    WHERE r.build_id = $1::bigint AND r.owner = 'build'
+    UNION ALL
+    SELECT 'failed' FROM effect_eval_errors x
+    WHERE x.build_id = $1::bigint AND x.source <> 'delivery'
+)
 SELECT
     count(*) FILTER (WHERE status IN ('failed', 'dependency_failed'))::bigint AS failed,
     count(*) FILTER (WHERE status = 'succeeded')::bigint AS succeeded,
@@ -354,12 +381,27 @@ SELECT
         WHEN bool_or(status = 'succeeded') THEN 'succeeded'
         ELSE 'skipped'
     END::text AS status
-FROM effect_runs WHERE build_id = $1 AND kind = 'push'
+FROM rows
 HAVING count(*) > 0
 """
 
+RECORD_EFFECT_EVAL_ERROR: typing.Final[str] = """-- name: RecordEffectEvalError :exec
+INSERT INTO effect_eval_errors (build_id, source, error, code_rev)
+VALUES ($1, $2, $3::text, $4::text)
+ON CONFLICT (build_id, source) DO UPDATE SET
+    error = EXCLUDED.error, code_rev = EXCLUDED.code_rev, created_at = now()
+"""
+
+CLEAR_EFFECT_EVAL_ERROR: typing.Final[str] = """-- name: ClearEffectEvalError :exec
+DELETE FROM effect_eval_errors WHERE build_id = $1 AND source = $2
+"""
+
+EFFECT_EVAL_ERRORS: typing.Final[str] = """-- name: EffectEvalErrors :many
+SELECT build_id, source, error, code_rev, created_at FROM effect_eval_errors WHERE build_id = $1 ORDER BY source
+"""
+
 EFFECTS_FOR_BUILD: typing.Final[str] = """-- name: EffectsForBuild :many
-SELECT id, project_id, kind, build_id, schedule_name, name, status, error, deps, log_size, log_truncated, started_at, finished_at, payload, code_rev, skip_reason, actor FROM effect_runs WHERE build_id = $1 ORDER BY name
+SELECT id, project_id, kind, owner, build_id, schedule_name, name, status, error, deps, log_size, log_truncated, started_at, finished_at, payload, code_rev, skip_reason, actor, lock FROM effect_runs WHERE build_id = $1 ORDER BY name
 """
 
 ATTRIBUTE_STATUSES: typing.Final[str] = """-- name: AttributeStatuses :many
@@ -734,6 +776,10 @@ async def start_pending_effects(conn: ConnectionLike, *, names: collections.abc.
     await conn.execute(START_PENDING_EFFECTS, names, deps, build_id)
 
 
+async def start_pending_checks(conn: ConnectionLike, *, names: collections.abc.Sequence[str], build_id: int) -> None:
+    await conn.execute(START_PENDING_CHECKS, names, build_id)
+
+
 async def record_skipped_effects(conn: ConnectionLike, *, names: collections.abc.Sequence[str], build_id: int) -> None:
     await conn.execute(RECORD_SKIPPED_EFFECTS, names, build_id)
 
@@ -749,11 +795,26 @@ async def finish_effect(conn: ConnectionLike, *, status: str, error: str | None,
     await conn.execute(FINISH_EFFECT, status, error, log_size, log_truncated, build_id, kind, name)
 
 
-async def effects_summary(conn: ConnectionLike, *, build_id: int | None) -> EffectsSummaryRow | None:
+async def effects_summary(conn: ConnectionLike, *, build_id: int) -> EffectsSummaryRow | None:
     row = await conn.fetchrow(EFFECTS_SUMMARY, build_id)
     if row is None:
         return None
     return EffectsSummaryRow(failed=row[0], succeeded=row[1], status=row[2])
+
+
+async def record_effect_eval_error(conn: ConnectionLike, *, build_id: int, source: str, error: str, code_rev: str | None) -> None:
+    await conn.execute(RECORD_EFFECT_EVAL_ERROR, build_id, source, error, code_rev)
+
+
+async def clear_effect_eval_error(conn: ConnectionLike, *, build_id: int, source: str) -> None:
+    await conn.execute(CLEAR_EFFECT_EVAL_ERROR, build_id, source)
+
+
+def effect_eval_errors(conn: ConnectionLike, *, build_id: int) -> QueryResults[models.EffectEvalError]:
+    def _decode_hook(row: asyncpg.Record) -> models.EffectEvalError:
+        return models.EffectEvalError(build_id=row[0], source=row[1], error=row[2], code_rev=row[3], created_at=row[4])
+
+    return QueryResults(conn, EFFECT_EVAL_ERRORS, _decode_hook, build_id)
 
 
 def effects_for_build(conn: ConnectionLike, *, build_id: int | None) -> QueryResults[models.EffectRun]:
@@ -762,20 +823,22 @@ def effects_for_build(conn: ConnectionLike, *, build_id: int | None) -> QueryRes
             id_=row[0],
             project_id=row[1],
             kind=row[2],
-            build_id=row[3],
-            schedule_name=row[4],
-            name=row[5],
-            status=row[6],
-            error=row[7],
-            deps=row[8],
-            log_size=row[9],
-            log_truncated=row[10],
-            started_at=row[11],
-            finished_at=row[12],
-            payload=row[13],
-            code_rev=row[14],
-            skip_reason=row[15],
-            actor=row[16],
+            owner=row[3],
+            build_id=row[4],
+            schedule_name=row[5],
+            name=row[6],
+            status=row[7],
+            error=row[8],
+            deps=row[9],
+            log_size=row[10],
+            log_truncated=row[11],
+            started_at=row[12],
+            finished_at=row[13],
+            payload=row[14],
+            code_rev=row[15],
+            skip_reason=row[16],
+            actor=row[17],
+            lock=row[18],
         )
 
     return QueryResults(conn, EFFECTS_FOR_BUILD, _decode_hook, build_id)

@@ -4,7 +4,9 @@ listing effects/schedules and instantiating one effect derivation."""
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
+import tempfile
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -15,6 +17,8 @@ from .match import KINDS, validate_when
 from .proc import stream_command
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
     from .options import EffectsOptions
     from .proc import LogWrite
 
@@ -343,6 +347,53 @@ async def instantiate_scheduled_effect(
         opts,
         gcroot,
     )
+
+
+async def instantiate_effect_deps(
+    binding: str, opts: EffectsOptions, gcroot: Path
+) -> str:
+    """The dependency-only derivation of the effect bound to `e`:
+    hercules-ci's `dependencies` (runIf false) or stdenv's
+    `inputDerivation`. Empty when the effect has neither (a hand-rolled
+    `derivation`), in which case instantiating it was the whole check."""
+    return await _instantiate(
+        f"{binding} let d = e.run or e; in"
+        " e.dependencies or d.inputDerivation or"
+        # Instantiate the effect for its eval errors, root nothing.
+        " (builtins.seq d.drvPath [])",
+        opts,
+        gcroot,
+    )
+
+
+async def check_effect(opts: EffectsOptions, effect: str) -> None:
+    """Build an onPush effect's dependencies without running it."""
+    with_gcroot = _with_gcroot()
+    async with with_gcroot as gcroot:
+        drv = await instantiate_effect_deps(
+            f"let e = ({await effect_function(opts)}).{effect}; in", opts, gcroot
+        )
+        if drv:
+            await build_derivation(drv, opts)
+
+
+async def check_event_effect(opts: EffectsOptions, kind: str, effect: str) -> None:
+    """Build an onEvent effect's dependencies without running it."""
+    with_gcroot = _with_gcroot()
+    async with with_gcroot as gcroot:
+        drv = await instantiate_effect_deps(
+            f"let e = ({await event_effect_function(opts, kind)}).{effect}; in",
+            opts,
+            gcroot,
+        )
+        if drv:
+            await build_derivation(drv, opts)
+
+
+@contextlib.asynccontextmanager
+async def _with_gcroot() -> AsyncIterator[Path]:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        yield Path(tmpdir) / "result"
 
 
 async def build_derivation(drv_path: str, opts: EffectsOptions) -> None:

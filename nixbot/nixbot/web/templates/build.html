@@ -136,6 +136,11 @@
                hx-swap="innerHTML">
       </p>
       <div id="attributes">{% include "_attributes.html" %}</div>
+      {% for x in effect_eval_errors %}
+        {% set what = "onEvent of " ~ project.default_branch ~ " at " ~ x.code_rev[:8] if x.source == "delivery" else x.source %}
+        <h2 class="section">{{ status_icon("failed", labelled=false) }}{{ what }} failed to evaluate</h2>
+        <pre class="error">{{ x.error | excerpt(4000) | ansi }}</pre>
+      {% endfor %}
       {% if effects %}
         <div class="section-row">
           <h2 class="section">
@@ -189,6 +194,33 @@
           {% endfor %}
         </table>
       {% endif %}
+      {% if checks %}
+        <h2 class="section">Effect checks <small class="muted">dependencies built, not run</small></h2>
+        <table class="attrs">
+          <caption class="visually-hidden">effect checks</caption>
+          <thead class="visually-hidden">
+            <tr>
+              <th scope="col">status</th>
+              <th scope="col">effect</th>
+              <th scope="col">duration</th>
+            </tr>
+          </thead>
+          {% for e in checks %}
+            <tr>
+              <td class="attr-status">{{ status_icon(e.status) }}</td>
+              <td class="attr-name">
+                {% if e.log_size or e.status == "running" %}
+                  <a href="{{ repo_path(project) }}/effects/runs/{{ e.id }}"><code>{{ e.name }}</code></a>
+                {% else %}
+                  <code>{{ e.name }}</code>
+                {% endif %}
+              </td>
+              <td class="attr-duration">{{ e | duration if e.status != "pending" }}</td>
+            </tr>
+            {% if e.error %}{{ error_row(e.error) }}{% endif %}
+          {% endfor %}
+        </table>
+      {% endif %}
       {% if event_effects %}
         <h2 class="section">Event effects</h2>
         <table class="attrs">
@@ -199,6 +231,7 @@
               <th scope="col">effect</th>
               <th scope="col">actor</th>
               <th scope="col">duration</th>
+              <th scope="col">restart</th>
             </tr>
           </thead>
           {% for e in event_effects %}
@@ -211,10 +244,22 @@
                 {% else %}
                   <code>{{ e.name }}</code>
                 {% endif %}
+                {% set pr = (e.payload or {}).get("pullRequest") %}
+                {% if pr and pr.number != build.pr_number %}<span class="muted">PR #{{ pr.number }}</span>{% endif %}
                 {% if e.skip_reason %}<span class="muted">— {{ e.skip_reason }}</span>{% endif %}
               </td>
               <td class="muted">{{ e.actor or "" }}</td>
               <td class="attr-duration">{{ e | duration if e.status not in ("skipped", "pending") }}</td>
+              <td class="attr-restart">
+                {% if can_control and e.payload and e.status != "pending" %}
+                  <form method="post"
+                        action="{{ build_path(project, build.number) }}/effects/restart?name={{ e.name | urlencode }}&kind={{ e.kind | urlencode }}">
+                    <button class="icon-button"
+                            title="{{ "cancel and restart" if e.status == "running" else "restart" }} {{ e.name }}"
+                            aria-label="restart effect {{ e.name }}"><span aria-hidden="true">↻</span></button>
+                  </form>
+                {% endif %}
+              </td>
             </tr>
             {% if e.error %}{{ error_row(e.error) }}{% endif %}
           {% endfor %}

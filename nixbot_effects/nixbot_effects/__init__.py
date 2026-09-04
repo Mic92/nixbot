@@ -6,6 +6,8 @@ CLI in `cli.py` is a thin standalone wrapper.
 
 from .errors import EffectError
 from .eval import (
+    check_effect,
+    check_event_effect,
     list_all_event_effects,
     list_effects,
     list_event_effects,
@@ -20,6 +22,8 @@ __all__ = [
     "EffectMeta",
     "EffectsOptions",
     "EventEffectMeta",
+    "check_effect",
+    "check_event_effect",
     "list_all_event_effects",
     "list_effects",
     "list_event_effects",

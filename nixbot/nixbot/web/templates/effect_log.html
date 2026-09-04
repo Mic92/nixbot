@@ -31,10 +31,15 @@
           </small>
         </h2>
         <div class="controls">
-          {% if build and can_control and build.status == "succeeded" and run.status not in ("pending", "running") %}
+          {% if build and can_control and run.kind == "push" and build.status == "succeeded" and run.status not in ("pending", "running") %}
             <form method="post"
                   action="{{ build_path(project, build.number) }}/effects/restart?name={{ run.effect | urlencode }}">
               <button>restart</button>
+            </form>
+          {% elif build and can_control and run.kind not in ("push", "schedule", "check") and run.status != "pending" %}
+            <form method="post"
+                  action="{{ build_path(project, build.number) }}/effects/restart?name={{ run.effect | urlencode }}&kind={{ run.kind | urlencode }}">
+              <button>{{ "cancel and restart" if run.status == "running" else "restart" }}</button>
             </form>
           {% endif %}
         </div>
