@@ -129,7 +129,13 @@ nbo effects graph                       # dependency DAG as an ASCII tree
 nbo effects run default.deploy          # run one effect in the local sandbox
 nbo effects run github:org/repo/branch#default.deploy
 nbo effects run-scheduled github:org/repo#nightly flake-update
+nbo effects list --event pull_request --pr 7 --permission write
+nbo effects run --event comment --command apply --permission admin apply
 ```
+
+For `onEvent` effects, `--event KIND` plus flags describing the event (`--pr`,
+`--actor`, `--permission`, `--label`, `--command`, ...) stand in for a real
+delivery, and `list` then shows why each effect would be skipped.
 
 ## Exit codes
 
