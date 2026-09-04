@@ -95,6 +95,7 @@ def _payload_from_args(args: argparse.Namespace) -> dict[str, Any]:
         permission=args.permission,
         author_permission=args.author_permission,
         labels=args.labels,
+        modified=args.modified,
         command=args.command,
         args=args.args,
         status=args.build_status,
@@ -206,6 +207,13 @@ def _add_event_flags(parser: argparse.ArgumentParser) -> None:
         dest="labels",
         metavar="LABEL",
         help="a label on the pull request (repeatable)",
+    )
+    parser.add_argument(
+        "--modified",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="a file the pull request changes (repeatable)",
     )
     parser.add_argument("--command", metavar="NAME", help="the /command commented")
     parser.add_argument(

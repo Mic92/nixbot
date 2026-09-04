@@ -308,6 +308,7 @@ effect that does not match is listed as skipped with the reason.
 | `labels = [ "deploy" ]`             | the PR has all of these labels                                                                  |
 | `branches = [ "main" "release-*" ]` | glob on the PR base branch, or the built branch                                                 |
 | `commands = [ "plan" ]`             | `comment`: the `/command` used                                                                  |
+| `modified = [ "terraform/*" ]`      | a file the PR changes matches a glob; pull request events only                                  |
 | `status = [ "failed" ]`             | status of the build in the payload                                                              |
 | `transition = "broke"` / `"fixed"`  | build status changed against the previous finished build of that branch or PR                   |
 
@@ -355,9 +356,9 @@ $ nbo effects run --event comment --command apply --args "-target=null" \
 
 `list` prints every effect of that kind with the reason it would be skipped, so
 a `when` can be tried without pushing. Flags cover what `when` looks at: `--pr`,
-`--actor`, `--permission`, `--author-permission`, `--label`, `--command`,
-`--args`, `--build-status`, `--previous-build-status`. A payload recorded by
-nixbot can be used instead with `--payload FILE`.
+`--actor`, `--permission`, `--author-permission`, `--label`, `--modified`,
+`--command`, `--args`, `--build-status`, `--previous-build-status`. A payload
+recorded by nixbot can be used instead with `--payload FILE`.
 
 ## Secrets on the server
 

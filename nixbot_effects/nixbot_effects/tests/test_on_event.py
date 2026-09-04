@@ -136,6 +136,22 @@ def test_labels_branches_commands_status() -> None:
     )
 
 
+def test_modified() -> None:
+    payload = {"pullRequest": PR, "modifiedFiles": ["terraform/main.tf", "README.md"]}
+    assert skip_reason({"modified": ["terraform/*"]}, payload) is None
+    # A pull request without matching files, not "files unknown".
+    assert skip_reason({"modified": ["docs/*"]}, event_payload(pr=7)) == (
+        "no modified file matches docs/*"
+    )
+    assert skip_reason({"modified": ["docs/*", "*.nix"]}, payload) == (
+        "no modified file matches docs/*, *.nix"
+    )
+    # Events without a pull request carry no file list.
+    assert skip_reason({"modified": ["*"]}, {"build": BUILD}) == (
+        "modified files are only known for pull request events"
+    )
+
+
 def test_transition() -> None:
     def build(now: str, prev: str | None) -> dict:
         return {"build": {**BUILD, "status": now, "previousStatus": prev}}
@@ -158,8 +174,10 @@ def test_event_payload_from_fields() -> None:
         actor="github:alice",
         permission="write",
         labels=["preview"],
+        modified=["terraform/main.tf"],
     )
     assert skip_reason({"permission": "write", "labels": ["preview"]}, payload) is None
+    assert skip_reason({"modified": ["terraform/*"]}, payload) is None
     assert skip_reason({"permission": "admin"}, payload) == (
         "needs admin access (actor github:alice: write, author github:alice: write)"
     )
