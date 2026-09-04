@@ -308,6 +308,7 @@ effect that does not match is listed as skipped with the reason.
 | `labels = [ "deploy" ]`             | the PR has all of these labels                                                                  |
 | `branches = [ "main" "release-*" ]` | glob on the PR base branch, or the built branch                                                 |
 | `commands = [ "plan" ]`             | `comment`: the `/command` used                                                                  |
+| `modified = [ "terraform/*" ]`      | a file the PR changes matches a glob; pull request events only                                  |
 | `status = [ "failed" ]`             | status of the build in the payload                                                              |
 | `transition = "broke"` / `"fixed"`  | build status changed against the previous finished build of that branch or PR                   |
 

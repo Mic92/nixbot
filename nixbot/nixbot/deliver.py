@@ -168,45 +168,23 @@ async def deliver(s: CIService, d: Delivery, *, last_attempt: bool = False) -> N
     code_rev = await repos.rev_parse(info.key, f"refs/heads/{info.default_branch}")
     cached = await s.event_listings.get(s, info, code_rev, credentials)
     listing = cached.effects.get(d.kind, {})
-    if cached.error is not None:
-        await builds_q.record_effect_eval_error(
-            s.pool,
-            build_id=build.id_,
-            source="delivery",
-            error=cached.error[-8000:],
-            code_rev=code_rev,
-        )
-    else:
-        await builds_q.clear_effect_eval_error(
-            s.pool, build_id=build.id_, source="delivery"
-        )
+    await _record_listing_error(s, build, cached.error, code_rev)
     if not listing:
         return
     try:
         if d.command is not None and d.actor and await s.forge_pr.is_self(d.actor):
             return
         payload = await _payload(s, project, info, build, d)
+        if "pullRequest" in payload and any(
+            "modified" in m.when for m in listing.values()
+        ):
+            payload["modifiedFiles"] = await _modified_files(
+                s, info, payload["pullRequest"], credentials
+            )
     except ForgeError as e:
         if e.transient and not last_attempt:
             raise TransientError(str(e)) from e
-        # Record why nothing ran rather than matching with missing data,
-        # which would look like "no permission".
-        logger.warning(
-            "delivery failed", extra={"build_id": build.id_, "error": str(e)}
-        )
-        for name in listing:
-            await ev_q.upsert_event_effect(
-                s.pool,
-                build_id=build.id_,
-                kind=d.kind,
-                name=name,
-                status="failed",
-                skip_reason=f"forge lookup failed: {e}",
-                payload="{}",
-                code_rev=code_rev,
-                actor=d.actor,
-                lock=None,
-            )
+        await _fail_listing(s, d, build, listing, code_rev, e)
         return
     await ev_q.supersede_event_effects(
         s.pool,
@@ -218,6 +196,53 @@ async def deliver(s: CIService, d: Delivery, *, last_attempt: bool = False) -> N
         command=d.command,
     )
     await _match_and_enqueue(s, d, info, build, listing, payload, code_rev)
+
+
+async def _record_listing_error(
+    s: CIService, build: BuildRecord, error: str | None, code_rev: str
+) -> None:
+    """Show a broken onEvent on the build page instead of silently
+    delivering nothing."""
+    if error is None:
+        await builds_q.clear_effect_eval_error(
+            s.pool, build_id=build.id_, source="delivery"
+        )
+        return
+    await builds_q.record_effect_eval_error(
+        s.pool,
+        build_id=build.id_,
+        source="delivery",
+        error=error[-8000:],
+        code_rev=code_rev,
+    )
+
+
+async def _fail_listing(  # noqa: PLR0913
+    s: CIService,
+    d: Delivery,
+    build: BuildRecord,
+    listing: dict[str, EventEffectMeta],
+    code_rev: str,
+    error: Exception,
+) -> None:
+    """The forge stayed broken. Record why nothing ran rather than
+    matching with missing data, which would look like "no permission"."""
+    logger.warning(
+        "delivery failed", extra={"build_id": build.id_, "error": str(error)}
+    )
+    for name in listing:
+        await ev_q.upsert_event_effect(
+            s.pool,
+            build_id=build.id_,
+            kind=d.kind,
+            name=name,
+            status="failed",
+            skip_reason=f"forge lookup failed: {error}",
+            payload="{}",
+            code_rev=code_rev,
+            actor=d.actor,
+            lock=None,
+        )
 
 
 async def _match_and_enqueue(  # noqa: PLR0913
@@ -287,6 +312,23 @@ async def _match_and_enqueue(  # noqa: PLR0913
             "skipped": len(listing) - len(names),
         },
     )
+
+
+async def _modified_files(
+    s: CIService,
+    info: RepoInfo,
+    pr: dict[str, Any],
+    credentials: FetchCredentials | None,
+) -> list[str]:
+    """The PR's changed files for `when.modified`, from the mirror."""
+    base = f"refs/heads/{pr['baseRef']}"
+    try:
+        await s.orchestrator.repos.fetch(
+            info.key, info.clone_url, [f"+{base}:{base}"], credentials
+        )
+        return await s.orchestrator.repos.changed_files(info.key, base, pr["headRev"])
+    except GitError as e:
+        raise TransientError(str(e)) from e
 
 
 async def _payload(

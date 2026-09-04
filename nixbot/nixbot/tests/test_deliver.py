@@ -140,6 +140,7 @@ async def env(
         "build_id": build_id,
         "sha": sha,
         "forge": forge,
+        "fake": fake,
         "ran": ran,
         "repo": repo,
         "listing": listing,
@@ -200,6 +201,28 @@ async def test_permission_denied_records_reason(env: dict[str, Any]) -> None:
         "needs write access (actor github:mallory: none, author github:dave: none)"
     )
     assert env["ran"] == []
+
+
+async def test_modified_files_gate(env: dict[str, Any]) -> None:
+    """when.modified matches the files the PR head adds on top of its
+    base branch, fetched from the mirror."""
+    svc, build_id, repo = env["service"], env["build_id"], env["repo"]
+    git(repo, "checkout", "-q", "-b", "feature")
+    (repo / "terraform").mkdir()
+    (repo / "terraform" / "main.tf").write_text("# tf\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "add terraform")
+    head = git(repo, "rev-parse", "HEAD")
+    git(repo, "checkout", "-q", "main")
+    env["forge"].pr = replace(env["forge"].pr, head_rev=head, base_ref="main")
+    env["listings"]["pull_request"] = {
+        "tf": EventEffectMeta(when={"modified": ["terraform/*"]}),
+        "docs": EventEffectMeta(when={"modified": ["docs/*"]}),
+    }
+    await _deliver(svc, build_id, "github:alice")
+    rows = await _rows(svc, build_id)
+    assert rows["tf"]["status"] == "succeeded"
+    assert rows["docs"]["skip_reason"] == "no modified file matches docs/*"
 
 
 async def test_forge_outage_is_retried(env: dict[str, Any]) -> None:

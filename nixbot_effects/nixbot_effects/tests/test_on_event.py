@@ -136,6 +136,18 @@ def test_labels_branches_commands_status() -> None:
     )
 
 
+def test_modified() -> None:
+    payload = {"pullRequest": PR, "modifiedFiles": ["terraform/main.tf", "README.md"]}
+    assert skip_reason({"modified": ["terraform/*"]}, payload) is None
+    assert skip_reason({"modified": ["docs/*", "*.nix"]}, payload) == (
+        "no modified file matches docs/*, *.nix"
+    )
+    # Events without a pull request carry no file list.
+    assert skip_reason({"modified": ["*"]}, {"build": BUILD}) == (
+        "modified files are only known for pull request events"
+    )
+
+
 def test_transition() -> None:
     def build(now: str, prev: str | None) -> dict:
         return {"build": {**BUILD, "status": now, "previousStatus": prev}}
