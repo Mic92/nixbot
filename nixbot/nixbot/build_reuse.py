@@ -14,6 +14,7 @@ import json
 import logging
 from typing import TYPE_CHECKING
 
+from .after_build import after_build
 from .canceller import RegisterOutcome
 from .db import BuildStatus
 from .db_gen import builds as builds_q
@@ -157,25 +158,21 @@ async def reuse_terminal_build(  # noqa: PLR0913
         return
     o.canceller.complete(build.id_)
     if build.status == BuildStatus.SUCCEEDED:
-        # Guarded like in-build post-processing: a gcroots/outputs
-        # failure must not strand this context without a status.
         try:
             await _post_process_existing(o, event, build)
-            if build.effects_started:
-                # Effects already ran and will not re-run. Replay their
-                # statuses so the reusing commit is not left blank.
-                await replay_effect_statuses(o, event, build)
-            else:
-                # A build that never started effects (e.g. a PR build)
-                # must still deploy when a default-branch push reuses it.
-                await o.maybe_run_effects(event, build, worktree_path, credentials)
-            await o.refresh_schedules(event)
-            await o.deliver_events(event, build, finished=False)
         except Exception:
             logger.exception(
-                "post-processing reused build failed",
-                extra={"build_id": build.id_},
+                "gcroots/outputs for reused build failed", extra={"build_id": build.id_}
             )
+    await after_build(
+        o,
+        event,
+        build,
+        build.status,
+        worktree_path=worktree_path,
+        credentials=credentials,
+        reused=True,
+    )
     await replay_terminal_status(o, event, build)
 
 

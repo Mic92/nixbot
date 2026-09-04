@@ -112,20 +112,17 @@ async def rerun_pending_attributes(
             # the previous run may have left it red or pending.
             await o.reporter.eval_finished(event, build, EvalReport(success=True))
             # cache_failures=False: see _ReadOnlyFailedBuildCache.
-            status = await build_run.build_attributes(
+            # effects_started keeps a recovered, already-deployed
+            # build from re-deploying.
+            await build_run.build_attributes(
                 o,
                 event,
                 build,
                 worktree_path,
                 pending_jobs,
+                credentials=credentials,
                 cache_failures=False,
             )
-            if status == BuildStatus.SUCCEEDED:
-                # Crash recovery before effects started. The
-                # started-flag keeps already-deployed builds from
-                # re-deploying.
-                await o.maybe_run_effects(event, build, worktree_path, credentials)
-                await o.refresh_schedules(event)
     finally:
         o.canceller.complete(build.id_)
         o.release_run(build.id_)
