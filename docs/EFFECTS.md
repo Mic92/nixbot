@@ -220,13 +220,12 @@ forge token to push with, the effect fails with an error.
 
 ## Event effects (`onEvent`)
 
-`onPush` effects run when a branch is built. `onEvent` effects react to things
-happening around a build: a pull request turning green, a `/command` comment, a
-PR being closed, a build breaking or getting fixed. A typical use is `tofu plan`
-on every PR with the result posted as a comment, and `tofu apply` on merge. A
-complete example is in
-[examples/on-event/flake.nix](../examples/on-event/flake.nix); Hercules CI
-itself ignores `onEvent`.
+`onPush` effects run when a branch is built. `onEvent` effects react to what
+happens around a build: a pull request turning green, a `/command` comment, a PR
+closing, a build breaking. The typical use is `tofu plan` on a pull request with
+the result posted as a comment, and `tofu apply` on merge. A full example is
+[examples/on-event/flake.nix](../examples/on-event/flake.nix). Hercules CI
+ignores `onEvent`.
 
 ```nix
 herculesCI = { ... }: {
@@ -251,102 +250,96 @@ herculesCI = { ... }: {
 };
 ```
 
-### Where the code comes from
+Definitions are **always evaluated from the default branch**, whatever pull
+request the event is about. A pull request cannot change what runs by editing
+`onEvent`, it only contributes data. This is unrelated to
+`effects_on_pull_requests` in nixbot.toml, which is about a pull request's own
+`onPush` effects.
 
-The effect definitions are **always evaluated from the default branch**, no
-matter which pull request the event is about. A PR cannot change what runs by
-editing `onEvent`; it only contributes data. This is unrelated to
-`effects_on_pull_requests` in nixbot.toml, which is about a PR's own `onPush`
-effects.
-
-With `checkout = true` the **PR head** is cloned to `/build/checkout` (the
-working directory, also `$NIXBOT_EFFECT_CHECKOUT`). Unlike the `onPush` checkout
-it has no push credentials, and its content is untrusted: `tofu plan` and
-similar tools execute code from it. Guard such effects with `when.permission`.
-Event effects otherwise get the same secrets and forge token as `onPush`
-effects.
+With `checkout = true` the **PR head** is cloned to `/build/checkout`. That
+clone has no push credentials and its content is untrusted, because `tofu plan`
+and similar tools execute code from it. Guard such effects with
+`when.permission`. Secrets and the forge token are the same as for `onPush`.
 
 ### Events
 
-| kind                  | delivered when                                              |
-| --------------------- | ----------------------------------------------------------- |
-| `pull_request`        | a PR head was built green; again when reopened or relabeled |
-| `comment`             | a PR comment whose first line is `/command args`            |
-| `pull_request_closed` | a PR was closed or merged                                   |
-| `build_finished`      | any build finished                                          |
+| kind                  | delivered when                                            |
+| --------------------- | --------------------------------------------------------- |
+| `pull_request`        | a PR head was built green, also on reopen or label change |
+| `comment`             | a PR comment whose first line is `/command args`          |
+| `pull_request_closed` | a PR was closed or merged                                 |
+| `build_finished`      | any build finished                                        |
 
-Comments by bots (GitHub apps, nixbot's own account on Gitea/GitLab) are
-ignored. A `/command` for an effect that is still running from an earlier
-comment is answered with a note instead of being queued twice. Deliveries are
-queued in the database and retried with backoff while the forge API is
-unavailable; webhooks sent while nixbot itself is down are not replayed.
+Bot comments are ignored, and a `/command` for an effect that is still running
+gets a note instead of a second run. Deliveries are queued in the database and
+retried with backoff while the forge API is unavailable. Webhooks that arrive
+while nixbot itself is down are not replayed.
 
-The event is passed to the script as JSON in `$NIXBOT_EVENT_JSON`
-(`/run/event.json`) and, for the common fields, as environment variables:
-`NIXBOT_EVENT_KIND`, `NIXBOT_ACTOR`, `NIXBOT_PR_NUMBER`, `NIXBOT_PR_HEAD`,
-`NIXBOT_COMMAND`, `NIXBOT_COMMAND_ARGS`, `NIXBOT_BUILD_STATUS`,
-`NIXBOT_BUILD_URL`. The JSON has up to four top-level keys:
+The event reaches the script as JSON in `$NIXBOT_EVENT_JSON` (`/run/event.json`)
+and, for the common fields, as `NIXBOT_EVENT_KIND`, `NIXBOT_ACTOR`,
+`NIXBOT_PR_NUMBER`, `NIXBOT_PR_HEAD`, `NIXBOT_COMMAND`, `NIXBOT_COMMAND_ARGS`,
+`NIXBOT_BUILD_STATUS`, `NIXBOT_BUILD_URL`. The JSON holds up to four keys:
 
 - `actor`: who caused it, `{ "name": "github:alice", "permission": "write" }`.
-  Absent when nobody did (polled changes).
+  It is absent for polled changes. Permissions come from the forge at delivery
+  time.
 - `pullRequest`: `number`, `title`, `url`, `author` (shaped like `actor`),
   `baseRef`, `headRef`, `headRev`, `labels`, `draft`, `isFork`, `merged`.
-- `build`: `number`, `url`, `status`, `branch`, `rev`; for `build_finished` also
-  `previousStatus` and `failedAttrs`.
+- `build`: `number`, `url`, `status`, `branch`, `rev`. For `build_finished` it
+  also has `previousStatus` and `failedAttrs`.
 - `command`, `args`: for `comment`.
-
-Permissions are looked up on the forge when the event is delivered.
 
 ### Conditions
 
-`when` restricts an effect to some deliveries. All given keys must match; an
-effect that does not match is listed as skipped with the reason.
+`when` restricts an effect to some deliveries. All keys must match. An effect
+that does not match is listed as skipped with the reason.
 
-| `when` key                          | matches if                                                                                      |
-| ----------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `permission = "write"`              | actor or PR author has at least `read`/`write`/`admin`; for `comment` only the commenter counts |
-| `labels = [ "deploy" ]`             | the PR has all of these labels                                                                  |
-| `branches = [ "main" "release-*" ]` | glob on the PR base branch, or the built branch                                                 |
-| `commands = [ "plan" ]`             | `comment`: the `/command` used                                                                  |
-| `modified = [ "terraform/*" ]`      | a file the PR changes matches a glob; pull request events only                                  |
-| `status = [ "failed" ]`             | status of the build in the payload                                                              |
-| `transition = "broke"` / `"fixed"`  | build status changed against the previous finished build of that branch or PR                   |
+| `when` key                          | matches if                                                                                 |
+| ----------------------------------- | ------------------------------------------------------------------------------------------ |
+| `permission = "write"`              | actor or PR author has at least `read`/`write`/`admin` (for `comment`, only the commenter) |
+| `labels = [ "deploy" ]`             | the PR has all of these labels                                                             |
+| `branches = [ "main" "release-*" ]` | glob on the PR base branch, or the built branch                                            |
+| `commands = [ "plan" ]`             | `comment`: the `/command` used                                                             |
+| `modified = [ "terraform/*" ]`      | a file the PR changes matches a glob (pull request events only)                            |
+| `status = [ "failed" ]`             | status of the build in the payload                                                         |
+| `transition = "broke"` / `"fixed"`  | build status changed against the previous finished build of that branch or PR              |
 
 ### Ordering
 
-`lock` works as for `onPush`, so an event effect and a deploy holding the same
-lock never overlap. The name may contain `{pr}`: `lock = "preview-{pr}"`
-serialises per pull request. A newer delivery of the same kind for the same PR
-(for comments: the same command) cancels effects of the previous one that have
-not started yet. `after` is not supported.
+`lock` works as for `onPush`, so an event effect never overlaps a deploy holding
+the same lock. The name may contain `{pr}`: `lock = "preview-{pr}"` serialises
+per pull request. A newer delivery of the same kind for the same PR (for
+comments: the same command) cancels not-yet-started effects of the previous one.
+`after` is not supported.
 
 ### Reporting back
 
-Event effects post no commit statuses. Instead `mkEffect` puts
-`nixbot-pr-comment` on `PATH`, which comments on the pull request the event is
-about: `nixbot-pr-comment "text"` or `... | nixbot-pr-comment`. With
-`--replace-marker ID` the comment a previous run left with the same marker is
-edited instead of adding another. Run locally it just prints the body.
+Event effects post no commit statuses. `mkEffect` puts `nixbot-pr-comment` on
+`PATH` instead, which comments on the pull request the event is about:
+`nixbot-pr-comment "text"` or `... | nixbot-pr-comment`. With
+`--replace-marker ID` it edits the comment a previous run left with that marker.
+Run locally it just prints the body.
 
 ### Checks on every build
 
 A pull request that breaks an effect should be red before it is merged, even
-though its effects do not run. Every build therefore evaluates `onPush` and
-`onEvent` of the built commit and builds each effect's dependencies without
-running it (stdenv's `inputDerivation`, or `dependencies` of a hercules-ci
-`runIf false` effect). The results appear as "Effect checks" on the build page
-and count towards the `effects` forge status; evaluation errors are shown there
-too. If `onEvent` on the default branch is broken, the error is shown on the
-build an event was delivered for.
+though its effects do not run there. Every build therefore evaluates `onPush`
+and `onEvent` of the built commit and builds each effect's dependencies without
+running it, like hercules-ci-agent does for a `runIf false` effect. The results
+appear as "Effect checks" on the build page and count towards the `effects`
+forge status. Evaluation errors are shown there too, including a broken
+`onEvent` on the default branch found while delivering an event.
 
-### Restarting and testing
+### Restarting
 
 Event effects can be restarted from the build and run pages, with
 `nbo build restart N --effect comment/apply`, or
 `POST /api/repos/.../builds/N/effects/restart?name=apply&kind=comment`. A
-running one is cancelled first; the stored payload is reused.
+running one is cancelled first. The stored payload is reused.
 
-To try an effect locally, describe the event with flags:
+### Testing locally
+
+Describe the event with flags instead of pushing:
 
 ```console
 $ nbo effects list --event pull_request --pr 7 --permission write --label preview
@@ -357,13 +350,13 @@ $ nbo effects run --event comment --command apply --args "-target=null" \
 `list` prints every effect of that kind with the reason it would be skipped, so
 a `when` can be tried without pushing. Flags cover what `when` looks at: `--pr`,
 `--actor`, `--permission`, `--author-permission`, `--label`, `--modified`,
-`--command`, `--args`, `--build-status`, `--previous-build-status`. A payload
-recorded by nixbot can be used instead with `--payload FILE`.
+`--command`, `--args`, `--build-status`, `--previous-build-status`.
+`--payload FILE` takes a payload nixbot recorded instead.
 
-## Secrets on the server
+## Buildbot secrets configuration
 
-When nixbot runs effects, secrets come from files configured per repository or
-per organization:
+When running effects through nixbot (not locally), secrets are configured at
+different scopes:
 
 1. **Repository-specific**: `"github:owner/repo"` — applies to a single
    repository
