@@ -2,12 +2,21 @@ let
   # Both nodes build the same minimal flake with one check.
   testFlake = ''
     {
-      outputs = { self }: {
+      outputs = { self }: let
+        # Intermediate not exposed as an attribute: only the uploader
+        # (not a per-attribute post-build step) pushes it.
+        dep = derivation {
+          name = "dep";
+          system = "x86_64-linux";
+          builder = "/bin/sh";
+          args = [ "-c" "echo dep > $out" ];
+        };
+      in {
         checks.x86_64-linux.test = derivation {
           name = "test";
           system = "x86_64-linux";
           builder = "/bin/sh";
-          args = [ "-c" "echo hello > $out" ];
+          args = [ "-c" "read x < ''${dep}; echo hello $x > $out" ];
         };
       };
     }
@@ -30,7 +39,20 @@ in
   nodes = {
     # GitHub mode against a fake GitHub API: discovery, webhook, eval,
     # build, and commit-status assertions all run against local fakes.
-    github = import ./github-node.nix { flakeText = _pkgs: testFlake; };
+    github = {
+      imports = [ (import ./github-node.nix { flakeText = _pkgs: testFlake; }) ];
+      services.nixbot.uploaders = [
+        {
+          name = "local-cache";
+          command = [
+            "nix"
+            "copy"
+            "--to"
+            "file:///var/lib/nixbot/cache"
+          ];
+        }
+      ];
+    };
 
     # Gitea mode against a real Gitea: discovery registers the webhook,
     # a push delivers it, and nixbot posts commit statuses back.
@@ -179,6 +201,14 @@ in
             )
 
         retry(github_checks_posted, timeout_seconds=300)
+
+    with subtest("github: uploader pushed the output and the intermediate"):
+        narinfos = github.succeed(
+            "grep -h StorePath: /var/lib/nixbot/cache/*.narinfo"
+        )
+        print(narinfos)
+        names = {line.rsplit("-", 1)[1] for line in narinfos.split()[1::2]}
+        assert names == {"test", "dep"}, narinfos
 
     with subtest("gitea: nixbot becomes healthy"):
         gitea.wait_for_unit("nixbot.service")

@@ -15,7 +15,7 @@ import re
 from collections.abc import Callable, Mapping  # noqa: TC003
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, GetCoreSchemaHandler, field_validator
 from pydantic_core import CoreSchema, core_schema
@@ -219,6 +219,18 @@ class PostBuildStep(BaseModel):
     warn_only: bool = False
 
 
+class UploaderConfig(BaseModel):
+    """Binary-cache push command receiving batches of store paths
+    (built intermediates and final outputs) on argv or stdin."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    command: list[str | Interpolate]
+    environment: Mapping[str, str | Interpolate] = {}
+    paths_via: Literal["argv", "stdin"] = "argv"
+
+
 def glob_to_regex(glob: str) -> re.Pattern:
     return re.compile(glob.replace("*", ".*").replace("?", "."))
 
@@ -346,6 +358,7 @@ class Config(BaseModel):
     )
     outputs_path: Path | None = None
     post_build_steps: list[PostBuildStep] = []
+    uploaders: list[UploaderConfig] = []
     failed_build_report_limit: int = (
         47  # Default: 50 total - 3 reserved for eval/build/effects
     )

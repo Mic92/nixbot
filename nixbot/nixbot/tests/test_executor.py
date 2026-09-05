@@ -265,6 +265,7 @@ case "$(cat "$control" 2>/dev/null)" in
   hang) sleep 60 ;;
   hangpid) echo $$ > {tmp_path}/pid; sleep 60 ;;
   racepid) echo $$ > {tmp_path}/pid; echo ok ;;
+  events) cat {tmp_path}/events ;;
   *) echo ok; exit 0 ;;
 esac
 """
@@ -971,3 +972,39 @@ async def test_iter_lines_caps_buffered_line_length() -> None:
     chunks = [chunk async for chunk in iter_lines(reader, max_line=100)]
     assert b"".join(chunks) == b"B" * 300
     assert all(len(c) <= 100 + 64 * 1024 for c in chunks)
+
+
+def test_structured_capture_reports_built_drvs() -> None:
+    built: list[str] = []
+    cap = StructuredCapture(clock=lambda: 1.0, on_built=built.append)
+    activities: dict[int, str] = {}
+    render_log_event(
+        b'@nix {"action":"start","id":1,"type":105,"fields":["/nix/store/aaa-dep.drv"]}',
+        activities,
+        cap,
+    )
+    # Non-build activity stops (downloads, ...) are not reported.
+    render_log_event(b'@nix {"action":"start","id":2,"type":101}', activities, cap)
+    render_log_event(b'@nix {"action":"stop","id":2}', activities, cap)
+    render_log_event(b'@nix {"action":"stop","id":1}', activities, cap)
+    assert built == ["/nix/store/aaa-dep.drv"]
+
+
+async def test_executor_reports_built_drvs(tmp_path: Path, fake_nix: Path) -> None:
+    job = mk_job()
+    fake_nix.write_text("events")
+    (tmp_path / "events").write_text(
+        '@nix {"action":"start","id":1,"type":105,"fields":["/nix/store/dep.drv"]}\n'
+        '@nix {"action":"stop","id":1}\n'
+        f'@nix {{"action":"start","id":2,"type":105,"fields":["{job.drv_path}"]}}\n'
+        '@nix {"action":"stop","id":2}\n'
+    )
+    built: list[str] = []
+    executor = NixBuildExecutor(FairScheduler(1), BuildSettings(log_dir=tmp_path))
+    writer = LogWriter(path=tmp_path / "log.zst")
+    outcome = await executor.build_attribute(
+        "b", job, writer, tmp_path, on_built=built.append
+    )
+    await writer.close()
+    assert outcome == BuildOutcome.success
+    assert built == ["/nix/store/dep.drv", job.drv_path]

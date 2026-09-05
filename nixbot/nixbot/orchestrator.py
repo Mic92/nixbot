@@ -78,6 +78,7 @@ if TYPE_CHECKING:
     )
     from .repo_config import BranchConfig
     from .running_effect import RunningEffect
+    from .upload import Uploader
 
     GcrootRegistrar = Callable[[Path, str, str, str], Awaitable[None]]
     OutputWriter = Callable[[Path, str, str, str, str, str, str], Path]
@@ -113,6 +114,7 @@ class AttributeExecutor(Protocol):
         cwd: Path,
         cancel_event: asyncio.Event | None = None,
         on_start: Callable[[], Awaitable[bool]] | None = None,
+        on_built: Callable[[str], None] | None = None,
     ) -> BuildOutcome: ...
 
 
@@ -124,6 +126,7 @@ class Orchestrator:
     eval_runner: EvalRunnerLike
     executor: AttributeExecutor
     reporter: StatusReporter = field(default_factory=NullStatusReporter)
+    uploaders: list[Uploader] = field(default_factory=list)
     # Project id -> cache. Scoped so one project's failures cannot
     # affect another's builds.
     failed_build_cache: Callable[[int], FailedBuildCache] | None = None

@@ -64,6 +64,7 @@ from .status import (
     GitHubCheckRunPoster,
     GitlabStatusPoster,
 )
+from .upload import Uploader, start_uploaders
 from .visibility import AccessCache, BotRepoAccessFetcher, VisibilityService
 from .web.app import create_app
 from .web.auth_routes import create_auth_router
@@ -288,6 +289,7 @@ async def build_service(config: Config) -> tuple[CIService, FastAPI]:
         repos=RepoManager(config.state_dir),
         eval_runner=EvalRunner(limiter=CgroupLimiter.create()),
         executor=executor,
+        uploaders=[Uploader(c, pool) for c in config.uploaders],
         failed_build_cache=lambda project_id: PostgresFailedBuildCache(
             pool, project_id
         ),
@@ -505,6 +507,7 @@ async def run_service(config: Config) -> None:
 
     # Startup can take minutes. It must not keep uvicorn from binding.
     tasks = [
+        *await start_uploaders(service.orchestrator.uploaders, service.pool),
         asyncio.create_task(_run_startup(service)),
         asyncio.create_task(service.maintenance_loop()),
         asyncio.create_task(service.scheduled_effects_loop()),

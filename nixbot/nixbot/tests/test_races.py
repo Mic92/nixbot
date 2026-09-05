@@ -32,7 +32,11 @@ async def test_cancel_during_retry_window(tmp_path: Path) -> None:
     attempts = 0
 
     async def fake_run_once(
-        job: object, log_writer: object, cwd: object, cancel: asyncio.Event
+        job: object,
+        log_writer: object,
+        cwd: object,
+        cancel: asyncio.Event,
+        on_built: object = None,
     ) -> tuple[BuildOutcome, bool]:
         nonlocal attempts
         attempts += 1

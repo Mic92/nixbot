@@ -29,7 +29,7 @@ from .db import BuildStatus
 from .db_gen import builds as q
 from .db_gen import maintenance as mq
 from .events import BuildResult, EvalReport
-from .executor import failure_excerpt
+from .executor import LogWriter, failure_excerpt
 from .flake_prefetch import PrefetchError, prefetch_flake_inputs
 from .live_warnings import LiveWarningAggregator
 from .memory import calculate_eval_workers
@@ -643,6 +643,39 @@ class _OrchestratorExecutor:
             # Internal errors are not derivation failures: don't cache.
             return BuildOutcome.failure_no_cache
 
+    async def _after_success(
+        self, job: NixEvalJobSuccess, writer: LogWriter
+    ) -> BuildOutcome:
+        """Uploads (warn-only) and post-build steps for a built attribute."""
+        paths = (
+            []
+            if job.build_dependencies_only
+            else [p for p in job.outputs.values() if p]
+        )
+        results = await asyncio.gather(*(u.upload(paths) for u in self.o.uploaders))
+        for uploader, result in zip(self.o.uploaders, results, strict=True):
+            await writer.write(
+                f"\nupload {uploader.name}: "
+                f"{'ok' if result.success else 'failed'}\n".encode()
+            )
+            await writer.write(result.output.encode())
+        step_results = await run_post_build_steps(
+            self.o.config.post_build_steps,
+            build_props(self.event, job),
+            self.worktree_path,
+        )
+        for step in step_results:
+            await writer.write(
+                f"\npost-build step {step.name}: "
+                f"{'ok' if step.success else 'failed'}\n".encode()
+            )
+            await writer.write(step.output.encode())
+        if any(step.failed for step in step_results):
+            # The derivation built: fail the attribute without
+            # poisoning the failed-build cache.
+            return BuildOutcome.post_build_failure
+        return BuildOutcome.success
+
     async def _build_inner(self, job: NixEvalJobSuccess) -> BuildOutcome:
         # Runs after slot acquisition so started_at (and the shown
         # duration) excludes queue wait. False: row already terminal.
@@ -665,6 +698,10 @@ class _OrchestratorExecutor:
             await self.cancel_event.wait()
             attr_cancel.set()
 
+        def on_built(drv: str) -> None:
+            for uploader in self.o.uploaders:
+                uploader.enqueue_nowait(drv)
+
         mirror = asyncio.create_task(_mirror_build_cancel())
         try:
             async with self.o.open_log(self.build_record.id_, job.attr) as writer:
@@ -675,22 +712,10 @@ class _OrchestratorExecutor:
                     self.worktree_path,
                     attr_cancel,
                     on_start=mark_building,
+                    on_built=on_built if self.o.uploaders else None,
                 )
-                if outcome == BuildOutcome.success and self.o.config.post_build_steps:
-                    props = build_props(self.event, job)
-                    step_results = await run_post_build_steps(
-                        self.o.config.post_build_steps, props, self.worktree_path
-                    )
-                    for step in step_results:
-                        await writer.write(
-                            f"\npost-build step {step.name}: "
-                            f"{'ok' if step.success else 'failed'}\n".encode()
-                        )
-                        await writer.write(step.output.encode())
-                    if any(step.failed for step in step_results):
-                        # The derivation built: fail the attribute without
-                        # poisoning the failed-build cache.
-                        outcome = BuildOutcome.post_build_failure
+                if outcome == BuildOutcome.success:
+                    outcome = await self._after_success(job, writer)
         finally:
             mirror.cancel()
             self.o.attr_cancel_events.pop((self.build_record.id_, job.attr), None)

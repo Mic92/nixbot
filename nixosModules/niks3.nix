@@ -6,10 +6,6 @@
 }:
 let
   cfg = config.services.nixbot;
-  interpolate = value: {
-    _type = "interpolate";
-    inherit value;
-  };
 in
 {
   options.services.nixbot.niks3 = {
@@ -41,9 +37,9 @@ in
 
     systemd.services.nixbot.path = [ cfg.niks3.package ];
 
-    services.nixbot.postBuildSteps = [
+    services.nixbot.uploaders = [
       {
-        name = "Upload to niks3";
+        name = "niks3";
         environment = {
           NIKS3_SERVER_URL = cfg.niks3.serverUrl;
           # Token via file, never on the command line: /proc/<pid>/cmdline
@@ -53,11 +49,7 @@ in
         command = [
           "niks3"
           "push"
-          # out_link matches the executor's percent-encoded out-link
-          # name; "result-%(prop:attr)s" misses quoted attributes.
-          (interpolate "%(prop:out_link)s")
         ];
-        warnOnly = true; # Don't fail the build if niks3 upload fails
       }
     ];
   };
