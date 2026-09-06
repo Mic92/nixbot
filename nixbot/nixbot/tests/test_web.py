@@ -12,6 +12,7 @@ import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
+from uuid import uuid4
 
 import asyncpg
 import pytest
@@ -133,6 +134,34 @@ def test_project_page_with_filters(client: WebHarness) -> None:
     by_pr = client.get("/repos/github/acme/widget?ref=%235")
     assert "#3" in by_pr.text
     assert ">#2<" not in by_pr.text
+
+
+def test_status_badge_urls(client: WebHarness) -> None:
+    token = client.run(
+        client.ctx.pool.fetchval(
+            "SELECT badge_token FROM projects WHERE forge_repo_id = 'web-1'"
+        )
+    )
+
+    # The repository page advertises only the unguessable public URL.
+    page = client.get("/repos/github/acme/widget").text
+    assert f"http://test/badge/{token}.svg" in page
+    assert "/repos/github/acme/widget/badge.svg" not in page
+
+    public = client.get(f"/badge/{token}.svg")
+    assert public.status_code == 200
+    assert public.headers["content-type"].startswith("image/svg+xml")
+    assert 'aria-label="nixbot: failing"' in public.text
+    assert public.headers["cache-control"] == "max-age=60"
+
+    branch = client.get(f"/badge/{token}.svg?branch=feature")
+    assert 'aria-label="nixbot: building"' in branch.text
+    assert client.get(f"/badge/{uuid4()}.svg").status_code == 404
+
+    # Kept for compatibility with existing public-repository badges.
+    legacy = client.get("/repos/github/acme/widget/badge.svg")
+    assert legacy.status_code == 200
+    assert 'aria-label="nixbot: failing"' in legacy.text
 
 
 def test_all_digit_branch_is_filterable(client: WebHarness) -> None:
@@ -527,6 +556,37 @@ class _StubVisibility:
 
     async def controllable_repo_ids(self, user: object) -> list[int]:  # noqa: ARG002
         return []
+
+
+def test_private_repo_public_badge_bypasses_session_visibility(
+    client: WebHarness,
+) -> None:
+    """The token is the capability: image proxies without the user's
+    Nixbot session can render a private repository's badge."""
+    ctx = client.ctx
+
+    async def setup() -> tuple[int, object]:
+        project_id = await insert_project(
+            ctx.pool, "badge-secret", forge_repo_id="web-badge-secret", private=True
+        )
+        await insert_build(ctx.pool, project_id, status="succeeded")
+        token = await ctx.pool.fetchval(
+            "SELECT badge_token FROM projects WHERE id = $1", project_id
+        )
+        return project_id, token
+
+    project_id, token = client.run(setup())
+    ctx.visibility = cast("VisibilityService", _StubVisibility([]))
+    try:
+        assert (
+            client.get("/repos/github/acme/badge-secret/badge.svg").status_code == 404
+        )
+        public = client.get(f"/badge/{token}.svg")
+        assert public.status_code == 200
+        assert 'aria-label="nixbot: passing"' in public.text
+    finally:
+        ctx.visibility = None
+        client.run(ctx.pool.execute("DELETE FROM projects WHERE id = $1", project_id))
 
 
 def test_legacy_redirect_hides_invisible_projects(client: WebHarness) -> None:

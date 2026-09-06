@@ -155,18 +155,21 @@ authors cannot grant themselves builds or effects access.
 Nixbot serves an SVG build-status badge for the latest build on a branch:
 
 ```
-https://<nixbot-host>/repos/<forge>/<owner>/<repo>/badge.svg
+https://<nixbot-host>/badge/<token>.svg
 ```
 
-It reports the default branch unless `?branch=<name>` is given. Embed it in a
-README with:
+Copy the complete Markdown snippet from the repository's Nixbot page. The badge
+reports the default branch unless `?branch=<name>` is added to its image URL.
+For example:
 
 ```markdown
-[![nixbot](https://<nixbot-host>/repos/github/<owner>/<repo>/badge.svg)](https://<nixbot-host>/repos/github/<owner>/<repo>)
+[![nixbot](https://<nixbot-host>/badge/<token>.svg)](https://<nixbot-host>/repos/<forge>/<owner>/<repo>)
 ```
 
-Private repositories return 404 to anonymous requests, so status is never
-exposed.
+Badge URLs are public so README image proxies can load them, including for
+private repositories. Their random tokens make them unguessable; sharing a URL
+exposes only the repository's build status. Treat the URL as a secret if the
+status should remain private.
 
 ## Binary caches
 

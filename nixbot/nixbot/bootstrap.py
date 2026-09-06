@@ -340,6 +340,7 @@ async def build_service(config: Config) -> tuple[CIService, FastAPI]:
     )
     ctx.signer = signer
     ctx.authz = authz
+    ctx.base_url = config.url
     ctx.webhook_base_url = config.webhook_base_url or config.url
     ctx.token_store = ApiTokenStore(pool)
     ctx.proxy_auth_header = config.proxy_auth_header

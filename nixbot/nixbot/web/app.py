@@ -19,6 +19,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
+from uuid import UUID  # noqa: TC003 (FastAPI needs the runtime type)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable
@@ -113,6 +114,8 @@ class WebContext:
         self.authz: AuthzConfig | None = None
         # Wired by bootstrap. Admins see Gitea webhook setup with it.
         self.webhook_base_url: str | None = None
+        # Canonical externally reachable URL, used for copyable badge markup.
+        self.base_url: str | None = None
         self.token_store: ApiTokenStore | None = None
         # Logout denylist: stateless cookies stay verifiable until
         # expiry, so revoked session ids are checked server-side.
@@ -386,7 +389,17 @@ class _PageRoutes:
                 await store.latest_runs_for_project(project["id"]),
             ),
             can_run_schedules=await self._can_run_schedules(request, project["id"]),
+            badge_markdown=self._badge_markdown(request, project),
         )
+
+    def _badge_markdown(self, request: Request, project: dict[str, Any]) -> str:
+        base = (self.ctx.base_url or str(request.base_url)).rstrip("/")
+        badge_url = f"{base}/badge/{project['badge_token']}.svg"
+        repo_url = (
+            f"{base}/repos/{quote(project['forge'], safe='')}"
+            f"/{quote(project['owner'], safe='/')}/{quote(project['name'], safe='')}"
+        )
+        return f"[![nixbot]({badge_url})]({repo_url})"
 
     async def _can_run_schedules(self, request: Request, project_id: int) -> bool:
         """UX only. The run-schedule route re-checks server-side."""
@@ -632,6 +645,19 @@ class _PageRoutes:
         callers like every other route, so status never leaks."""
         ctx = self.ctx
         project = await ctx.repo_or_404(forge, owner, name, request)
+        return await self._badge_response(project, branch)
+
+    async def public_badge(self, token: UUID, branch: str = "") -> Response:
+        """Badge addressed by an unguessable bearer token. This route
+        intentionally skips repository visibility checks: possession of
+        the URL grants access only to the rendered build status."""
+        project = await self.ctx.queries.repo_by_badge_token(token)
+        if project is None:
+            raise HTTPException(status_code=404)
+        return await self._badge_response(project, branch)
+
+    async def _badge_response(self, project: dict[str, Any], branch: str) -> Response:
+        ctx = self.ctx
         builds = await ctx.queries.builds_for_repo(
             project["id"],
             limit=1,
@@ -688,6 +714,7 @@ def create_router(ctx: WebContext) -> APIRouter:
     for path, handler in html_pages:
         router.get(path, response_class=HTMLResponse)(handler)
     router.get("/repos/{forge}/{owner:owner}/{name:segment}/badge.svg")(pages.badge)
+    router.get("/badge/{token}.svg")(pages.public_badge)
     router.get("/health", response_class=PlainTextResponse)(pages.health)
     router.get("/llms.txt", response_class=PlainTextResponse)(pages.llms_txt)
     return router
@@ -725,8 +752,8 @@ the instance restricts project visibility.
   -> SSE while the attribute runs: `state` snapshot (no history), then
      drv/line/phase/drv-done deltas with raw text, `done` at the end
 - GET /api/events?build=N -> SSE build/attribute status-change cues
-- GET /repos/{forge}/{owner}/{name}/badge.svg?branch=B
-  -> SVG build-status badge for a branch (default branch when branch is omitted)
+- GET /badge/{token}.svg?branch=B
+  -> public SVG build-status badge for a branch (token shown on the repo page)
 
 ## Control (Authorization: Bearer <token>; create tokens at /settings)
 

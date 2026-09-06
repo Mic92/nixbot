@@ -29,6 +29,14 @@
                aria-label="branch name, #PR or pr/N"
                value="{{ ref }}">
       </form>
+      <details class="webhook-setup">
+        <summary>status badge</summary>
+        <div class="webhook-panel">
+          <p class="muted">Embed the latest default-branch build status in a README:</p>
+          <code>{{ badge_markdown }}</code>
+          {{ copy_btn(badge_markdown, "badge markup") }}
+        </div>
+      </details>
       {% if webhook_url %}
         <details class="webhook-setup">
           <summary>webhook setup</summary>
