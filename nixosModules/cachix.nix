@@ -118,9 +118,9 @@ in
 
     systemd.services.nixbot.path = [ pkgs.cachix ];
 
-    services.nixbot.postBuildSteps = [
+    services.nixbot.uploaders = [
       {
-        name = "Upload cachix";
+        name = "cachix";
         environment = lib.mkMerge [
           (lib.optionalAttrs (cfg.cachix.auth ? "signingKey") {
             CACHIX_SIGNING_KEY = interpolate "%(secret:cachix-signing-key)s";
@@ -133,11 +133,7 @@ in
           "cachix"
           "push"
           cfg.cachix.name
-          # out_link matches the executor's percent-encoded out-link
-          # name; "result-%(prop:attr)s" misses quoted attributes.
-          (interpolate "%(prop:out_link)s")
         ];
-        warnOnly = true; # Don't fail the build if cachix upload fails
       }
     ];
   };

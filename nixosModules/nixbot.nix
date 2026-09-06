@@ -139,6 +139,10 @@ let
         command = step.command;
         warn_only = step.warnOnly;
       }) cfg.postBuildSteps;
+      uploaders = map (u: {
+        inherit (u) name environment command;
+        paths_via = u.pathsVia;
+      }) cfg.uploaders;
       failed_build_report_limit = cfg.failedBuildReportLimit;
       status_context_prefix = cfg.statusContextPrefix;
       branches = cfg.branches;
@@ -767,6 +771,53 @@ in
               type = lib.types.bool;
               default = false;
               description = "Failures only warn instead of failing the build.";
+            };
+          };
+        }
+      );
+    };
+
+    uploaders = lib.mkOption {
+      default = [ ];
+      description = ''
+        Binary-cache push commands. Each receives batches of store paths:
+        every derivation nixbot built locally (intermediates included) plus
+        each attribute's outputs. One push per uploader runs at a time;
+        pending paths survive restarts. Failures are logged, never fail a
+        build.
+      '';
+      type = lib.types.listOf (
+        lib.types.submodule {
+          options = {
+            name = lib.mkOption {
+              type = lib.types.str;
+              description = "Identifies the queue; shown in attribute logs.";
+            };
+            command = lib.mkOption {
+              type = lib.types.listOf lib.types.anything;
+              description = "Command (execve, no shell); store paths are appended.";
+              example = [
+                "nix"
+                "copy"
+                "--to"
+                "s3://cache"
+              ];
+            };
+            environment = lib.mkOption {
+              type = lib.types.attrsOf lib.types.anything;
+              default = { };
+              description = ''
+                Extra environment. `inputs.nixbot.lib.interpolate "%(secret:NAME)s"`
+                reads a systemd credential.
+              '';
+            };
+            pathsVia = lib.mkOption {
+              type = lib.types.enum [
+                "argv"
+                "stdin"
+              ];
+              default = "argv";
+              description = "`stdin`: newline-separated paths on stdin (e.g. `attic push --stdin`).";
             };
           };
         }

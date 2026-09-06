@@ -489,7 +489,10 @@ class StructuredCapture:
     SETUP = "<setup>"
 
     def __init__(
-        self, clock: Callable[[], float] = time.time, max_lines: int | None = None
+        self,
+        clock: Callable[[], float] = time.time,
+        max_lines: int | None = None,
+        on_built: Callable[[str], None] | None = None,
     ) -> None:
         self._w = (
             LogContainerWriter(max_lines=max_lines)
@@ -508,6 +511,7 @@ class StructuredCapture:
         self._pending_cannot: str | None = None
         self._subs: list[asyncio.Queue[dict | None]] = []
         self._closed = False
+        self._on_built = on_built
         self._w.register(self.SETUP, "setup")
 
     def _ts(self) -> int:
@@ -618,6 +622,9 @@ class StructuredCapture:
             self._w.stop(drv, self._ts())
             self._running.discard(drv)
             self._emit({"t": "status", "idx": self._idx.get(drv, 0), "status": "built"})
+            # Also fires for failed builders; uploaders filter by validity.
+            if self._on_built is not None:
+                self._on_built(drv)
 
     def setup_line(self, text: str) -> None:
         self._w.line(self.SETUP, text, ts=self._ts())
@@ -791,12 +798,14 @@ class NixBuildExecutor:
         cwd: Path,
         cancel_event: asyncio.Event | None = None,
         on_start: Callable[[], Awaitable[bool]] | None = None,
+        on_built: Callable[[str], None] | None = None,
     ) -> BuildOutcome:
         """Run `nix build` for one attribute, with one automatic retry
         on transient errors (suppressed when cancellation is requested).
 
         on_start fires once a slot is acquired, right before nix runs;
-        a False return (row already terminal) skips the build."""
+        a False return (row already terminal) skips the build. on_built
+        receives each .drv nix ran a builder for."""
         cancel_event = cancel_event or asyncio.Event()
         if cancel_event.is_set():
             return BuildOutcome.cancelled
@@ -834,7 +843,7 @@ class NixBuildExecutor:
             if on_start is not None and not await on_start():
                 return BuildOutcome.cancelled
             outcome, transient = await self._run_once(
-                job, log_writer, cwd, cancel_event
+                job, log_writer, cwd, cancel_event, on_built
             )
             if outcome == BuildOutcome.failure and transient:
                 if cancel_event.is_set():
@@ -845,7 +854,9 @@ class NixBuildExecutor:
                 await log_writer.write(
                     b"\n\nnixbot: transient error detected, retrying once\n\n"
                 )
-                outcome, _ = await self._run_once(job, log_writer, cwd, cancel_event)
+                outcome, _ = await self._run_once(
+                    job, log_writer, cwd, cancel_event, on_built
+                )
             return outcome
         finally:
             self.queue.release()
@@ -856,6 +867,7 @@ class NixBuildExecutor:
         log_writer: LogWriter,
         cwd: Path,
         cancel_event: asyncio.Event,
+        on_built: Callable[[str], None] | None = None,
     ) -> tuple[BuildOutcome, bool]:
         if cancel_event.is_set():
             return BuildOutcome.cancelled, False
@@ -872,7 +884,8 @@ class NixBuildExecutor:
         assert proc.stdout is not None  # noqa: S101
 
         output_tail: deque[bytes] = deque(maxlen=100)
-        capture = StructuredCapture()
+
+        capture = StructuredCapture(on_built=on_built)
         log_writer.capture = capture
         pump_task = asyncio.create_task(
             _pump_output(proc.stdout, output_tail, log_writer, capture)

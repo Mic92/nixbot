@@ -122,6 +122,7 @@ class FakeExecutor:
         cwd: Path,
         cancel_event: asyncio.Event | None = None,
         on_start: Callable[[], Awaitable[bool]] | None = None,
+        on_built: Callable[[str], None] | None = None,
     ) -> BuildOutcome:
         if on_start is not None and not await on_start():
             return BuildOutcome.cancelled

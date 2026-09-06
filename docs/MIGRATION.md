@@ -93,6 +93,11 @@ at discovery time.
   `LoadCredential` entries from `systemd.services.buildbot-master` to
   `systemd.services.nixbot`.
 
+**Cache uploads.** `services.nixbot.cachix`/`niks3` now push every derivation
+built locally, not just each attribute's output closure. Custom `nix copy` or
+`attic push` post-build steps belong in `services.nixbot.uploaders` to get the
+same behaviour (attic needs `pathsVia = "stdin"`).
+
 **Buildbot customizations.** Anything that reached into Buildbot itself —
 `services.buildbot-master.extraConfig`, the manhole, `pythonPackages` — has no
 equivalent.
