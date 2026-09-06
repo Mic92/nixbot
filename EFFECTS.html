@@ -1,0 +1,583 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Hercules CI effects - nixbot</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="favicon-8114d1fc.png">
+        <link rel="stylesheet" href="css/variables-8adf115d.css">
+        <link rel="stylesheet" href="css/general-e96d0476.css">
+        <link rel="stylesheet" href="css/chrome-d279d366.css">
+        <link rel="stylesheet" href="css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "searchindex-88bda8a8.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="toc-1dadcb16.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">nixbot</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/Mic92/nixbot" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="hercules-ci-effects"><a class="header" href="#hercules-ci-effects">Hercules CI effects</a></h1>
+<p>See <a href="../flake.nix">flake.nix</a> for an example and the
+<a href="https://docs.hercules-ci.com/hercules-ci/effects/">Hercules CI effects documentation</a>
+for the upstream reference.</p>
+<h2 id="ordering-and-locks"><a class="header" href="#ordering-and-locks">Ordering and locks</a></h2>
+<p>Effects can declare two attributes on the effect derivation:</p>
+<ul>
+<li><code>after</code>: attribute paths of effects of the same build that must succeed first,
+e.g. <code>[ [ "default" "build-image" ] ]</code>. Each entry is a list of strings: the
+onPush job first, then the path inside that job’s effects attrset (nested
+effects work too: <code>[ "default" "env" "staging" ]</code>), so it matches the dotted
+names shown everywhere else and can reference effects of another job. The
+effect only starts once everything in <code>after</code> succeeded; if a dependency
+fails, the effect is marked <code>skipped</code> and reported as a failure. Effects not
+ordered against each other run in parallel.</li>
+<li><code>lock</code>: a named lock. Effects holding the same lock name run one at a time per
+project, across builds and pull requests — use it for shared resources like a
+staging environment or a hardware lab. A lock is handed out in build order:
+all of a build’s effects on a lock finish before the next build’s start, so
+multi-effect deployments never interleave across builds.</li>
+</ul>
+<p>Both are ordinary attributes on the effect derivation: set them next to
+<code>effectScript</code>, whether you write plain attribute sets, use this repo’s
+<a href="../herculesCI/effects-lib.nix">effects-lib</a>, or upstream
+<a href="https://docs.hercules-ci.com/hercules-ci-effects/">hercules-ci-effects</a>’
+<code>mkEffect</code> (extra attributes pass through). They are a nixbot extension:
+Hercules CI itself ignores them; only nixbot orders and serializes on them.</p>
+<pre><code class="language-nix"># flake.nix
+{
+  inputs.nixbot.url = "github:Mic92/nixbot";
+
+  outputs = { self, nixpkgs, nixbot, ... }: {
+    herculesCI = { primaryRepo, ... }: let
+      pkgs = nixpkgs.legacyPackages.x86_64-linux;
+      # Or hercules-ci-effects' mkEffect; after/lock pass through there too.
+      inherit (nixbot.lib.effects { inherit pkgs; }) mkEffect;
+    in {
+      onPush.default.outputs.effects = {
+        push-image = mkEffect {
+          inputs = [ pkgs.skopeo ];
+          effectScript = ''
+            skopeo copy docker-archive:${self.packages.x86_64-linux.image} \
+              docker://registry.example.org/app:${primaryRepo.rev}
+          '';
+        };
+
+        # Starts only after push-image succeeded; the "staging" lock makes
+        # concurrent PRs take turns deploying to staging.
+        deploy-staging = mkEffect {
+          after = [ [ "default" "push-image" ] ];
+          lock = "staging";
+          inputs = [ pkgs.kubectl ];
+          effectScript = ''
+            kubectl set image deployment/app app=registry.example.org/app:${primaryRepo.rev}
+          '';
+        };
+
+        deploy-prod = mkEffect {
+          after = [ [ "default" "deploy-staging" ] ];
+          lock = "prod";
+          inputs = [ pkgs.kubectl ];
+          effectScript = ''
+            kubectl --context prod set image deployment/app app=registry.example.org/app:${primaryRepo.rev}
+          '';
+        };
+
+        # No after/lock: runs in parallel with everything else.
+        notify = mkEffect {
+          inputs = [ pkgs.curl ];
+          effectScript = ''
+            curl -sf -d "deployed ${primaryRepo.rev}" https://chat.example.org/hook
+          '';
+        };
+      };
+    };
+  };
+}
+</code></pre>
+<p>With this flake, one push runs <code>push-image</code> and <code>notify</code> immediately and in
+parallel, then <code>deploy-staging</code>, then <code>deploy-prod</code>. If <code>push-image</code> fails, both
+deploys end up <code>skipped</code> and the commit status is red. Cycles or unknown paths
+in <code>after</code> fail effect discovery.</p>
+<p>nixbot evaluates every <code>onPush.&lt;job&gt;</code> of the <code>herculesCI</code> output. Outside the
+flake, effects are addressed by their dotted attribute path prefixed with the
+job name: <code>nbo effects run default.deploy-staging</code>, log names, and the <code>after</code>
+entries in <code>nbo effects list</code> output. Inspect the DAG locally:</p>
+<pre><code class="language-console">$ nbo effects graph
+default.notify
+default.push-image
+└── default.deploy-staging [lock: staging]
+    └── default.deploy-prod [lock: prod]
+</code></pre>
+<h2 id="nixbottoml-configuration"><a class="header" href="#nixbottoml-configuration">nixbot.toml Configuration</a></h2>
+<p>Effects branch configuration and allowing effects to run in PRs is configured
+via nixbot.toml in the default branch and is documented in the
+<a href="../README.html#per-repository-configuration">README.md</a>.</p>
+<h2 id="cli-usage"><a class="header" href="#cli-usage">CLI usage</a></h2>
+<p>The <code>nbo effects</code> commands (part of the <a href="CLI.html">nbo CLI</a>) can list and run
+effects locally, or against remote repositories using
+<a href="https://nix.dev/manual/nix/latest/command-ref/new-cli/nix3-flake#flake-references">Nix flake references</a>.</p>
+<h3 id="local-repository"><a class="header" href="#local-repository">Local repository</a></h3>
+<pre><code class="language-console">$ cd my-repo
+$ nbo effects list
+{"default.deploy": {"after": ["default.notify"], "lock": "hw-lab"}, "default.notify": {"after": [], "lock": null}}
+
+$ nbo effects graph
+default.notify
+└── default.deploy [lock: hw-lab]
+
+$ nbo effects run default.deploy
+</code></pre>
+<h3 id="remote-repository-flake-reference"><a class="header" href="#remote-repository-flake-reference">Remote repository (flake reference)</a></h3>
+<p>No local checkout needed:</p>
+<pre><code class="language-console">$ nbo effects run github:org/repo/branch#default.deploy
+$ nbo effects list github:org/repo/branch
+$ nbo effects list-schedules github:org/repo/branch
+$ nbo effects run-scheduled github:org/repo#flake-update update
+</code></pre>
+<h3 id="subcommands"><a class="header" href="#subcommands">Subcommands</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Command</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>list</code></td><td>List effects with metadata (<code>--event KIND</code> adds skip reasons)</td></tr>
+<tr><td><code>graph</code></td><td>Show the effect DAG as an ASCII tree</td></tr>
+<tr><td><code>run</code></td><td>Run a single effect (<code>--event KIND</code> runs an onEvent one)</td></tr>
+<tr><td><code>list-schedules</code></td><td>List scheduled effects</td></tr>
+<tr><td><code>run-scheduled</code></td><td>Run a specific effect from a schedule</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="flags"><a class="header" href="#flags">Flags</a></h3>
+<p>All subcommands accept:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Flag</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>--rev</code></td><td>Git revision to use</td></tr>
+<tr><td><code>--branch</code></td><td>Git branch to use</td></tr>
+<tr><td><code>--repo</code></td><td>Git repo name</td></tr>
+<tr><td><code>--path</code></td><td>Path to the repository (default: current directory)</td></tr>
+<tr><td><code>--debug</code></td><td>Enable debug mode (may leak secrets such as GITHUB_TOKEN)</td></tr>
+<tr><td><code>--no-refresh</code></td><td>Do not pass <code>--refresh</code> when resolving flake references (refresh is on by default so remote refs resolve to the latest revision)</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>run</code> and <code>run-scheduled</code> also accept:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Flag</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>--secrets</code></td><td>Path to a JSON file with secrets</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="running-effects-locally-with-secrets"><a class="header" href="#running-effects-locally-with-secrets">Running effects locally with secrets</a></h2>
+<p>Pass <code>--secrets</code> to provide secrets when running effects locally. The file is a
+JSON object where each key is a secret name and its value has a <code>"data"</code> field
+containing key-value pairs:</p>
+<pre><code class="language-json">{
+  "my-secret": {
+    "data": {
+      "token": "ghp_xxxxxxxxxxxx",
+      "username": "deploy-bot"
+    }
+  }
+}
+</code></pre>
+<pre><code class="language-console">$ nbo effects run --secrets secrets.json default.deploy
+</code></pre>
+<p>Inside the effect, secrets are available at <code>/run/secrets.json</code> (via
+<code>HERCULES_CI_SECRETS_JSON</code>). This follows the
+<a href="https://docs.hercules-ci.com/hercules-ci-agent/secrets-json/">hercules-ci secrets format</a>.</p>
+<h2 id="pushable-repository-checkout"><a class="header" href="#pushable-repository-checkout">Pushable repository checkout</a></h2>
+<p>Effects that modify the repository (auto-updates, formatting bots) can ask
+nixbot for a ready-made working copy instead of cloning inside the sandbox:</p>
+<pre><code class="language-nix">effects.flake-update = mkEffect {
+  checkout = true;
+  effectScript = ''
+    nix flake update
+    git commit -am "flake.lock: update"
+    git push origin HEAD:update-flake-lock
+  '';
+};
+</code></pre>
+<p>nixbot clones the repository from its local mirror at the commit the effect runs
+for and mounts it writable at <code>/build/checkout</code>, which is also the effect’s
+working directory (and exported as <code>NIXBOT_EFFECT_CHECKOUT</code>). The clone’s
+<code>origin</code> uses the forge token, so <code>git push</code> works without extra secrets. The
+clone is removed after the effect finishes.</p>
+<p>The <code>checkout</code> argument of <code>mkEffect</code> sets the <code>__nixbot_effect_checkout</code>
+derivation attribute; effects built without <code>mkEffect</code> can set the attribute
+directly. Effects that do not set it get no checkout. If the repository has no
+forge token to push with, the effect fails with an error.</p>
+<h2 id="event-effects-onevent"><a class="header" href="#event-effects-onevent">Event effects (<code>onEvent</code>)</a></h2>
+<p><code>onPush</code> effects run when a branch is built. <code>onEvent</code> effects react to what
+happens around a build: a pull request turning green, a <code>/command</code> comment, a PR
+closing, a build breaking. The typical use is <code>tofu plan</code> on a pull request with
+the result posted as a comment, and <code>tofu apply</code> on merge. A full example is
+<a href="../examples/on-event/flake.nix">examples/on-event/flake.nix</a>. Hercules CI
+ignores <code>onEvent</code>.</p>
+<pre><code class="language-nix">herculesCI = { ... }: {
+  onPush.default.outputs.effects.apply = mkEffect {
+    lock = "infra";
+    effectScript = "tofu apply -auto-approve";
+  };
+  onEvent.pull_request.plan = mkEffect {
+    when.permission = "write";   # pusher or PR author can write to the repo
+    lock = "infra";              # waits for a running apply
+    checkout = true;             # PR head at $NIXBOT_EFFECT_CHECKOUT
+    effectScript = ''
+      tofu plan -no-color | nixbot-pr-comment --replace-marker plan
+    '';
+  };
+  onEvent.comment.apply = mkEffect {
+    when = { commands = [ "apply" ]; permission = "admin"; };
+    lock = "infra";
+    checkout = true;
+    effectScript = "tofu apply -auto-approve $NIXBOT_COMMAND_ARGS";
+  };
+};
+</code></pre>
+<p>Definitions are <strong>always evaluated from the default branch</strong>, whatever pull
+request the event is about. A pull request cannot change what runs by editing
+<code>onEvent</code>, it only contributes data. This is unrelated to
+<code>effects_on_pull_requests</code> in nixbot.toml, which is about a pull request’s own
+<code>onPush</code> effects.</p>
+<p>With <code>checkout = true</code> the <strong>PR head</strong> is cloned to <code>/build/checkout</code>. That
+clone has no push credentials and its content is untrusted, because <code>tofu plan</code>
+and similar tools execute code from it. Guard such effects with
+<code>when.permission</code>. Secrets and the forge token are the same as for <code>onPush</code>.</p>
+<h3 id="events"><a class="header" href="#events">Events</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>kind</th><th>delivered when</th></tr>
+</thead>
+<tbody>
+<tr><td><code>pull_request</code></td><td>a PR head was built green, also on reopen or label change</td></tr>
+<tr><td><code>comment</code></td><td>a PR comment whose first line is <code>/command args</code></td></tr>
+<tr><td><code>pull_request_closed</code></td><td>a PR was closed or merged</td></tr>
+<tr><td><code>build_finished</code></td><td>any build finished</td></tr>
+</tbody>
+</table>
+</div>
+<p>Bot comments are ignored, and a <code>/command</code> for an effect that is still running
+gets a note instead of a second run. Deliveries are queued in the database and
+retried with backoff while the forge API is unavailable. Webhooks that arrive
+while nixbot itself is down are not replayed.</p>
+<p>The event reaches the script as JSON in <code>$NIXBOT_EVENT_JSON</code> (<code>/run/event.json</code>)
+and, for the common fields, as <code>NIXBOT_EVENT_KIND</code>, <code>NIXBOT_ACTOR</code>,
+<code>NIXBOT_PR_NUMBER</code>, <code>NIXBOT_PR_HEAD</code>, <code>NIXBOT_COMMAND</code>, <code>NIXBOT_COMMAND_ARGS</code>,
+<code>NIXBOT_BUILD_STATUS</code>, <code>NIXBOT_BUILD_URL</code>. The JSON holds up to four keys:</p>
+<ul>
+<li><code>actor</code>: who caused it, <code>{ "name": "github:alice", "permission": "write" }</code>.
+It is absent for polled changes. Permissions come from the forge at delivery
+time.</li>
+<li><code>pullRequest</code>: <code>number</code>, <code>title</code>, <code>url</code>, <code>author</code> (shaped like <code>actor</code>),
+<code>baseRef</code>, <code>headRef</code>, <code>headRev</code>, <code>labels</code>, <code>draft</code>, <code>isFork</code>, <code>merged</code>.</li>
+<li><code>build</code>: <code>number</code>, <code>url</code>, <code>status</code>, <code>branch</code>, <code>rev</code>. For <code>build_finished</code> it
+also has <code>previousStatus</code> and <code>failedAttrs</code>.</li>
+<li><code>command</code>, <code>args</code>: for <code>comment</code>.</li>
+</ul>
+<h3 id="conditions"><a class="header" href="#conditions">Conditions</a></h3>
+<p><code>when</code> restricts an effect to some deliveries. All keys must match. An effect
+that does not match is listed as skipped with the reason.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th><code>when</code> key</th><th>matches if</th></tr>
+</thead>
+<tbody>
+<tr><td><code>permission = "write"</code></td><td>actor or PR author has at least <code>read</code>/<code>write</code>/<code>admin</code> (for <code>comment</code>, only the commenter)</td></tr>
+<tr><td><code>labels = [ "deploy" ]</code></td><td>the PR has all of these labels</td></tr>
+<tr><td><code>branches = [ "main" "release-*" ]</code></td><td>glob on the PR base branch, or the built branch</td></tr>
+<tr><td><code>commands = [ "plan" ]</code></td><td><code>comment</code>: the <code>/command</code> used</td></tr>
+<tr><td><code>modified = [ "terraform/*" ]</code></td><td>a file the PR changes matches a glob (pull request events only)</td></tr>
+<tr><td><code>status = [ "failed" ]</code></td><td>status of the build in the payload</td></tr>
+<tr><td><code>transition = "broke"</code> / <code>"fixed"</code></td><td>build status changed against the previous finished build of that branch or PR</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="ordering"><a class="header" href="#ordering">Ordering</a></h3>
+<p><code>lock</code> works as for <code>onPush</code>, so an event effect never overlaps a deploy holding
+the same lock. The name may contain <code>{pr}</code>: <code>lock = "preview-{pr}"</code> serialises
+per pull request. A newer delivery of the same kind for the same PR (for
+comments: the same command) cancels not-yet-started effects of the previous one.
+<code>after</code> is not supported.</p>
+<h3 id="reporting-back"><a class="header" href="#reporting-back">Reporting back</a></h3>
+<p>Event effects post no commit statuses. <code>mkEffect</code> puts <code>nixbot-pr-comment</code> on
+<code>PATH</code> instead, which comments on the pull request the event is about:
+<code>nixbot-pr-comment "text"</code> or <code>... | nixbot-pr-comment</code>. With
+<code>--replace-marker ID</code> it edits the comment a previous run left with that marker.
+Run locally it just prints the body.</p>
+<h3 id="checks-on-every-build"><a class="header" href="#checks-on-every-build">Checks on every build</a></h3>
+<p>A pull request that breaks an effect should be red before it is merged, even
+though its effects do not run there. Every build therefore evaluates <code>onPush</code>
+and <code>onEvent</code> of the built commit and builds each effect’s dependencies without
+running it, like hercules-ci-agent does for a <code>runIf false</code> effect. The results
+appear as “Effect checks” on the build page and count towards the <code>effects</code>
+forge status. Evaluation errors are shown there too, including a broken
+<code>onEvent</code> on the default branch found while delivering an event.</p>
+<h3 id="restarting"><a class="header" href="#restarting">Restarting</a></h3>
+<p>Event effects can be restarted from the build and run pages, with
+<code>nbo build restart N --effect comment/apply</code>, or
+<code>POST /api/repos/.../builds/N/effects/restart?name=apply&amp;kind=comment</code>. A
+running one is cancelled first. The stored payload is reused.</p>
+<h3 id="testing-locally"><a class="header" href="#testing-locally">Testing locally</a></h3>
+<p>Describe the event with flags instead of pushing:</p>
+<pre><code class="language-console">$ nbo effects list --event pull_request --pr 7 --permission write --label preview
+$ nbo effects run --event comment --command apply --args "-target=null" \
+    --actor github:alice --permission admin --effect-checkout . apply
+</code></pre>
+<p><code>list</code> prints every effect of that kind with the reason it would be skipped, so
+a <code>when</code> can be tried without pushing. Flags cover what <code>when</code> looks at: <code>--pr</code>,
+<code>--actor</code>, <code>--permission</code>, <code>--author-permission</code>, <code>--label</code>, <code>--modified</code>,
+<code>--command</code>, <code>--args</code>, <code>--build-status</code>, <code>--previous-build-status</code>.
+<code>--payload FILE</code> takes a payload nixbot recorded instead.</p>
+<h2 id="buildbot-secrets-configuration"><a class="header" href="#buildbot-secrets-configuration">Buildbot secrets configuration</a></h2>
+<p>When running effects through nixbot (not locally), secrets are configured at
+different scopes:</p>
+<ol>
+<li><strong>Repository-specific</strong>: <code>"github:owner/repo"</code> — applies to a single
+repository</li>
+<li><strong>Organization-wide</strong>: <code>"github:org/*"</code> — applies to all repositories in an
+organization</li>
+</ol>
+<pre><code class="language-nix">services.nixbot.effects.perRepoSecretFiles = {
+  # All repos in nix-community org get this token
+  "github:nix-community/*" = config.agenix.secrets.nix-community-effects.path;
+
+  # This specific repo gets its own token (overrides org-level)
+  "github:nix-community/nixbot" = config.agenix.secrets.nixbot-effects.path;
+
+  # All repos in a Gitea org
+  "gitea:my-org/*" = config.agenix.secrets.my-org-effects.path;
+};
+</code></pre>
+<p>The secrets files must be valid JSON files containing the secrets that will be
+made available to your effects at runtime.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="GITLAB.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="OIDC.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="GITLAB.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="OIDC.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr-ef4e11c1.min.js"></script>
+        <script src="mark-09e88c2c.min.js"></script>
+        <script src="searcher-09f2665d.js"></script>
+
+        <script src="clipboard-1626706a.min.js"></script>
+        <script src="highlight-abc7f01d.js"></script>
+        <script src="book-609e4cb8.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

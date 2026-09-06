@@ -1,0 +1,1799 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>nixbot</title>
+        <meta name="robots" content="noindex">
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="favicon-8114d1fc.png">
+        <link rel="stylesheet" href="css/variables-8adf115d.css">
+        <link rel="stylesheet" href="css/general-e96d0476.css">
+        <link rel="stylesheet" href="css/chrome-d279d366.css">
+        <link rel="stylesheet" href="css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "searchindex-88bda8a8.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="toc-1dadcb16.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">nixbot</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/Mic92/nixbot" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="nixbot"><a class="header" href="#nixbot">Nixbot</a></h1>
+<p>Nixbot is a continuous integration (CI) service for the Nix ecosystem, shipped
+as a single NixOS service. It is a rewrite of
+<a href="https://github.com/nix-community/buildbot-nix">buildbot-nix</a>, its spiritual
+ancestor.</p>
+<p>What started as a set of Buildbot plugins now runs standalone. One server
+handles forge webhooks, nix-eval-jobs evaluation, builds through the local nix
+daemon (offloaded via remote builders), commit statuses, and its own web
+frontend.</p>
+<p>Chat with us on Matrix:
+<a href="https://matrix.to/#/#nixbot:thalheim.io">#nixbot:thalheim.io</a></p>
+<h2 id="features"><a class="header" href="#features">Features</a></h2>
+<ul>
+<li>Fast, Parallel evaluation using
+<a href="https://github.com/nix-community/nix-eval-jobs">nix-eval-jobs</a></li>
+<li>Gitea/Github integration:
+<ul>
+<li>Login with GitHub to control builds</li>
+<li>CI status notification in pull requests and on the default branch</li>
+</ul>
+</li>
+<li>Embeddable SVG build-status badges for READMEs</li>
+<li>All builds share the same nix store for speed</li>
+<li>Tested with large flakes (50k flake outputs per evaluation)</li>
+<li>The last attribute of a build is protected from garbage collection</li>
+<li>Build matrix based on <code>.#checks</code> plus the <code>herculesCI</code> onPush jobs of your
+flake</li>
+<li>No arbitrary code runs outside of the Nix sandbox</li>
+<li><a href="https://docs.hercules-ci.com/hercules-ci-effects/">hercules-ci effects</a> to
+run impure CI steps i.e. deploying NixOS, with dependency ordering and named
+locks</li>
+</ul>
+<h2 id="getting-started"><a class="header" href="#getting-started">Getting Started</a></h2>
+<p>To set up nixbot, start by exploring the provided examples:</p>
+<ul>
+<li>Check out the basic setup in <a href="examples/nixbot.nix">example</a>.</li>
+<li>The NixOS module lives in
+<a href="nixosModules/nixbot.nix">nixosModules/nixbot.nix</a>.</li>
+<li>For local development, see
+<a href="docs/LOCAL_DEVELOPMENT.html">Local Development Guide</a>.</li>
+</ul>
+<p>Additionally, you can find real-world examples at the end of this document.</p>
+<p>The service runs on one machine; to support multiple architectures and to scale
+out builds, configure
+<a href="https://nixos.org/manual/nix/stable/advanced-topics/distributed-builds">nix remote builders</a>.
+For a practical NixOS example, see
+<a href="https://github.com/Mic92/dotfiles/blob/main/machines/eve/modules/remote-builder.nix">this remote builder configuration</a>.</p>
+<h2 id="migrating-from-buildbot-nix"><a class="header" href="#migrating-from-buildbot-nix">Migrating from buildbot-nix</a></h2>
+<p>Nixbot replaces the buildbot master/worker pair with a single service. See the
+<a href="docs/MIGRATION.html">migration guide</a> for the full upgrade instructions.</p>
+<h2 id="using-nixbot-in-your-project"><a class="header" href="#using-nixbot-in-your-project">Using Nixbot in Your Project</a></h2>
+<p>Nixbot automatically triggers builds for your project under these conditions:</p>
+<ul>
+<li>When a pull request is opened.</li>
+<li>When a commit is pushed to the default git branch.</li>
+</ul>
+<p>It evaluates the <code>.#checks</code> attribute of your project’s flake in parallel; each
+attribute results in a separate build step (named
+<code>default.checks.&lt;system&gt;.&lt;name&gt;</code>). You can test these builds locally using
+<code>nix flake check -L</code> or
+<a href="https://github.com/Mic92/nix-fast-build">nix-fast-build</a>.</p>
+<p>If your flake also defines a <code>herculesCI</code> output (by hand or via
+<a href="https://docs.hercules-ci.com/hercules-ci-effects/">hercules-ci-effects</a>),
+nixbot additionally follows
+<a href="https://docs.hercules-ci.com/hercules-ci-agent/evaluation">hercules-ci-agent’s evaluation
+semantics</a>: every
+<code>onPush.&lt;job&gt;.outputs</code> attribute is built (named <code>&lt;job&gt;.&lt;path&gt;</code>),
+<code>outputs.effects</code> run as <a href="docs/EFFECTS.html">effects</a>, <code>ciSystems</code> filters
+per-system outputs, and the <code>buildDependenciesOnly</code>, <code>noBuildPhase</code>,
+<code>ignoreFailure</code> and <code>requireFailure</code> build modifiers are honored.</p>
+<p>If you need to build other parts of your flake, such as packages or NixOS
+machines, add them to <code>onPush.&lt;job&gt;.outputs</code> or re-export them into the
+<code>.#checks</code> output. Here are two examples to guide you:</p>
+<ul>
+<li>Using
+<a href="https://github.com/Mic92/dotfiles/blob/10890601a02f843b49fe686d7bc19cb66a04e3d7/flake.nix#L139">flake-parts</a>.</li>
+<li>A
+<a href="https://github.com/nix-community/nixos-images/blob/56b52791312edeade1e6bd853ce56c778f363d50/flake.nix#L53">plain flake example</a>.</li>
+</ul>
+<h3 id="authentication-backend"><a class="header" href="#authentication-backend">Authentication backend</a></h3>
+<p>Anonymous users get read-only access to public projects; private repositories
+and their builds are only visible to users with access on the forge. For write
+actions (restart, cancel) a login is required. Every enabled forge with OAuth
+credentials configured offers a login, OIDC via <code>services.nixbot.oidc.enable</code>;
+several providers can be active at once.</p>
+<p>We have the following roles:</p>
+<ul>
+<li>Admins (hard-coded in the NixOS configuration): reload the project list,
+enable/disable projects, restart/cancel any build.</li>
+<li>Repo writers (forge write access): restart/cancel that repository’s builds.</li>
+<li>PR authors: restart/cancel their own pull request’s builds.</li>
+</ul>
+<h5 id="github-integration"><a class="header" href="#github-integration">GitHub Integration</a></h5>
+<p>Nixbot uses GitHub App authentication to integrate with GitHub repositories.
+This enables automatic webhook setup, check-run reporting (with a working Re-run
+button), and secure authentication.</p>
+<p>See the <a href="docs/GITHUB.html">GitHub documentation</a> for setup instructions.</p>
+<h5 id="gitea-integration"><a class="header" href="#gitea-integration">Gitea Integration</a></h5>
+<p>Nixbot integrates with Gitea using access tokens for repository management and
+OAuth2 for user authentication. This enables automatic webhook setup, commit
+status updates, and secure authentication.</p>
+<p>See the <a href="docs/GITEA.html">Gitea documentation</a> for setup instructions.</p>
+<h5 id="gitlab-integration"><a class="header" href="#gitlab-integration">GitLab Integration</a></h5>
+<p>Token-based integration with per-repository webhooks and commit status updates.</p>
+<p>See the <a href="docs/GITLAB.html">GitLab documentation</a> for setup instructions.</p>
+<h5 id="generic-oidc-authentication"><a class="header" href="#generic-oidc-authentication">Generic OIDC Authentication</a></h5>
+<p>Nixbot supports generic OpenID Connect (OIDC) authentication, allowing you to
+use any OIDC-compliant identity provider (Keycloak, PocketID, Authentik, etc.)
+for user login.</p>
+<p>See the <a href="docs/OIDC.html">OIDC documentation</a> for configuration details.</p>
+<h3 id="per-repository-configuration"><a class="header" href="#per-repository-configuration">Per Repository Configuration</a></h3>
+<p>Currently <code>nixbot</code> will look for a file named <code>nixbot.toml</code> (falling back to the
+legacy <code>buildbot-nix.toml</code>) in the root of whichever branch it’s currently
+evaluating, parse it as TOML and apply the configuration specified. See
+<a href="examples/nixbot.toml">examples/nixbot.toml</a> for a commented example with all
+supported options.</p>
+<p>By default, effects only run on the default branch. The <code>build_branches</code>,
+<code>effects_branches</code> and <code>effects_on_pull_requests</code> settings are always read from
+the <strong>default branch’s</strong> <code>nixbot.toml</code> (via <code>git show</code>) so that pull request
+authors cannot grant themselves builds or effects access.</p>
+<blockquote>
+<p><strong>⚠️ Security warning:</strong> PR effects receive the same
+<code>effects_per_repo_secrets</code> as default-branch effects. A malicious PR can
+modify the effect code to exfiltrate these secrets. Only enable
+<code>effects_on_pull_requests</code> for repositories where you trust all contributors,
+or where no secrets are configured.</p>
+</blockquote>
+<h2 id="status-badges"><a class="header" href="#status-badges">Status badges</a></h2>
+<p>Nixbot serves an SVG build-status badge for the latest build on a branch:</p>
+<pre><code>https://&lt;nixbot-host&gt;/repos/&lt;forge&gt;/&lt;owner&gt;/&lt;repo&gt;/badge.svg
+</code></pre>
+<p>It reports the default branch unless <code>?branch=&lt;name&gt;</code> is given. Embed it in a
+README with:</p>
+<pre><code class="language-markdown">[![nixbot](https://&lt;nixbot-host&gt;/repos/github/&lt;owner&gt;/&lt;repo&gt;/badge.svg)](https://&lt;nixbot-host&gt;/repos/github/&lt;owner&gt;/&lt;repo&gt;)
+</code></pre>
+<p>Private repositories return 404 to anonymous requests, so status is never
+exposed.</p>
+<h2 id="binary-caches"><a class="header" href="#binary-caches">Binary caches</a></h2>
+<p>To access the build results on other machines there are two options at the
+moment</p>
+<h4 id="local-binary-cache-harmonia"><a class="header" href="#local-binary-cache-harmonia">Local binary cache (harmonia)</a></h4>
+<p>You can set up a binary cache on the CI machine to make its nix store accessible
+from other machines. Check out the README of the
+<a href="https://github.com/nix-community/harmonia/?tab=readme-ov-file#configuration-for-public-binary-cache-on-nixos">project</a>,
+for an example configuration</p>
+<h4 id="cachix"><a class="header" href="#cachix">Cachix</a></h4>
+<p>Nixbot also supports pushing packages to cachix via the <code>services.nixbot.cachix</code>
+options.</p>
+<h4 id="attic"><a class="header" href="#attic">Attic</a></h4>
+<p>Nixbot does not have native support for pushing packages to
+<a href="https://github.com/zhaofengli/attic">attic</a> yet. However it’s possible to
+integrate run a systemd service as described in
+<a href="examples/attic-watch-store.nix">this example configuration</a>. The systemd
+service watches for changes in the local nix store and uploads the contents to
+the attic cache.</p>
+<h2 id="hercules-ci-effects"><a class="header" href="#hercules-ci-effects">Hercules CI effects</a></h2>
+<p>See <a href="docs/EFFECTS.html">docs/EFFECTS.md</a> for CLI usage, flake reference support,
+and secrets configuration.</p>
+<h2 id="incompatibilities-with-the-lix-overlay"><a class="header" href="#incompatibilities-with-the-lix-overlay">Incompatibilities with the lix overlay</a></h2>
+<p>The lix overlay overrides nix-eval-jobs with a version that doesn’t work with
+nixbot because of missing features and therefore cannot be used together with
+the nixbot module.</p>
+<p>Possible workaround: Don’t use the overlay and only set the
+<code>nix.package = pkgs.lix;</code> NixOS option.</p>
+<h2 id="alternatives"><a class="header" href="#alternatives">Alternatives</a></h2>
+<ul>
+<li><a href="https://garnix.io/">Garnix</a> - Fully hosted, zero-config CI for flakes.</li>
+<li><a href="https://hercules-ci.com/">Hercules CI</a> - Hosted CI with self-hosted agents.
+Nixbot’s effects system is inspired by theirs.</li>
+<li><a href="https://github.com/NixOS/hydra">Hydra</a> - The original Nix CI, powers
+nixos.org. Written in Perl, not recommended for new deployments.</li>
+</ul>
+<h2 id="real-world-deployments"><a class="header" href="#real-world-deployments">Real-World Deployments</a></h2>
+<p>See Nixbot in action in these deployments:</p>
+<ul>
+<li><a href="https://github.com/Mic92/dotfiles"><strong>Mic92’s dotfiles</strong></a>:
+<a href="https://github.com/Mic92/dotfiles/blob/main/machines/eve/modules/nixbot.nix">Configuration</a>
+| <a href="https://buildbot.thalheim.io/">Instance</a></li>
+<li><a href="https://nix-community.org/"><strong>Nix-community infra</strong></a>:
+<a href="https://github.com/nix-community/infra/tree/master/modules/nixos">Configuration</a>
+| <a href="https://nixbot.nix-community.org/">Instance</a></li>
+<li><a href="https://dse.in.tum.de/"><strong>Technical University Munich</strong></a>:
+<a href="https://github.com/TUM-DSE/doctor-cluster-config/tree/master/modules/buildbot">Configuration</a>
+| <a href="https://buildbot.dse.in.tum.de/">Instance</a></li>
+</ul>
+<!-- These instances still run the buildbot-nix ancestor; uncomment as they
+migrate to nixbot:
+
+The following instances run on GitHub:
+
+- [**Numtide**](https://numtide.com/): [Instance](https://buildbot.numtide.com)
+- [**Ngi0**](https://www.ngi.eu/ngi-projects/ngi-zero/):
+  [Instance](https://buildbot.ngi.nixos.org/#/projects)
+
+The following instances integrated with Gitea:
+
+- **Clan infra**:
+  [Configuration](https://git.clan.lol/clan/clan-infra/src/branch/main/modules/buildbot.nix)
+  | [Instance](https://buildbot.clan.lol/)
+-->
+<h2 id="need-commercial-support-or-customization"><a class="header" href="#need-commercial-support-or-customization">Need commercial support or customization?</a></h2>
+<p>For commercial support, please contact <a href="https://github.com/Mic92/">Mic92</a> at
+joerg@thalheim.io.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="github-integration-1"><a class="header" href="#github-integration-1">GitHub Integration</a></h1>
+<p>Buildbot-nix uses GitHub App authentication to integrate with GitHub
+repositories. This enables automatic webhook setup, check-run reporting, and
+secure authentication.</p>
+<h2 id="step-1-create-a-github-app"><a class="header" href="#step-1-create-a-github-app">Step 1: Create a GitHub App</a></h2>
+<ol>
+<li>
+<p>Navigate to:</p>
+<ul>
+<li>For personal accounts: <code>https://github.com/settings/apps/new</code></li>
+<li>For organizations:
+<code>https://github.com/organizations/&lt;org&gt;/settings/apps/new</code></li>
+</ul>
+</li>
+<li>
+<p>Configure the app with these settings:</p>
+<ul>
+<li><strong>GitHub App Name</strong>: <code>nixbot-&lt;org&gt;</code> (or any unique name)</li>
+<li><strong>Homepage URL</strong>: <code>https://nixbot.&lt;your-domain&gt;</code></li>
+<li><strong>Webhook</strong>: Enable (Active) and set:
+<ul>
+<li><strong>Webhook URL</strong>: <code>https://nixbot.&lt;your-domain&gt;/webhooks/github</code></li>
+<li><strong>Webhook secret</strong>: the same value as <code>webhookSecretFile</code> below</li>
+</ul>
+</li>
+<li><strong>Callback URL</strong> (optional, for OAuth):
+<code>https://nixbot.&lt;your-domain&gt;/auth/github/callback</code></li>
+</ul>
+</li>
+<li>
+<p>Set the required permissions:</p>
+<ul>
+<li><strong>Repository Permissions:</strong>
+<ul>
+<li>Contents: Read-only (to clone repositories), (read and write is required
+for effects to push to branches)</li>
+<li>Checks: Read and write (to report build status as check runs)</li>
+<li>Metadata: Read-only (basic repository info)</li>
+<li>Pull requests: Read-only (required to subscribe to the pull_request
+event), (read and write is required for effects to create PRs or comment
+via <code>nixbot-pr-comment</code>)</li>
+<li>Issues: Read-only (required to subscribe to the issue_comment event for
+<code>onEvent.comment</code> effects)</li>
+</ul>
+</li>
+<li><strong>Organization Permissions</strong> (if app is for an organization):
+<ul>
+<li>Members: Read-only (to verify organization membership for access control)</li>
+</ul>
+</li>
+<li><strong>Subscribe to events</strong>: Push, Pull request, Check run, Check suite, Issue
+comment</li>
+</ul>
+<p>Note: when adding permissions to an existing app, every installation (your
+user account and each organization) must accept the new permissions under
+Settings → GitHub Apps → Configure before events are delivered.</p>
+</li>
+<li>
+<p>After creating the app:</p>
+<ul>
+<li>Note the <strong>App ID</strong></li>
+<li>Generate and download a <strong>private key</strong> (.pem file)</li>
+</ul>
+</li>
+</ol>
+<h2 id="step-2-configure-nixbot"><a class="header" href="#step-2-configure-nixbot">Step 2: Configure nixbot</a></h2>
+<p>Add the GitHub configuration to your NixOS module:</p>
+<pre><code class="language-nix">services.nixbot = {
+  enable = true;
+  domain = "nixbot.example.com";  # Your nixbot domain
+  github = {
+    enable = true;
+    appId = &lt;your-app-id&gt;;  # The numeric App ID
+    appSecretKeyFile = "/path/to/private-key.pem";  # Path to the downloaded private key
+
+    # OAuth credentials enable the GitHub login button
+    oauthId = "&lt;oauth-client-id&gt;";
+    oauthSecretFile = "/path/to/oauth-secret";
+
+    # A random secret used to verify incoming webhooks from GitHub
+    webhookSecretFile = "/path/to/webhook-secret";
+
+    # Optional: only allow these owners/repositories to be built
+    userAllowlist = [ "my-org" ];
+    repoAllowlist = [ "other-org/repo" ];
+
+    # One-shot import: repositories with this topic are enabled on first
+    # startup with an empty database; afterwards manage projects in the web UI
+    topic = "build-with-buildbot";
+  };
+};
+</code></pre>
+<h2 id="step-3-install-the-github-app"><a class="header" href="#step-3-install-the-github-app">Step 3: Install the GitHub App</a></h2>
+<ol>
+<li>Go to your app’s settings page</li>
+<li>Click “Install App” and choose which repositories to grant access</li>
+<li>The app needs access to all repositories you want to build with nixbot</li>
+</ol>
+<h2 id="step-4-repository-configuration"><a class="header" href="#step-4-repository-configuration">Step 4: Repository Configuration</a></h2>
+<p>For each repository you want to build:</p>
+<ol>
+<li>
+<p><strong>Enable the project</strong>:</p>
+<ul>
+<li>Toggle the project on in the web UI (as admin)</li>
+</ul>
+</li>
+<li>
+<p><strong>Webhook delivery</strong>:</p>
+<ul>
+<li>GitHub delivers push, pull_request, issue_comment, check_run and
+check_suite events through the App-level webhook configured in Step 1; no
+per-repository webhooks are created.</li>
+<li>The endpoint is <code>https://nixbot.&lt;your-domain&gt;/webhooks/github</code> (the legacy
+<code>/change_hook/github</code> path also works).</li>
+</ul>
+</li>
+</ol>
+<h2 id="how-it-works"><a class="header" href="#how-it-works">How It Works</a></h2>
+<ul>
+<li><strong>Authentication</strong>: Uses GitHub App JWT tokens for API access and installation
+tokens for repository-specific operations</li>
+<li><strong>Project Discovery</strong>: Automatically discovers repositories the app has access
+to (restricted by <code>userAllowlist</code>/<code>repoAllowlist</code> if set); discovered projects
+are built once enabled in the web UI</li>
+<li><strong>Webhook Delivery</strong>: Push, pull_request, issue_comment, check_run and
+check_suite events arrive via the GitHub App webhook; the payload signature is
+verified with the webhook secret</li>
+<li><strong>Status Updates</strong>: Reports build status as Check Runs (with markdown log
+excerpts and a working Re-run button) on commits and pull requests</li>
+<li><strong>Access Control</strong>:
+<ul>
+<li>Admins: Configured users can reload projects and manage builds</li>
+<li>Repo writers: Users with write access to the repo can restart/cancel its
+builds</li>
+<li>PR authors: Can restart/cancel the builds of their own pull request</li>
+</ul>
+</li>
+</ul>
+<h3 id="repository-permissions"><a class="header" href="#repository-permissions">Repository permissions</a></h3>
+<p>nixbot maps a user’s GitHub collaborator permission onto its own roles. Each
+level includes the ones above it:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>GitHub permission</th><th>Allowed in nixbot</th></tr>
+</thead>
+<tbody>
+<tr><td>read</td><td>view the project, including private repositories</td></tr>
+<tr><td>write / maintain</td><td>restart and cancel the project’s builds</td></tr>
+<tr><td>admin</td><td>enable or disable the project</td></tr>
+</tbody>
+</table>
+</div>
+<p>The lookup uses the App’s own credentials
+(<code>GET /repos/{owner}/{repo}/collaborators/{user}/permission</code>) and only needs the
+Metadata (read) permission that every GitHub App has, so no extra configuration
+is required. The user’s login token merely proves identity (<code>read:user</code> scope),
+which is why the same rules apply to web sessions and personal API tokens.</p>
+<p>Independent of repository permissions, instance admins can do everything, and PR
+authors can restart or cancel the builds of their own pull requests.</p>
+<h2 id="troubleshooting"><a class="header" href="#troubleshooting">Troubleshooting</a></h2>
+<ul>
+<li>
+<p><strong>Projects not appearing</strong>: Check that:</p>
+<ul>
+<li>The GitHub App is installed for the repository</li>
+<li>The repository is not excluded by <code>userAllowlist</code>/<code>repoAllowlist</code></li>
+<li>Reload projects manually through the web UI</li>
+</ul>
+</li>
+<li>
+<p><strong>Project appears but nothing builds</strong>: Enable the project in the web UI</p>
+</li>
+<li>
+<p><strong>No builds on push</strong>: Verify the App webhook is Active, its URL points to
+<code>https://nixbot.&lt;your-domain&gt;/webhooks/github</code>, and its secret matches
+<code>webhookSecretFile</code>. Check recent deliveries under the app’s “Advanced” tab.</p>
+</li>
+<li>
+<p><strong>Authentication issues</strong>: Ensure the private key file is readable by the
+nixbot service</p>
+</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="gitea-integration-1"><a class="header" href="#gitea-integration-1">Gitea Integration</a></h1>
+<p>Buildbot-nix integrates with Gitea using access tokens for repository management
+and OAuth2 for user authentication. This enables automatic webhook setup, commit
+status updates, and secure authentication.</p>
+<h2 id="step-1-create-a-gitea-access-token"><a class="header" href="#step-1-create-a-gitea-access-token">Step 1: Create a Gitea Access Token</a></h2>
+<ol>
+<li>
+<p><strong>Create a dedicated Gitea user</strong> (recommended for organizations):</p>
+<ul>
+<li>This user will manage webhooks and report build statuses</li>
+<li>Add this user as a collaborator with <strong>Administrator</strong> permission to every
+repository you want to build. Repo admin is required for:
+<ul>
+<li><strong>Webhooks</strong>: Gitea only lets repo admins manage webhooks. Without admin
+the repository is still discovered, but the webhook must be created
+manually: POST to <code>https://&lt;domain&gt;/webhooks/gitea</code> with the events push,
+pull_request, pull_request_sync, and for
+<a href="#onevent">onEvent effects</a> also pull_request_comment and
+pull_request_label.</li>
+<li><strong>Per-user visibility</strong>: nixbot decides who may see a private repository
+by asking <code>GET /repos/{owner}/{repo}/collaborators/{user}/permission</code>
+with this token. This endpoint is only available to repo admins (or site
+admins). Without admin, private repositories are hidden from everyone but
+nixbot instance admins.</li>
+<li><strong>onEvent permissions</strong>: <code>when.permission</code> and the <code>permission</code> field in
+event payloads come from the same endpoint. Without admin they are
+<code>null</code>, so <code>/command</code> effects gated on a permission never run.</li>
+</ul>
+</li>
+<li>Private repositories are invisible to the token until the user is added.</li>
+</ul>
+</li>
+<li>
+<p><strong>Generate an access token</strong>:</p>
+<ul>
+<li>Log in as the dedicated user</li>
+<li>Go to Settings → Applications → Generate New Token</li>
+<li>Required permissions:
+<ul>
+<li><code>write:repository</code> - To create webhooks and update commit statuses</li>
+<li><code>write:issue</code> - To post pull request comments from
+<a href="#onevent">onEvent effects</a> (<code>nixbot-pr-comment</code>) and reply to
+<code>/command</code> comments</li>
+<li><code>read:user</code> - To list the repositories the user has access to</li>
+</ul>
+</li>
+<li>Save the token securely</li>
+</ul>
+</li>
+</ol>
+<h2 id="step-2-set-up-oauth2-authentication-for-user-login"><a class="header" href="#step-2-set-up-oauth2-authentication-for-user-login">Step 2: Set up OAuth2 Authentication (for user login)</a></h2>
+<ol>
+<li>
+<p><strong>Create an OAuth2 Application</strong>:</p>
+<ul>
+<li>Navigate to one of these locations:
+<ul>
+<li>Site Administration → Applications (for admins, applies globally)</li>
+<li>Organization Settings → Applications (for organization-wide access)</li>
+<li>User Settings → Applications (for personal use)</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>
+<p><strong>Configure the OAuth2 app</strong>:</p>
+<ul>
+<li><strong>Application Name</strong>: <code>nixbot</code></li>
+<li><strong>Redirect URI</strong>: <code>https://nixbot.&lt;your-domain&gt;/auth/gitea/callback</code></li>
+</ul>
+</li>
+<li>
+<p><strong>Note the credentials</strong>:</p>
+<ul>
+<li>Client ID</li>
+<li>Client Secret</li>
+</ul>
+</li>
+</ol>
+<h2 id="step-3-configure-nixbot"><a class="header" href="#step-3-configure-nixbot">Step 3: Configure nixbot</a></h2>
+<p>Add the Gitea configuration to your NixOS module:</p>
+<pre><code class="language-nix">services.nixbot = {
+  gitea = {
+    enable = true;
+    instanceUrl = "https://gitea.example.com";
+
+    # Access token for API operations
+    tokenFile = "/path/to/gitea-token";
+
+    # OAuth2 for user authentication
+    oauthId = "&lt;oauth-client-id&gt;";
+    oauthSecretFile = "/path/to/oauth-secret";
+
+    # Optional: SSH authentication for private repositories and
+    # private ssh:// flake inputs. Anyone who can open a pull request
+    # against a built repository can add any repo this key can read as
+    # a flake input and thus read its contents. Use a deploy key or
+    # machine user scoped to the repositories you intend to expose,
+    # not a forge-wide/admin key.
+    sshPrivateKeyFile = "/path/to/ssh-key";
+    sshKnownHostsFile = "/path/to/known-hosts";
+
+    # Optional: only allow these owners/repositories to be built
+    userAllowlist = [ "my-org" ];
+    repoAllowlist = [ "other-org/repo" ];
+
+    # One-shot import: repositories with this topic are enabled on first
+    # startup with an empty database; afterwards manage projects in the web UI
+    topic = "build-with-buildbot";
+  };
+};
+</code></pre>
+<p>If webhooks must reach nixbot under a different URL than the web UI, set
+<code>services.nixbot.webhookBaseUrl</code>.</p>
+<h2 id="step-4-repository-configuration-1"><a class="header" href="#step-4-repository-configuration-1">Step 4: Repository Configuration</a></h2>
+<p>For each repository you want to build:</p>
+<ol>
+<li>
+<p><strong>Grant repository access</strong>:</p>
+<ul>
+<li>Add the nixbot user as a collaborator with admin access</li>
+<li>Admin access is required for webhook creation</li>
+</ul>
+</li>
+<li>
+<p><strong>Enable the project</strong>:</p>
+<ul>
+<li>Toggle the project on in the web UI (as admin)</li>
+</ul>
+</li>
+<li>
+<p><strong>Automatic webhook creation</strong>:</p>
+<ul>
+<li>Webhooks are created for enabled projects on every discovery cycle
+(startup, periodic refresh, manual reload) at
+<code>https://nixbot.&lt;your-domain&gt;/webhooks/gitea</code></li>
+<li>Each repository gets an auto-generated secret stored in the database;
+existing hooks are re-synced in place, leftover buildbot-era hooks pointing
+at this instance are removed</li>
+<li>Webhook events: <code>push</code>, <code>pull_request</code> and <code>pull_request_sync</code></li>
+</ul>
+</li>
+<li>
+<p><strong>Manual webhook creation</strong> (only when the nixbot user is not a repo admin;
+watch for the “no admin permission to manage webhooks” warning):</p>
+<ol>
+<li>Enable the project</li>
+<li>As a nixbot admin, open the repository page in the nixbot web UI, expand
+<strong>webhook setup</strong> and press <strong>regenerate</strong> - the secret is shown exactly
+once (rotating later invalidates the old secret; auto-managed hooks pick
+the new one up on the next discovery cycle)</li>
+<li>In the Gitea repository: Settings → Webhooks → Add Webhook → Gitea</li>
+<li>Target URL and Secret from step 2, POST Content Type <code>application/json</code></li>
+<li>Trigger On: Custom Events → check <strong>Push</strong>, <strong>Pull Request</strong>, and <strong>Pull
+Request Synchronized</strong></li>
+<li>Activate and save</li>
+</ol>
+</li>
+</ol>
+<h2 id="how-it-works-1"><a class="header" href="#how-it-works-1">How It Works</a></h2>
+<ul>
+<li><strong>Authentication</strong>: Uses Gitea access tokens for API operations</li>
+<li><strong>Project Discovery</strong>: Automatically discovers repositories where the nixbot
+user has admin access (restricted by <code>userAllowlist</code>/<code>repoAllowlist</code> if set);
+discovered projects are built once enabled in the web UI</li>
+<li><strong>Webhook Management</strong>: Automatically creates and manages webhooks (push and
+pull request events) for enabled projects</li>
+<li><strong>Status Updates</strong>: Reports build status back to Gitea commits and pull
+requests</li>
+<li><strong>Access Control</strong>:
+<ul>
+<li>Admins: Configured users can reload projects and manage builds</li>
+<li>Repo writers: Users with write access to the repo can restart/cancel its
+builds (when OAuth is configured)</li>
+<li>PR authors: Can restart/cancel the builds of their own pull request</li>
+</ul>
+</li>
+<li><strong>Repository Access</strong>: Can use either HTTPS (with token) or SSH authentication
+for cloning private repositories</li>
+</ul>
+<h2 id="troubleshooting-1"><a class="header" href="#troubleshooting-1">Troubleshooting</a></h2>
+<ul>
+<li>
+<p><strong>Projects not appearing</strong>: Check that:</p>
+<ul>
+<li>The nixbot user has admin access to the repository</li>
+<li>The repository is not excluded by <code>userAllowlist</code>/<code>repoAllowlist</code></li>
+<li>The access token has the correct permissions</li>
+<li>Reload projects manually through the web UI</li>
+</ul>
+</li>
+<li>
+<p><strong>Project appears but nothing builds</strong>: Enable the project in the web UI</p>
+</li>
+<li>
+<p><strong>Webhooks not created</strong>: Verify the project is enabled and the nixbot user
+has admin permissions on the repository</p>
+</li>
+<li>
+<p><strong>Authentication issues</strong>:</p>
+<ul>
+<li>Ensure the access token is valid and has required permissions</li>
+<li>For OAuth issues, verify the redirect URI matches exactly</li>
+</ul>
+</li>
+<li>
+<p><strong>Private repositories</strong>: If using SSH, ensure the SSH key is properly
+configured and the known_hosts file contains the Gitea server</p>
+</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="gitlab-integration-1"><a class="header" href="#gitlab-integration-1">GitLab Integration</a></h1>
+<p>Buildbot-nix integrates with GitLab using an access token. GitLab has no
+GitHub-App equivalent, so the setup follows the Gitea model: token-based API
+access, per-repository webhooks, commit status updates.</p>
+<h2 id="step-1-create-a-gitlab-access-token"><a class="header" href="#step-1-create-a-gitlab-access-token">Step 1: Create a GitLab Access Token</a></h2>
+<p>Use one of:</p>
+<ul>
+<li><strong>Personal access token</strong> (simplest; CI acts as your user): User Settings →
+Access tokens → Add new token, scope <code>api</code></li>
+<li><strong>Group or project access token</strong> (separate bot identity): Group/Project
+Settings → Access tokens, role <strong>Maintainer</strong>, scope <code>api</code></li>
+<li><strong>Service account</strong> (self-managed admin or paid tier)</li>
+</ul>
+<p>Maintainer permission on a project is required for automatic webhook
+registration; without it the project is still discovered and built, but the
+webhook must be created manually (see below).</p>
+<h2 id="step-2-configure-nixbot-1"><a class="header" href="#step-2-configure-nixbot-1">Step 2: Configure nixbot</a></h2>
+<pre><code class="language-nix">services.nixbot = {
+  gitlab = {
+    enable = true;
+    # instanceUrl defaults to https://gitlab.com
+    tokenFile = "/path/to/gitlab-token";
+
+    # Optional: restrict which repositories are built
+    userAllowlist = [ "mygroup" ];
+    # repoAllowlist = [ "mygroup/myrepo" ];
+
+    # Optional: SSH authentication for fetching and for private ssh://
+    # flake inputs. Anyone who can open a merge request against a built
+    # repository can add any repo this key can read as a flake input and
+    # thus read its contents. Use a deploy key or machine user scoped to
+    # the repositories you intend to expose, not an instance-wide key.
+    # sshPrivateKeyFile = "/path/to/ssh-key";
+    # sshKnownHostsFile = "/path/to/known-hosts";
+  };
+};
+</code></pre>
+<h2 id="step-3-enable-projects"><a class="header" href="#step-3-enable-projects">Step 3: Enable Projects</a></h2>
+<ol>
+<li>Open the nixbot web UI as an admin</li>
+<li>Enable the repository on the dashboard</li>
+<li>With Maintainer permission the webhook (push + merge request events) is
+registered automatically on the next discovery cycle</li>
+</ol>
+<h2 id="manual-webhook-creation"><a class="header" href="#manual-webhook-creation">Manual webhook creation</a></h2>
+<p>Only needed when the token lacks Maintainer on the project (watch for the “no
+maintainer permission to manage webhooks” warning):</p>
+<ol>
+<li>Enable the project</li>
+<li>On the repository page in the nixbot web UI, expand <strong>webhook setup</strong> and
+press <strong>regenerate</strong> - the secret is shown exactly once</li>
+<li>In GitLab: Settings → Webhooks → Add new webhook</li>
+<li>URL from step 2, Secret token from step 2</li>
+<li>Trigger: <strong>Push events</strong> and <strong>Merge request events</strong></li>
+<li>Save</li>
+</ol>
+<h2 id="notes"><a class="header" href="#notes">Notes</a></h2>
+<ul>
+<li>Commit statuses are posted per attribute plus <code>nixbot/nix-eval</code>; use them in
+merge request approval rules / merged results pipelines.</li>
+<li>GitLab does not sign webhook payloads; the secret is compared against the
+<code>X-Gitlab-Token</code> header. Use HTTPS for the webhook URL.</li>
+<li>Access control (with OAuth login): admins manage everything; Developer access
+or higher to a project allows restart/cancel of its builds; MR authors can
+restart/cancel their own MR’s builds.</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="hercules-ci-effects-1"><a class="header" href="#hercules-ci-effects-1">Hercules CI effects</a></h1>
+<p>See <a href="../flake.nix">flake.nix</a> for an example and the
+<a href="https://docs.hercules-ci.com/hercules-ci/effects/">Hercules CI effects documentation</a>
+for the upstream reference.</p>
+<h2 id="ordering-and-locks"><a class="header" href="#ordering-and-locks">Ordering and locks</a></h2>
+<p>Effects can declare two attributes on the effect derivation:</p>
+<ul>
+<li><code>after</code>: attribute paths of effects of the same build that must succeed first,
+e.g. <code>[ [ "default" "build-image" ] ]</code>. Each entry is a list of strings: the
+onPush job first, then the path inside that job’s effects attrset (nested
+effects work too: <code>[ "default" "env" "staging" ]</code>), so it matches the dotted
+names shown everywhere else and can reference effects of another job. The
+effect only starts once everything in <code>after</code> succeeded; if a dependency
+fails, the effect is marked <code>skipped</code> and reported as a failure. Effects not
+ordered against each other run in parallel.</li>
+<li><code>lock</code>: a named lock. Effects holding the same lock name run one at a time per
+project, across builds and pull requests — use it for shared resources like a
+staging environment or a hardware lab. A lock is handed out in build order:
+all of a build’s effects on a lock finish before the next build’s start, so
+multi-effect deployments never interleave across builds.</li>
+</ul>
+<p>Both are ordinary attributes on the effect derivation: set them next to
+<code>effectScript</code>, whether you write plain attribute sets, use this repo’s
+<a href="../herculesCI/effects-lib.nix">effects-lib</a>, or upstream
+<a href="https://docs.hercules-ci.com/hercules-ci-effects/">hercules-ci-effects</a>’
+<code>mkEffect</code> (extra attributes pass through). They are a nixbot extension:
+Hercules CI itself ignores them; only nixbot orders and serializes on them.</p>
+<pre><code class="language-nix"># flake.nix
+{
+  inputs.nixbot.url = "github:Mic92/nixbot";
+
+  outputs = { self, nixpkgs, nixbot, ... }: {
+    herculesCI = { primaryRepo, ... }: let
+      pkgs = nixpkgs.legacyPackages.x86_64-linux;
+      # Or hercules-ci-effects' mkEffect; after/lock pass through there too.
+      inherit (nixbot.lib.effects { inherit pkgs; }) mkEffect;
+    in {
+      onPush.default.outputs.effects = {
+        push-image = mkEffect {
+          inputs = [ pkgs.skopeo ];
+          effectScript = ''
+            skopeo copy docker-archive:${self.packages.x86_64-linux.image} \
+              docker://registry.example.org/app:${primaryRepo.rev}
+          '';
+        };
+
+        # Starts only after push-image succeeded; the "staging" lock makes
+        # concurrent PRs take turns deploying to staging.
+        deploy-staging = mkEffect {
+          after = [ [ "default" "push-image" ] ];
+          lock = "staging";
+          inputs = [ pkgs.kubectl ];
+          effectScript = ''
+            kubectl set image deployment/app app=registry.example.org/app:${primaryRepo.rev}
+          '';
+        };
+
+        deploy-prod = mkEffect {
+          after = [ [ "default" "deploy-staging" ] ];
+          lock = "prod";
+          inputs = [ pkgs.kubectl ];
+          effectScript = ''
+            kubectl --context prod set image deployment/app app=registry.example.org/app:${primaryRepo.rev}
+          '';
+        };
+
+        # No after/lock: runs in parallel with everything else.
+        notify = mkEffect {
+          inputs = [ pkgs.curl ];
+          effectScript = ''
+            curl -sf -d "deployed ${primaryRepo.rev}" https://chat.example.org/hook
+          '';
+        };
+      };
+    };
+  };
+}
+</code></pre>
+<p>With this flake, one push runs <code>push-image</code> and <code>notify</code> immediately and in
+parallel, then <code>deploy-staging</code>, then <code>deploy-prod</code>. If <code>push-image</code> fails, both
+deploys end up <code>skipped</code> and the commit status is red. Cycles or unknown paths
+in <code>after</code> fail effect discovery.</p>
+<p>nixbot evaluates every <code>onPush.&lt;job&gt;</code> of the <code>herculesCI</code> output. Outside the
+flake, effects are addressed by their dotted attribute path prefixed with the
+job name: <code>nbo effects run default.deploy-staging</code>, log names, and the <code>after</code>
+entries in <code>nbo effects list</code> output. Inspect the DAG locally:</p>
+<pre><code class="language-console">$ nbo effects graph
+default.notify
+default.push-image
+└── default.deploy-staging [lock: staging]
+    └── default.deploy-prod [lock: prod]
+</code></pre>
+<h2 id="nixbottoml-configuration"><a class="header" href="#nixbottoml-configuration">nixbot.toml Configuration</a></h2>
+<p>Effects branch configuration and allowing effects to run in PRs is configured
+via nixbot.toml in the default branch and is documented in the
+<a href="../README.html#per-repository-configuration">README.md</a>.</p>
+<h2 id="cli-usage"><a class="header" href="#cli-usage">CLI usage</a></h2>
+<p>The <code>nbo effects</code> commands (part of the <a href="#command-line-client-nbo">nbo CLI</a>) can list and run
+effects locally, or against remote repositories using
+<a href="https://nix.dev/manual/nix/latest/command-ref/new-cli/nix3-flake#flake-references">Nix flake references</a>.</p>
+<h3 id="local-repository"><a class="header" href="#local-repository">Local repository</a></h3>
+<pre><code class="language-console">$ cd my-repo
+$ nbo effects list
+{"default.deploy": {"after": ["default.notify"], "lock": "hw-lab"}, "default.notify": {"after": [], "lock": null}}
+
+$ nbo effects graph
+default.notify
+└── default.deploy [lock: hw-lab]
+
+$ nbo effects run default.deploy
+</code></pre>
+<h3 id="remote-repository-flake-reference"><a class="header" href="#remote-repository-flake-reference">Remote repository (flake reference)</a></h3>
+<p>No local checkout needed:</p>
+<pre><code class="language-console">$ nbo effects run github:org/repo/branch#default.deploy
+$ nbo effects list github:org/repo/branch
+$ nbo effects list-schedules github:org/repo/branch
+$ nbo effects run-scheduled github:org/repo#flake-update update
+</code></pre>
+<h3 id="subcommands"><a class="header" href="#subcommands">Subcommands</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Command</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>list</code></td><td>List effects with metadata (<code>--event KIND</code> adds skip reasons)</td></tr>
+<tr><td><code>graph</code></td><td>Show the effect DAG as an ASCII tree</td></tr>
+<tr><td><code>run</code></td><td>Run a single effect (<code>--event KIND</code> runs an onEvent one)</td></tr>
+<tr><td><code>list-schedules</code></td><td>List scheduled effects</td></tr>
+<tr><td><code>run-scheduled</code></td><td>Run a specific effect from a schedule</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="flags"><a class="header" href="#flags">Flags</a></h3>
+<p>All subcommands accept:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Flag</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>--rev</code></td><td>Git revision to use</td></tr>
+<tr><td><code>--branch</code></td><td>Git branch to use</td></tr>
+<tr><td><code>--repo</code></td><td>Git repo name</td></tr>
+<tr><td><code>--path</code></td><td>Path to the repository (default: current directory)</td></tr>
+<tr><td><code>--debug</code></td><td>Enable debug mode (may leak secrets such as GITHUB_TOKEN)</td></tr>
+<tr><td><code>--no-refresh</code></td><td>Do not pass <code>--refresh</code> when resolving flake references (refresh is on by default so remote refs resolve to the latest revision)</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>run</code> and <code>run-scheduled</code> also accept:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Flag</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>--secrets</code></td><td>Path to a JSON file with secrets</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="running-effects-locally-with-secrets"><a class="header" href="#running-effects-locally-with-secrets">Running effects locally with secrets</a></h2>
+<p>Pass <code>--secrets</code> to provide secrets when running effects locally. The file is a
+JSON object where each key is a secret name and its value has a <code>"data"</code> field
+containing key-value pairs:</p>
+<pre><code class="language-json">{
+  "my-secret": {
+    "data": {
+      "token": "ghp_xxxxxxxxxxxx",
+      "username": "deploy-bot"
+    }
+  }
+}
+</code></pre>
+<pre><code class="language-console">$ nbo effects run --secrets secrets.json default.deploy
+</code></pre>
+<p>Inside the effect, secrets are available at <code>/run/secrets.json</code> (via
+<code>HERCULES_CI_SECRETS_JSON</code>). This follows the
+<a href="https://docs.hercules-ci.com/hercules-ci-agent/secrets-json/">hercules-ci secrets format</a>.</p>
+<h2 id="pushable-repository-checkout"><a class="header" href="#pushable-repository-checkout">Pushable repository checkout</a></h2>
+<p>Effects that modify the repository (auto-updates, formatting bots) can ask
+nixbot for a ready-made working copy instead of cloning inside the sandbox:</p>
+<pre><code class="language-nix">effects.flake-update = mkEffect {
+  checkout = true;
+  effectScript = ''
+    nix flake update
+    git commit -am "flake.lock: update"
+    git push origin HEAD:update-flake-lock
+  '';
+};
+</code></pre>
+<p>nixbot clones the repository from its local mirror at the commit the effect runs
+for and mounts it writable at <code>/build/checkout</code>, which is also the effect’s
+working directory (and exported as <code>NIXBOT_EFFECT_CHECKOUT</code>). The clone’s
+<code>origin</code> uses the forge token, so <code>git push</code> works without extra secrets. The
+clone is removed after the effect finishes.</p>
+<p>The <code>checkout</code> argument of <code>mkEffect</code> sets the <code>__nixbot_effect_checkout</code>
+derivation attribute; effects built without <code>mkEffect</code> can set the attribute
+directly. Effects that do not set it get no checkout. If the repository has no
+forge token to push with, the effect fails with an error.</p>
+<h2 id="event-effects-onevent"><a class="header" href="#event-effects-onevent">Event effects (<code>onEvent</code>)</a></h2>
+<p><code>onPush</code> effects run when a branch is built. <code>onEvent</code> effects react to what
+happens around a build: a pull request turning green, a <code>/command</code> comment, a PR
+closing, a build breaking. The typical use is <code>tofu plan</code> on a pull request with
+the result posted as a comment, and <code>tofu apply</code> on merge. A full example is
+<a href="../examples/on-event/flake.nix">examples/on-event/flake.nix</a>. Hercules CI
+ignores <code>onEvent</code>.</p>
+<pre><code class="language-nix">herculesCI = { ... }: {
+  onPush.default.outputs.effects.apply = mkEffect {
+    lock = "infra";
+    effectScript = "tofu apply -auto-approve";
+  };
+  onEvent.pull_request.plan = mkEffect {
+    when.permission = "write";   # pusher or PR author can write to the repo
+    lock = "infra";              # waits for a running apply
+    checkout = true;             # PR head at $NIXBOT_EFFECT_CHECKOUT
+    effectScript = ''
+      tofu plan -no-color | nixbot-pr-comment --replace-marker plan
+    '';
+  };
+  onEvent.comment.apply = mkEffect {
+    when = { commands = [ "apply" ]; permission = "admin"; };
+    lock = "infra";
+    checkout = true;
+    effectScript = "tofu apply -auto-approve $NIXBOT_COMMAND_ARGS";
+  };
+};
+</code></pre>
+<p>Definitions are <strong>always evaluated from the default branch</strong>, whatever pull
+request the event is about. A pull request cannot change what runs by editing
+<code>onEvent</code>, it only contributes data. This is unrelated to
+<code>effects_on_pull_requests</code> in nixbot.toml, which is about a pull request’s own
+<code>onPush</code> effects.</p>
+<p>With <code>checkout = true</code> the <strong>PR head</strong> is cloned to <code>/build/checkout</code>. That
+clone has no push credentials and its content is untrusted, because <code>tofu plan</code>
+and similar tools execute code from it. Guard such effects with
+<code>when.permission</code>. Secrets and the forge token are the same as for <code>onPush</code>.</p>
+<h3 id="events"><a class="header" href="#events">Events</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>kind</th><th>delivered when</th></tr>
+</thead>
+<tbody>
+<tr><td><code>pull_request</code></td><td>a PR head was built green, also on reopen or label change</td></tr>
+<tr><td><code>comment</code></td><td>a PR comment whose first line is <code>/command args</code></td></tr>
+<tr><td><code>pull_request_closed</code></td><td>a PR was closed or merged</td></tr>
+<tr><td><code>build_finished</code></td><td>any build finished</td></tr>
+</tbody>
+</table>
+</div>
+<p>Bot comments are ignored, and a <code>/command</code> for an effect that is still running
+gets a note instead of a second run. Deliveries are queued in the database and
+retried with backoff while the forge API is unavailable. Webhooks that arrive
+while nixbot itself is down are not replayed.</p>
+<p>The event reaches the script as JSON in <code>$NIXBOT_EVENT_JSON</code> (<code>/run/event.json</code>)
+and, for the common fields, as <code>NIXBOT_EVENT_KIND</code>, <code>NIXBOT_ACTOR</code>,
+<code>NIXBOT_PR_NUMBER</code>, <code>NIXBOT_PR_HEAD</code>, <code>NIXBOT_COMMAND</code>, <code>NIXBOT_COMMAND_ARGS</code>,
+<code>NIXBOT_BUILD_STATUS</code>, <code>NIXBOT_BUILD_URL</code>. The JSON holds up to four keys:</p>
+<ul>
+<li><code>actor</code>: who caused it, <code>{ "name": "github:alice", "permission": "write" }</code>.
+It is absent for polled changes. Permissions come from the forge at delivery
+time.</li>
+<li><code>pullRequest</code>: <code>number</code>, <code>title</code>, <code>url</code>, <code>author</code> (shaped like <code>actor</code>),
+<code>baseRef</code>, <code>headRef</code>, <code>headRev</code>, <code>labels</code>, <code>draft</code>, <code>isFork</code>, <code>merged</code>.</li>
+<li><code>build</code>: <code>number</code>, <code>url</code>, <code>status</code>, <code>branch</code>, <code>rev</code>. For <code>build_finished</code> it
+also has <code>previousStatus</code> and <code>failedAttrs</code>.</li>
+<li><code>command</code>, <code>args</code>: for <code>comment</code>.</li>
+</ul>
+<h3 id="conditions"><a class="header" href="#conditions">Conditions</a></h3>
+<p><code>when</code> restricts an effect to some deliveries. All keys must match. An effect
+that does not match is listed as skipped with the reason.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th><code>when</code> key</th><th>matches if</th></tr>
+</thead>
+<tbody>
+<tr><td><code>permission = "write"</code></td><td>actor or PR author has at least <code>read</code>/<code>write</code>/<code>admin</code> (for <code>comment</code>, only the commenter)</td></tr>
+<tr><td><code>labels = [ "deploy" ]</code></td><td>the PR has all of these labels</td></tr>
+<tr><td><code>branches = [ "main" "release-*" ]</code></td><td>glob on the PR base branch, or the built branch</td></tr>
+<tr><td><code>commands = [ "plan" ]</code></td><td><code>comment</code>: the <code>/command</code> used</td></tr>
+<tr><td><code>modified = [ "terraform/*" ]</code></td><td>a file the PR changes matches a glob (pull request events only)</td></tr>
+<tr><td><code>status = [ "failed" ]</code></td><td>status of the build in the payload</td></tr>
+<tr><td><code>transition = "broke"</code> / <code>"fixed"</code></td><td>build status changed against the previous finished build of that branch or PR</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="ordering"><a class="header" href="#ordering">Ordering</a></h3>
+<p><code>lock</code> works as for <code>onPush</code>, so an event effect never overlaps a deploy holding
+the same lock. The name may contain <code>{pr}</code>: <code>lock = "preview-{pr}"</code> serialises
+per pull request. A newer delivery of the same kind for the same PR (for
+comments: the same command) cancels not-yet-started effects of the previous one.
+<code>after</code> is not supported.</p>
+<h3 id="reporting-back"><a class="header" href="#reporting-back">Reporting back</a></h3>
+<p>Event effects post no commit statuses. <code>mkEffect</code> puts <code>nixbot-pr-comment</code> on
+<code>PATH</code> instead, which comments on the pull request the event is about:
+<code>nixbot-pr-comment "text"</code> or <code>... | nixbot-pr-comment</code>. With
+<code>--replace-marker ID</code> it edits the comment a previous run left with that marker.
+Run locally it just prints the body.</p>
+<h3 id="checks-on-every-build"><a class="header" href="#checks-on-every-build">Checks on every build</a></h3>
+<p>A pull request that breaks an effect should be red before it is merged, even
+though its effects do not run there. Every build therefore evaluates <code>onPush</code>
+and <code>onEvent</code> of the built commit and builds each effect’s dependencies without
+running it, like hercules-ci-agent does for a <code>runIf false</code> effect. The results
+appear as “Effect checks” on the build page and count towards the <code>effects</code>
+forge status. Evaluation errors are shown there too, including a broken
+<code>onEvent</code> on the default branch found while delivering an event.</p>
+<h3 id="restarting"><a class="header" href="#restarting">Restarting</a></h3>
+<p>Event effects can be restarted from the build and run pages, with
+<code>nbo build restart N --effect comment/apply</code>, or
+<code>POST /api/repos/.../builds/N/effects/restart?name=apply&amp;kind=comment</code>. A
+running one is cancelled first. The stored payload is reused.</p>
+<h3 id="testing-locally"><a class="header" href="#testing-locally">Testing locally</a></h3>
+<p>Describe the event with flags instead of pushing:</p>
+<pre><code class="language-console">$ nbo effects list --event pull_request --pr 7 --permission write --label preview
+$ nbo effects run --event comment --command apply --args "-target=null" \
+    --actor github:alice --permission admin --effect-checkout . apply
+</code></pre>
+<p><code>list</code> prints every effect of that kind with the reason it would be skipped, so
+a <code>when</code> can be tried without pushing. Flags cover what <code>when</code> looks at: <code>--pr</code>,
+<code>--actor</code>, <code>--permission</code>, <code>--author-permission</code>, <code>--label</code>, <code>--modified</code>,
+<code>--command</code>, <code>--args</code>, <code>--build-status</code>, <code>--previous-build-status</code>.
+<code>--payload FILE</code> takes a payload nixbot recorded instead.</p>
+<h2 id="buildbot-secrets-configuration"><a class="header" href="#buildbot-secrets-configuration">Buildbot secrets configuration</a></h2>
+<p>When running effects through nixbot (not locally), secrets are configured at
+different scopes:</p>
+<ol>
+<li><strong>Repository-specific</strong>: <code>"github:owner/repo"</code> — applies to a single
+repository</li>
+<li><strong>Organization-wide</strong>: <code>"github:org/*"</code> — applies to all repositories in an
+organization</li>
+</ol>
+<pre><code class="language-nix">services.nixbot.effects.perRepoSecretFiles = {
+  # All repos in nix-community org get this token
+  "github:nix-community/*" = config.agenix.secrets.nix-community-effects.path;
+
+  # This specific repo gets its own token (overrides org-level)
+  "github:nix-community/nixbot" = config.agenix.secrets.nixbot-effects.path;
+
+  # All repos in a Gitea org
+  "gitea:my-org/*" = config.agenix.secrets.my-org-effects.path;
+};
+</code></pre>
+<p>The secrets files must be valid JSON files containing the secrets that will be
+made available to your effects at runtime.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="oidc-authentication"><a class="header" href="#oidc-authentication">OIDC Authentication</a></h1>
+<p>nixbot supports generic OpenID Connect (OIDC) authentication, allowing you to
+use any OIDC-compliant identity provider (Keycloak, PocketID, Authentik, etc.)
+for user login.</p>
+<h2 id="nixos-configuration"><a class="header" href="#nixos-configuration">NixOS Configuration</a></h2>
+<pre><code class="language-nix">{
+  services.nixbot = {
+    oidc.enable = true;
+
+    # Provider-qualified identities: "oidc:&lt;issuer-host&gt;:&lt;sub&gt;" with the
+    # default mapping (see "User Identification" below).
+    admins = [
+      "oidc:keycloak.example.com:f3b0a6f0-1c2d-4e5f-9a8b-7c6d5e4f3a2b"
+      "oidc:keycloak.example.com:0f9e8d7c-6b5a-4f3e-2d1c-0b9a8f7e6d5c"
+    ];
+
+    oidc = {
+      # Display name shown on login button
+      name = "My Identity Provider";
+
+      # OIDC discovery endpoint URL
+      discoveryUrl = "https://keycloak.example.com/realms/myrealm/.well-known/openid-configuration";
+
+      clientId = "nixbot";
+      clientSecretFile = "/run/secrets/nixbot-oidc-secret";
+
+      # Scopes to request (defaults shown)
+      scope = [ "openid" "email" "profile" ];
+
+      # Optional: include groups scope for group-based authorization
+      # scope = [ "openid" "email" "profile" "groups" ];
+
+      # Claim mapping (defaults shown)
+      mapping = {
+        username = "sub";  # Identity claim used for admin matching
+        groups = null;  # Set to "groups" if using group sync
+      };
+    };
+  };
+}
+</code></pre>
+<p>Set your OIDC provider’s callback URL to:
+<code>https://nixbot.example.com/auth/oidc/callback</code></p>
+<h2 id="manual-configuration"><a class="header" href="#manual-configuration">Manual Configuration</a></h2>
+<p>For non-NixOS setups or local development, the service is configured via a JSON
+file passed to <code>nixbot --config</code>:</p>
+<pre><code class="language-json">{
+  "admins": [
+    "oidc:keycloak.example.com:f3b0a6f0-1c2d-4e5f-9a8b-7c6d5e4f3a2b",
+    "oidc:keycloak.example.com:0f9e8d7c-6b5a-4f3e-2d1c-0b9a8f7e6d5c"
+  ],
+  "oidc": {
+    "name": "My Identity Provider",
+    "discovery_url": "https://keycloak.example.com/realms/myrealm/.well-known/openid-configuration",
+    "client_id": "nixbot",
+    "client_secret_file": "/path/to/client_secret",
+    "scope": ["openid", "email", "profile"],
+    "mapping": {
+      "username": "sub",
+      "groups": null
+    }
+  }
+}
+</code></pre>
+<h2 id="provider-examples"><a class="header" href="#provider-examples">Provider Examples</a></h2>
+<h3 id="keycloak"><a class="header" href="#keycloak">Keycloak</a></h3>
+<pre><code class="language-nix">oidc = {
+  name = "Keycloak";
+  discoveryUrl = "https://keycloak.example.com/realms/{realm-name}/.well-known/openid-configuration";
+  clientId = "nixbot";
+  clientSecretFile = "/run/secrets/keycloak-secret";
+};
+</code></pre>
+<h3 id="authelia"><a class="header" href="#authelia">Authelia</a></h3>
+<p>See <a href="../examples/oidc-authelia.nix">examples/oidc-authelia.nix</a> for a complete
+configuration including the Authelia side: the client registration (Authelia
+stores only a digest of the client secret) and the provider’s HMAC secret and
+issuer key.</p>
+<h3 id="pocketid"><a class="header" href="#pocketid">PocketID</a></h3>
+<pre><code class="language-nix">oidc = {
+  name = "PocketID";
+  discoveryUrl = "https://id.example.com/.well-known/openid-configuration";
+  clientId = "nixbot";
+  clientSecretFile = "/run/secrets/pocketid-secret";
+};
+</code></pre>
+<h2 id="testing-with-mock-provider"><a class="header" href="#testing-with-mock-provider">Testing with Mock Provider</a></h2>
+<p>For local development, you can use <code>oidc-provider-mock</code>:</p>
+<pre><code class="language-bash"># Create a client secret file
+echo "abc" &gt; /tmp/client_secret
+
+# Start the mock OIDC provider
+nix run nixpkgs#pipx -- run oidc-provider-mock \
+  --user-claims '{"sub": "alice", "email": "alice@example.com", "name": "Alice", "preferred_username": "alice123"}'
+</code></pre>
+<p>Then configure nixbot to use it (in the JSON config file):</p>
+<pre><code class="language-json">"oidc": {
+  "name": "Mock",
+  "discovery_url": "http://localhost:9400/.well-known/openid-configuration",
+  "client_id": "123",
+  "client_secret_file": "/tmp/client_secret",
+  "scope": ["openid", "email", "profile"],
+  "mapping": {
+    "username": "sub",
+    "groups": null
+  }
+}
+</code></pre>
+<h2 id="user-identification"><a class="header" href="#user-identification">User Identification</a></h2>
+<p>Users are identified by the claim configured in <code>mapping.username</code>, which
+defaults to <code>sub</code>. This means:</p>
+<ul>
+<li>The <code>admins</code> list entries must be provider-qualified:
+<code>oidc:&lt;issuer-host&gt;:&lt;identity&gt;</code> where <code>&lt;issuer-host&gt;</code> is the issuer URL
+without the <code>https://</code> prefix and <code>&lt;identity&gt;</code> is the value of the configured
+claim</li>
+<li><code>sub</code> is the default because it is stable and unique per provider. A
+human-readable claim such as <code>preferred_username</code> can be configured instead,
+but only do so if your provider guarantees the claim is unique and not
+user-editable: a user who can change their own <code>preferred_username</code> could
+otherwise take over another user’s admin or viewer entry</li>
+</ul>
+<h2 id="private-repositories"><a class="header" href="#private-repositories">Private Repositories</a></h2>
+<p>OIDC users have no forge account, so nixbot cannot derive their repository
+permissions from the forge and they only see public repositories by default.
+<code>privateRepoViewers</code> grants visibility (read-only; build control stays with
+<code>admins</code>):</p>
+<pre><code class="language-nix">services.nixbot.privateRepoViewers = {
+  # Repository keys: "forge:owner/repo", "forge:owner/*" or "*";
+  # the most specific key wins.
+  "*" = [
+    # Any authenticated user of this provider.
+    "oidc:auth.example.com:*"
+  ];
+  "gitlab:acme/secret" = [
+    # Exact identity or OIDC groups claim.
+    "oidc:auth.example.com:alice"
+    "oidc:auth.example.com:group:auditors"
+  ];
+};
+</code></pre>
+<p>Group rules need the groups claim in the session: add the <code>groups</code> scope and set
+<code>mapping.groups = "groups"</code>.</p>
+<p>The owner segment of a repository key is any namespace: a user, an organization,
+or a nested GitLab group (<code>"gitlab:org/subgroup/*"</code>).</p>
+<p>Viewer rules apply equally to web sessions and personal API tokens. Users who
+log in with a forge account need no viewer rules: they get private-repo
+visibility automatically from their forge permissions.</p>
+<p>Two caveats around group rules:</p>
+<ul>
+<li>Group membership is captured in the session at login, so revoking a group in
+the identity provider takes effect on the next login or session expiry, not
+immediately.</li>
+<li>Personal API tokens snapshot the creator’s groups: group rules apply to API
+requests with the groups the user had when the token was created, regardless
+of later membership changes.</li>
+</ul>
+<h2 id="groups-support"><a class="header" href="#groups-support">Groups Support</a></h2>
+<p>To sync groups from your OIDC provider:</p>
+<ol>
+<li>Add the groups scope: <code>scope = [ "openid" "email" "profile" "groups" ];</code></li>
+<li>Set the groups claim mapping: <code>mapping.groups = "groups";</code></li>
+</ol>
+<p>The claim name varies by provider - check your provider’s documentation.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="command-line-client-nbo"><a class="header" href="#command-line-client-nbo">Command-line client (nbo)</a></h1>
+<p><code>nbo</code> lets you inspect and control builds on a nixbot instance from the
+terminal: list builds, watch them finish, read failure logs, and restart or
+cancel builds.</p>
+<p>Run it directly:</p>
+<pre><code class="language-console">nix run github:Mic92/nixbot#nixbot-cli -- --help
+</code></pre>
+<p>or add the <code>nixbot-cli</code> package to your profile or dev shell to get the <code>nbo</code>
+command.</p>
+<h2 id="connecting-to-a-server"><a class="header" href="#connecting-to-a-server">Connecting to a server</a></h2>
+<p>Point <code>nbo</code> at your instance with the <code>NIXBOT_URL</code> environment variable or a
+config file:</p>
+<pre><code class="language-console">export NIXBOT_URL=https://ci.example.org
+</code></pre>
+<pre><code class="language-toml"># ~/.config/nixbot/hosts.toml
+["https://ci.example.org"]
+token = "bnix_..."
+</code></pre>
+<p>Read-only commands work without a token on public instances.</p>
+<p>If you use more than one nixbot server, tell <code>nbo</code> which repositories belong to
+which server. Add a <code>remotes</code> list to each server entry. When you run <code>nbo</code>
+inside a checkout, it looks at the URL of the <code>origin</code> remote and picks the
+first server whose pattern matches:</p>
+<pre><code class="language-toml">["https://ci.example.org"]
+token = "bnix_..."
+remotes = ["github.com/acme/*"]
+
+["https://ci.other.org"]
+remotes = ["git.other.org/*"]
+</code></pre>
+<p>Patterns are shell-style wildcards matched against the remote URL in the form
+<code>host/owner/repo</code>, so both <code>git@github.com:acme/widget.git</code> and
+<code>https://github.com/acme/widget</code> match <code>github.com/acme/*</code>.</p>
+<p>You can also assign a single checkout to a server directly, which takes
+precedence over the patterns:</p>
+<pre><code class="language-console">git config nixbot.url https://ci.example.org
+</code></pre>
+<p>When several settings are present, <code>nbo</code> uses the first of:</p>
+<ol>
+<li>the <code>NIXBOT_URL</code> environment variable</li>
+<li><code>git config nixbot.url</code></li>
+<li>a <code>remotes</code> pattern match</li>
+<li>the only server in <code>hosts.toml</code>, if there is just one</li>
+</ol>
+<h3 id="api-tokens"><a class="header" href="#api-tokens">API tokens</a></h3>
+<p>Restarting or cancelling builds and enabling repositories require an API token.
+Log in to the web UI of your instance and create one under <strong>Settings</strong>
+(<code>https://ci.example.org/settings</code>), then either put it in <code>hosts.toml</code> as shown
+above or export it:</p>
+<pre><code class="language-console">export NIXBOT_TOKEN=bnix_...
+</code></pre>
+<p>Instead of storing the token in plain text you can have <code>nbo</code> fetch it from a
+password manager such as <code>pass</code> or <code>rbw</code> on every run:</p>
+<pre><code class="language-toml"># ~/.config/nixbot/hosts.toml
+["https://ci.example.org"]
+token_command = "pass show ci.example.org/nixbot"
+# or: token_command = "rbw get nixbot-ci"
+</code></pre>
+<p><code>nbo auth status</code> shows which server and token are in use and whether the server
+is reachable.</p>
+<h2 id="repositories-and-builds"><a class="header" href="#repositories-and-builds">Repositories and builds</a></h2>
+<p>Inside a checkout the repository is inferred from the <code>origin</code> remote and the
+build number from the <code>HEAD</code> commit; both can be given explicitly
+(<code>-R [forge/]owner/name</code>, a build number as first argument).</p>
+<pre><code class="language-console">nbo repo list
+nbo repo enable github/acme/widget      # instance admin or forge repo admin
+nbo build list --branch main
+nbo build view 412                      # status, attribute summary, failed attributes
+nbo build watch 412                     # follow until it finishes, exit 1 on failure
+nbo build watch 412 --attr treefmt --attr nixos-eve   # wait only for these attributes
+nbo build restart 412 --attr x86_64-linux.treefmt     # a substring like "treefmt" works too
+nbo build restart 412 --effects
+nbo build cancel 412
+</code></pre>
+<p><code>--json [fields]</code> on list/view/log commands prints machine-readable output,
+optionally projected to a comma-separated field list.</p>
+<h2 id="logs"><a class="header" href="#logs">Logs</a></h2>
+<pre><code class="language-console">nbo log 412                                         # failure summary with log tails
+nbo log 412 checks.x86_64-linux.nixos-test --tail 200
+nbo log 412 /nix/store/...-zfs-2.2.4.drv            # one derivation of the attribute
+nbo log 412 checks.x86_64-linux.nixos-test --follow # stream while it runs
+</code></pre>
+<p>Attribute arguments accept unambiguous substrings.</p>
+<h2 id="effects"><a class="header" href="#effects">Effects</a></h2>
+<p><code>nbo effects</code> runs and inspects a flake’s <a href="#hercules-ci-effects-1">effects</a> locally with nix
+(no API token needed):</p>
+<pre><code class="language-console">nbo effects list                        # effects with their after/lock metadata
+nbo effects graph                       # dependency DAG as an ASCII tree
+nbo effects run default.deploy          # run one effect in the local sandbox
+nbo effects run github:org/repo/branch#default.deploy
+nbo effects run-scheduled github:org/repo#nightly flake-update
+nbo effects list --event pull_request --pr 7 --permission write
+nbo effects run --event comment --command apply --permission admin apply
+</code></pre>
+<p>For <code>onEvent</code> effects, <code>--event KIND</code> plus flags describing the event (<code>--pr</code>,
+<code>--actor</code>, <code>--permission</code>, <code>--label</code>, <code>--modified</code>, <code>--command</code>, …) stand in
+for a real delivery, and <code>list</code> then shows why each effect would be skipped.</p>
+<h2 id="exit-codes"><a class="header" href="#exit-codes">Exit codes</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>code</th><th>meaning</th></tr>
+</thead>
+<tbody>
+<tr><td>0</td><td>success</td></tr>
+<tr><td>1</td><td>the build or attribute failed</td></tr>
+<tr><td>2</td><td>usage error / not found</td></tr>
+<tr><td>4</td><td>authentication or permission failure</td></tr>
+</tbody>
+</table>
+</div>
+<p>Scripts and agents can also use the underlying HTTP API directly: every instance
+documents it under <code>/llms.txt</code> and <code>/api/openapi.json</code>.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="workload-identity-for-effects"><a class="header" href="#workload-identity-for-effects">Workload identity for effects</a></h1>
+<p>nixbot can act as an OIDC issuer that mints short-lived ID tokens for running
+effects. Relying parties (OpenBao/Vault, AWS/GCP/Azure federation,
+<a href="https://github.com/Mic92/niks3">niks3</a>, …) verify the tokens against nixbot’s
+JWKS and grant access based on the claims, so effects need no static deploy
+secrets in <code>effects.perRepoSecretFiles</code>.</p>
+<p>Enabled by default (<code>services.nixbot.workloadIdentity</code>); an effect only receives
+tokens for audiences it declares.</p>
+<h2 id="declaring-audiences"><a class="header" href="#declaring-audiences">Declaring audiences</a></h2>
+<p>Set <code>idTokenAudiences</code> on the effect derivation (an argument of this repo’s
+effects-lib <code>mkEffect</code>, or a plain env attribute containing a JSON list):</p>
+<pre><code class="language-nix">effects-lib.mkEffect {
+  name = "deploy";
+  idTokenAudiences = [ "https://vault.example.com" ];
+  inputs = [ pkgs.openbao pkgs.openssh ];
+  effectScript = ''
+    export VAULT_ADDR=https://vault.example.com
+
+    # Authenticate to Vault with the nixbot-issued identity token.
+    vault write -field=token auth/jwt/login \
+      role=deploy jwt="$(nixbot-id-token https://vault.example.com)" &gt; ~/.vault-token
+
+    # Trade it for a short-lived SSH certificate and deploy with it:
+    # no deploy key is stored in CI.
+    ssh-keygen -t ed25519 -N "" -f ./id_deploy
+    vault write -field=signed_key ssh/sign/deploy \
+      public_key=@./id_deploy.pub valid_principals=deploy &gt; ./id_deploy-cert.pub
+
+    export NIX_SSHOPTS="-i ./id_deploy -o CertificateFile=./id_deploy-cert.pub"
+    nixos-rebuild switch --flake .#web01 \
+      --target-host deploy@web01.example.com \
+      --use-remote-sudo
+  '';
+}
+</code></pre>
+<p>The matching Vault SSH CA setup is:</p>
+<pre><code>vault secrets enable ssh
+vault write ssh/config/ca generate_signing_key=true
+vault write ssh/roles/deploy \
+  key_type=ca allow_user_certificates=true \
+  allowed_users=deploy default_user=deploy ttl=10m
+</code></pre>
+<p>Inside the sandbox, <code>nixbot-id-token &lt;audience&gt;</code> prints a fresh ID token
+(default lifetime 300 s). <code>nixbot-id-token &lt;audience&gt; --json</code> prints the raw
+<code>{"token": ..., "expires_at": ...}</code> response, which is the format niks3’s
+<code>token-script</code> credential expects. Requests for audiences not listed in
+<code>idTokenAudiences</code> are rejected. The env variables it uses
+(<code>NIXBOT_ID_TOKEN_REQUEST_URL</code>, <code>NIXBOT_ID_TOKEN_REQUEST_TOKEN</code>) are only
+present for effects that declare at least one audience.</p>
+<p>Note the opt-in scopes tokens per effect, not per person: anyone who can get an
+effect with <code>idTokenAudiences</code> to run in the repository can obtain its tokens.
+Restrict relying-party policies with the claims below (in particular
+<code>sub</code>/<code>ref</code>), and remember effects only run for pushes and pull requests
+according to the repository’s effects gating.</p>
+<h2 id="claims"><a class="header" href="#claims">Claims</a></h2>
+<p>Common claims: <code>iss</code> (the nixbot URL), <code>aud</code> (one requested audience per token),
+<code>sub</code>, <code>event</code>, <code>forge</code>, <code>repository</code>, <code>repository_owner</code>, <code>effect</code>, plus
+<code>iat</code>/<code>nbf</code>/<code>exp</code>/<code>jti</code>.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>event</th><th><code>sub</code></th><th>extra claims</th></tr>
+</thead>
+<tbody>
+<tr><td>push</td><td><code>repo:&lt;forge&gt;:&lt;owner&gt;/&lt;repo&gt;:ref:refs/heads/&lt;branch&gt;</code></td><td><code>ref</code>, <code>sha</code>, <code>build_id</code></td></tr>
+<tr><td>pull_request</td><td><code>repo:&lt;forge&gt;:&lt;owner&gt;/&lt;repo&gt;:pull_request</code></td><td><code>pr_number</code>, <code>base_ref</code>, <code>sha</code>, <code>build_id</code></td></tr>
+<tr><td>schedule</td><td><code>repo:&lt;forge&gt;:&lt;owner&gt;/&lt;repo&gt;:schedule:&lt;name&gt;</code></td><td><code>schedule</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>Pull-request tokens carry no <code>ref</code> claim: branch-based conditions (e.g. “only
+refs/heads/main may deploy”) therefore never match a PR run.</p>
+<h2 id="relying-party-configuration"><a class="header" href="#relying-party-configuration">Relying-party configuration</a></h2>
+<p>Discovery and JWKS documents are served unauthenticated at
+<code>&lt;url&gt;/.well-known/openid-configuration</code> and <code>&lt;url&gt;/.well-known/jwks.json</code>.</p>
+<p>Example niks3 provider:</p>
+<pre><code class="language-toml">[upload-oidc-providers.nixbot]
+issuer = "https://ci.example.com"
+audience = "https://cache.example.com"
+bound_subject = "repo:github:acme/*:ref:refs/heads/main"
+</code></pre>
+<p>Example Vault/OpenBao JWT role for the deploy effect above (only pushes to main
+of acme/widgets can log in; PR-triggered effects carry no <code>ref</code> claim and never
+match):</p>
+<pre><code>vault write auth/jwt/config oidc_discovery_url=https://ci.example.com
+vault write auth/jwt/role/deploy \
+  role_type=jwt user_claim=sub \
+  bound_audiences=https://vault.example.com \
+  bound_subject=repo:github:acme/widgets:ref:refs/heads/main \
+  token_policies=ssh-deploy token_ttl=5m
+</code></pre>
+<h2 id="keys"><a class="header" href="#keys">Keys</a></h2>
+<p>Tokens are RS256-signed. Without <code>workloadIdentity.signingKeyFile</code>, nixbot
+generates the key in its state directory and rotates it every <code>keyRotationDays</code>
+(default 30); the previous key stays in the JWKS so in-flight tokens keep
+verifying. An operator-provided key is used as-is and never rotated — rotate it
+by replacing the file and restarting nixbot, which invalidates tokens signed
+with the old key.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="local-development"><a class="header" href="#local-development">Local Development</a></h1>
+<h2 id="running-the-test-suite"><a class="header" href="#running-the-test-suite">Running the test suite</a></h2>
+<pre><code class="language-bash">nix develop
+cd nixbot
+python -m pytest nixbot/tests -q
+</code></pre>
+<p>The tests cover the full pipeline (webhook parsing, evaluation, scheduling,
+building, status reporting, web frontend) against an ephemeral PostgreSQL
+instance and real <code>nix</code>/<code>git</code> where available.</p>
+<h2 id="running-the-service-locally"><a class="header" href="#running-the-service-locally">Running the service locally</a></h2>
+<p>nixbot is a single process configured by a JSON file:</p>
+<pre><code class="language-bash"># Start an ephemeral PostgreSQL
+initdb -D /tmp/bb-pg
+pg_ctl -D /tmp/bb-pg -o "-k /tmp/bb-pg -c listen_addresses=" start
+createdb -h /tmp/bb-pg nixbot
+
+cat &gt; /tmp/nixbot.json &lt;&lt;EOF
+{
+  "db_url": "postgresql://$(whoami)@/nixbot?host=/tmp/bb-pg",
+  "build_systems": ["x86_64-linux"],
+  "url": "http://localhost:8010/",
+  "state_dir": "/tmp/nixbot-state",
+  "pull_based": {
+    "repositories": {
+      "my-project": {
+        "name": "my-project",
+        "default_branch": "main",
+        "url": "https://github.com/example/my-project"
+      }
+    }
+  }
+}
+EOF
+
+python -m nixbot.main --config /tmp/nixbot.json --log-format text
+</code></pre>
+<p>Access the web UI at http://localhost:8010. Pull-based repositories need no
+forge credentials, which makes them convenient for local hacking; GitHub/Gitea
+configuration works the same way as in the NixOS module, with secret paths
+pointing at plain local files.</p>
+<h2 id="vm-integration-test"><a class="header" href="#vm-integration-test">VM integration test</a></h2>
+<p>The end-to-end NixOS test (fake GitHub + real Gitea) lives in
+<code>checks/nixbot.nix</code>:</p>
+<pre><code class="language-bash">nix build .#checks.x86_64-linux.nixbot -L
+</code></pre>
+<p>For interactive debugging:</p>
+<pre><code class="language-bash">nix build .#checks.x86_64-linux.nixbot.driverInteractive
+./result/bin/nixos-test-driver
+</code></pre>
+<p>Add <code>breakpoint()</code> in the test script to pause execution.</p>
+<h2 id="code-quality"><a class="header" href="#code-quality">Code quality</a></h2>
+<pre><code class="language-bash">nix develop -c flake-fmt   # treefmt: ruff format, ruff check, mypy, nixfmt
+</code></pre>
+<h2 id="sql-queries-sqlc"><a class="header" href="#sql-queries-sqlc">SQL queries (sqlc)</a></h2>
+<p>SQL statements live in <code>nixbot/nixbot/queries/*.sql</code> and are compiled to typed
+asyncpg query functions in <code>nixbot/nixbot/db_gen/</code> (generated code, do not edit)
+by <a href="https://sqlc.dev">sqlc</a> with the
+<a href="https://github.com/rayakame/sqlc-gen-better-python">sqlc-gen-better-python</a>
+plugin; the schema is read from <code>nixbot/nixbot/migrations/</code>. After changing a
+query or migration, regenerate and commit the output:</p>
+<pre><code class="language-bash">nix develop -c sqlc generate
+</code></pre>
+<p>The dev shell’s <code>sqlc</code> is wrapped (<code>nix/sqlc.nix</code>) to use the same nix-pinned
+plugin as CI and works offline; when bumping the plugin, update the URL/checksum
+in both <code>sqlc.yaml</code> and <code>nix/sqlc.nix</code>.</p>
+<p>CI verifies freshness via <code>nix build .#checks.x86_64-linux.sqlc-generated</code>.
+Dynamically assembled SQL (e.g. the build-list filters in <code>web/queries.py</code>) and
+the migration runner stay on raw asyncpg.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="migrating-from-buildbot-nix-1"><a class="header" href="#migrating-from-buildbot-nix-1">Migrating from buildbot-nix</a></h1>
+<p>Nixbot is a rewrite of
+<a href="https://github.com/nix-community/buildbot-nix">buildbot-nix</a>, its spiritual
+ancestor, and no longer runs on top of Buildbot. The old master/worker pair is
+now a single asyncio service that does everything itself: forge webhooks,
+evaluation with nix-eval-jobs, builds through the local nix daemon, commit
+statuses, hercules-ci-style effects, and its own web UI with a JSON API, live
+logs over SSE, and Prometheus metrics.</p>
+<p>This guide covers moving an existing buildbot-nix deployment to nixbot.</p>
+<h2 id="what-you-need-to-do-when-upgrading"><a class="header" href="#what-you-need-to-do-when-upgrading">What you need to do when upgrading</a></h2>
+<p><strong>NixOS module.</strong> Import <code>nixosModules.nixbot</code>; options live under
+<code>services.nixbot</code>. Your existing <code>services.buildbot-nix.master.*</code> config keeps
+working: options rename to <code>services.nixbot.*</code> automatically and print
+deprecation warnings. <code>nixosModules.buildbot-master</code> and
+<code>nixosModules.buildbot-worker</code> are aliases for the new module. Options that have
+no equivalent anymore (workers, oauth2-proxy mode, <code>dbUrl</code>, the Gitea webhook
+secret) fail the build with a hint on what to do instead.</p>
+<p><strong>Workers are gone.</strong> Delete <code>workersFile</code>, worker passwords and <code>localWorkers</code>.
+Builds go through the nix daemon and scale with ordinary nix remote builders.</p>
+<p><strong>Database.</strong> PostgreSQL only, with a fresh schema and plain SQL migrations.
+Build history does not carry over. By default the module provisions a local
+PostgreSQL over the unix socket; for a remote database set <code>database.url</code> or
+<code>database.urlFile</code>.</p>
+<p><strong>Authentication.</strong> <code>httpbasicauth</code> and the oauth2-proxy
+<code>accessMode.fullyPrivate</code> setup are gone. The built-in GitHub/Gitea/OIDC login
+covers the same need: private repositories are hidden from anyone not authorized
+to see them. GitHub token mode is also gone; use a GitHub App.</p>
+<p><code>authBackend</code> is removed. Enable forges explicitly (<code>github.enable</code>,
+<code>gitea.enable</code>, <code>oidc.enable</code>); every enabled forge with OAuth credentials
+configured offers a login, and several can be active at once.</p>
+<p><code>admins</code> entries must be provider-qualified: <code>github:Mic92</code>, not <code>Mic92</code>.
+Unqualified entries never match and only log a warning.</p>
+<p>OAuth callback URLs change: update your GitHub App / Gitea application to
+<code>https://&lt;domain&gt;/auth/&lt;provider&gt;/callback</code> (buildbot used <code>/auth/login</code>), e.g.
+<code>https://buildbot.example.com/auth/github/callback</code>.</p>
+<p><strong>Commit statuses / check runs.</strong> GitHub now receives Check Runs instead of
+commit statuses; Gitea/GitLab keep commit statuses. Names default to the
+<code>nixbot/</code> prefix (<code>nixbot/nix-eval</code>, <code>nixbot/nix-build ...</code>). Set
+<code>services.nixbot.statusContextPrefix = "buildbot"</code> to keep the buildbot-era
+names so existing branch protection rules keep working (GitHub matches check-run
+names and commit-status contexts in the same required-checks namespace);
+otherwise update the required status checks on every repository. Grant the
+GitHub App the <strong>Checks: read &amp; write</strong> permission and subscribe it to the
+<strong>Check run</strong> / <strong>Check suite</strong> events.</p>
+<p><strong>Webhooks.</strong> The old GitHub endpoint (<code>/change_hook/github</code>) still works as an
+alias. <code>/change_hook/gitea</code> is gone: legacy Gitea hooks carry old buildbot
+secrets that cannot match the per-repository secrets this service generates, and
+the service re-registers Gitea hooks against <code>/webhooks/gitea</code> automatically.
+However, per-repository GitHub webhooks are no longer created: events arrive
+through the App-level webhook. Enable the webhook on your GitHub App (Active,
+URL <code>https://&lt;domain&gt;/webhooks/github</code>, secret matching <code>webhookSecretFile</code>,
+events <code>push</code>, <code>pull_request</code>, <code>check_run</code>, <code>check_suite</code>); see
+<a href="docs/GITHUB.html">docs/GITHUB.md</a>. Subscribing to the <code>pull_request</code> event
+requires the “Pull requests: Read-only” repository permission. Adding a
+permission must be accepted on every installation of the app (your user account
+and each organization) under Settings → GitHub Apps → Configure. The service
+logs a warning at startup if the app is misconfigured.</p>
+<p>Gitea webhooks now register at <code>https://&lt;domain&gt;/webhooks/gitea</code> with an
+auto-generated per-repository secret stored in the database —
+<code>gitea.webhookSecretFile</code> is gone. Existing hooks are re-synced in place,
+leftover buildbot-era hooks pointing at this instance are removed. Hooks
+subscribe to <code>push</code>, <code>pull_request</code> and <code>pull_request_sync</code>.</p>
+<p><strong>Project enablement.</strong> Which repositories get built is now a per-project toggle
+in the web UI (admins only). <code>topic</code> is reduced to a one-shot import: on first
+startup with an empty database, repositories carrying the topic are enabled;
+afterwards it is ignored. <code>userAllowlist</code>/<code>repoAllowlist</code> remain a hard boundary
+at discovery time.</p>
+<p><strong>Per-repository config.</strong> The file is now called <code>nixbot.toml</code>; the legacy
+<code>buildbot-nix.toml</code> name keeps working with unchanged contents.</p>
+<p><strong>Post-build steps.</strong> <code>interpolate</code> placeholders still work. Properties: <code>attr</code>,
+<code>out_path</code>, <code>drv_path</code>, <code>system</code>, <code>project</code>, <code>branch</code>, <code>revision</code>, <code>pr_number</code>,
+<code>default_branch</code>. Two changes:</p>
+<ul>
+<li>PR builds no longer run under a <code>refs/pull/N/merge</code> branch — use
+<code>%(prop:pr_number)s</code> instead of parsing the branch name.</li>
+<li><code>%(secret:NAME)s</code> reads systemd credentials of the <code>nixbot</code> unit, so move
+<code>LoadCredential</code> entries from <code>systemd.services.buildbot-master</code> to
+<code>systemd.services.nixbot</code>.</li>
+</ul>
+<p><strong>Cache uploads.</strong> <code>services.nixbot.cachix</code>/<code>niks3</code> now push every derivation
+built locally, not just each attribute’s output closure. Custom <code>nix copy</code> or
+<code>attic push</code> post-build steps belong in <code>services.nixbot.uploaders</code> to get the
+same behaviour (attic needs <code>pathsVia = "stdin"</code>).</p>
+<p><strong>Buildbot customizations.</strong> Anything that reached into Buildbot itself —
+<code>services.buildbot-master.extraConfig</code>, the manhole, <code>pythonPackages</code> — has no
+equivalent.</p>
+<p><strong>API.</strong> The JSON API moves to <code>/api/*</code>, with an OpenAPI schema at
+<code>/openapi.json</code>.</p>
+<h2 id="what-you-get-compared-to-buildbot-nix"><a class="header" href="#what-you-get-compared-to-buildbot-nix">What you get compared to buildbot-nix</a></h2>
+<ul>
+<li>Builds are keyed by the post-merge tree hash: identical trees across branches
+and PRs reuse results instead of rebuilding.</li>
+<li>Crash recovery: after a restart, unfinished builds resume from their stored
+eval results without re-evaluating.</li>
+<li>Evaluation runs in a bwrap sandbox with a kernel-enforced memory cap
+(delegated cgroup v2 subtree).</li>
+<li>Per-user API tokens for scripted access.</li>
+<li>GitLab support (<code>services.nixbot.gitlab</code>): token-based, with per-repository
+webhooks and commit statuses. See docs/GITLAB.md.</li>
+<li>Effects show up on the build page with status, live log and failure excerpt.</li>
+<li>Effects parity with hercules-ci-agent: <code>secretsMap</code> selection with per-secret
+conditions, <code>GitToken</code> references, the current-task state API
+(<code>getStateFile</code>/<code>putStateFile</code>), per-effect mounts (<code>effects.mountables</code>),
+virtual uid/gid, a disk-backed <code>/build</code>, and a private untrusted nix daemon
+per effect (<code>effects.extraNixOptions</code>). Effects without <code>secretsMap</code> keep
+receiving the whole secrets file.</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr-ef4e11c1.min.js"></script>
+        <script src="mark-09e88c2c.min.js"></script>
+        <script src="searcher-09f2665d.js"></script>
+
+        <script src="clipboard-1626706a.min.js"></script>
+        <script src="highlight-abc7f01d.js"></script>
+        <script src="book-609e4cb8.js"></script>
+
+        <!-- Custom JS scripts -->
+
+        <script>
+        window.addEventListener('load', function() {
+            window.setTimeout(window.print, 100);
+        });
+        </script>
+
+
+    </div>
+    </body>
+</html>
