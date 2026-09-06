@@ -611,17 +611,17 @@ class ForgeStatusReporter:
         while len(self._posted_generations) > POSTED_GENERATIONS_MAX:
             self._posted_generations.popitem(last=False)
 
-        counts = await self._post_attribute_statuses(
-            event, build, results, result.attr_prefix
+        # results may be a rerun subset. attr_statuses is the whole build.
+        detail = {r.attr: r for r in results}
+        statuses = (
+            attr_statuses
+            if attr_statuses is not None
+            else {r.attr: r.status.value for r in results}
         )
-        if attr_statuses is not None:
-            # Reruns pass only the re-run subset as `results`: the
-            # summary description must still cover the whole build.
-            counts = {"failed": 0, "succeeded": 0, "cancelled": 0}
-            for attr_status in attr_statuses.values():
-                counts[_count_key(attr_status)] += 1
-        table_statuses = attr_statuses or {r.attr: r.status.value for r in results}
-        await self._post_summary(event, build, result.status, counts, table_statuses)
+        counts = await self._post_attribute_statuses(
+            event, build, statuses, detail, result.attr_prefix
+        )
+        await self._post_summary(event, build, result.status, counts, statuses)
 
     async def build_restarted(
         self, event: ChangeEvent, build: BuildRecord, attr: str | None
@@ -666,26 +666,31 @@ class ForgeStatusReporter:
         self,
         event: ChangeEvent,
         build: BuildRecord,
-        results: list[AttributeResult],
+        statuses: dict[str, str],
+        detail: dict[str, AttributeResult],
         attr_prefix: str,
     ) -> dict[str, int]:
-        """Per-attribute failure statuses and success flips. Returns
-        failed/succeeded counts over `results`."""
+        """Per-attribute failure statuses and success flips over the
+        whole build. Returns failed/succeeded/cancelled counts."""
         revision = event.commit_sha
         previously_failed = await self.failed_statuses.get_failed(revision)
 
         counts = {"failed": 0, "succeeded": 0, "cancelled": 0}
         reported = 0
-        for result in results:
+        for attr, status in statuses.items():
+            counts[_count_key(status)] += 1
             context = attr_status_context(
                 event.repo.forge,
                 event.repo.name,
-                result.attr,
+                attr,
                 attr_prefix,
                 context_prefix=self.context_prefix,
             )
-            if result.status.value in FAILED_STATUS_STATES:
-                counts[_count_key(result.status.value)] += 1
+            if status in FAILED_STATUS_STATES:
+                result = detail.get(attr)
+                if context in previously_failed and result is None:
+                    # Already posted with error detail.
+                    continue
                 if context not in previously_failed:
                     # Only new failures consume the report budget;
                     # previously-failed contexts always re-post so they
@@ -694,34 +699,27 @@ class ForgeStatusReporter:
                         continue
                     reported += 1
                 await self.failed_statuses.mark_failed(revision, context)
+                error = result.error if result else None
                 headline = (
                     result.failure.headline()
-                    if result.failure
-                    else _error_headline(result.error or "")
+                    if result and result.failure
+                    else _error_headline(error or "")
                 )
-                description = headline or result.status.value
                 await self._post(
                     event,
                     build,
                     context,
                     StatusState.failure,
-                    description,
-                    attr=result.attr,
-                    text=_fence(result.error) if result.error else None,
+                    headline or status,
+                    attr=attr,
+                    text=_fence(error) if error else None,
                 )
-            else:
-                counts["succeeded"] += 1
-                if context in previously_failed:
-                    # Success-flip for a previously failed status.
-                    await self.failed_statuses.clear(revision, context)
-                    await self._post(
-                        event,
-                        build,
-                        context,
-                        StatusState.success,
-                        "succeeded",
-                        attr=result.attr,
-                    )
+            elif context in previously_failed:
+                # Success-flip for a previously failed status.
+                await self.failed_statuses.clear(revision, context)
+                await self._post(
+                    event, build, context, StatusState.success, "succeeded", attr=attr
+                )
         return counts
 
     async def _post_summary(

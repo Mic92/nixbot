@@ -614,6 +614,27 @@ async def test_summary_counts_use_all_attribute_statuses() -> None:
     assert combined.description == "100 attributes built"
 
 
+async def test_success_flip_for_attributes_outside_the_rerun_subset() -> None:
+    """results is a rerun subset. Earlier successes must still flip."""
+    reporter, poster, store = make_reporter()
+    context = attr_status_context("github", "acme/widget", "a")
+    await store.mark_failed("sha1", context)
+    await reporter.build_finished(
+        EVENT,
+        BUILD,
+        BuildResult(
+            "succeeded",
+            1,
+            [attr_result("b", AttributeStatus.succeeded)],
+            attr_statuses={"a": "succeeded", "b": "succeeded"},
+        ),
+    )
+    assert context not in await store.get_failed("sha1")
+    assert [p.state for p in poster.posts if p.context == context] == [
+        StatusState.success
+    ]
+
+
 async def test_failed_effect_posts_failure_status() -> None:
     """A failed effect must flip the commit status to failure. A green
     status on a failed deploy hides the breakage (issue #30)."""
