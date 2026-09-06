@@ -463,11 +463,24 @@ def test_metrics_are_gauges(client: WebHarness) -> None:
     # Table-derived series shrink, so they must not be counters — and
     # per Prometheus conventions non-monotonic series must not be
     # named _total either.
-    text = client.get("/metrics").text
+    ctx = client.ctx
+    client.loop.run_until_complete(
+        ctx.pool.execute(
+            "INSERT INTO upload_queue (uploader, path, attempts)"
+            " VALUES ('cache', '/nix/store/a', 0), ('cache', '/nix/store/b', 1)"
+        )
+    )
+    try:
+        text = client.get("/metrics").text
+    finally:
+        client.loop.run_until_complete(ctx.pool.execute("DELETE FROM upload_queue"))
     assert "# TYPE nixbot_builds gauge" in text
     assert "# TYPE nixbot_attributes gauge" in text
     assert "_total" not in text
     assert "counter" not in text
+    assert 'nixbot_upload_queue_depth{uploader="cache"} 2' in text
+    assert 'nixbot_upload_queue_retrying{uploader="cache"} 1' in text
+    assert 'nixbot_upload_queue_oldest_age_seconds{uploader="cache"}' in text
 
 
 def test_metrics_are_cached(client: WebHarness) -> None:

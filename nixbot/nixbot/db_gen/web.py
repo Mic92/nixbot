@@ -13,6 +13,7 @@ __all__: collections.abc.Sequence[str] = (
     "MetricsBuildDurationRow",
     "MetricsEvalDurationRow",
     "MetricsProjectsRow",
+    "MetricsUploadQueueRow",
     "QueryResults",
     "WebAttributeCountsRow",
     "WebAttributeHistoryRow",
@@ -32,6 +33,7 @@ __all__: collections.abc.Sequence[str] = (
     "metrics_eval_duration",
     "metrics_projects",
     "metrics_queue_depth",
+    "metrics_upload_queue",
     "web_attribute_counts",
     "web_attribute_history",
     "web_attribute_neighbor_numbers",
@@ -248,6 +250,14 @@ class MetricsProjectsRow:
 class MetricsEvalDurationRow:
     total: int
     count: int
+
+
+@dataclasses.dataclass()
+class MetricsUploadQueueRow:
+    uploader: str
+    depth: int
+    retrying: int
+    oldest_age: float
 
 
 @dataclasses.dataclass()
@@ -483,6 +493,15 @@ FROM projects
 METRICS_EVAL_DURATION: typing.Final[str] = """-- name: MetricsEvalDuration :one
 SELECT coalesce(sum(eval_duration_ms), 0)::float / 1000 AS total, count(*) AS count
 FROM builds WHERE eval_duration_ms IS NOT NULL
+"""
+
+METRICS_UPLOAD_QUEUE: typing.Final[str] = """-- name: MetricsUploadQueue :many
+SELECT
+    uploader,
+    count(*) AS depth,
+    count(*) FILTER (WHERE attempts > 0) AS retrying,
+    coalesce(extract(epoch FROM now() - min(created_at)), 0)::float AS oldest_age
+FROM upload_queue GROUP BY uploader
 """
 
 WEB_EVAL_STATS: typing.Final[str] = """-- name: WebEvalStats :many
@@ -936,6 +955,13 @@ async def metrics_eval_duration(conn: ConnectionLike) -> MetricsEvalDurationRow 
     if row is None:
         return None
     return MetricsEvalDurationRow(total=row[0], count=row[1])
+
+
+def metrics_upload_queue(conn: ConnectionLike) -> QueryResults[MetricsUploadQueueRow]:
+    def _decode_hook(row: asyncpg.Record) -> MetricsUploadQueueRow:
+        return MetricsUploadQueueRow(uploader=row[0], depth=row[1], retrying=row[2], oldest_age=row[3])
+
+    return QueryResults(conn, METRICS_UPLOAD_QUEUE, _decode_hook)
 
 
 def web_eval_stats(conn: ConnectionLike, *, build_id: int, by_alloc: bool, limit_: int) -> QueryResults[WebEvalStatsRow]:

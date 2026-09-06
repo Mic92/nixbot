@@ -212,6 +212,14 @@ FROM projects;
 SELECT coalesce(sum(eval_duration_ms), 0)::float / 1000 AS total, count(*) AS count
 FROM builds WHERE eval_duration_ms IS NOT NULL;
 
+-- name: MetricsUploadQueue :many
+SELECT
+    uploader,
+    count(*) AS depth,
+    count(*) FILTER (WHERE attempts > 0) AS retrying,
+    coalesce(extract(epoch FROM now() - min(created_at)), 0)::float AS oldest_age
+FROM upload_queue GROUP BY uploader;
+
 -- name: WebEvalStats :many
 -- Attributes with eval stats, most expensive first.
 SELECT attr, status, eval_wall_ms, eval_alloc_bytes FROM build_attributes

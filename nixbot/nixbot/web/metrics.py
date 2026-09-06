@@ -68,6 +68,32 @@ async def render_metrics(pool: asyncpg.Pool) -> str:
     lines.append(f'nixbot_projects{{state="enabled"}} {projects.enabled}')
     lines.append(f'nixbot_projects{{state="total"}} {projects.total}')
 
+    uploads = await gen.metrics_upload_queue(pool)
+    lines.append(
+        "# HELP nixbot_upload_queue_depth Store paths waiting for a binary-cache push."
+    )
+    lines.append("# TYPE nixbot_upload_queue_depth gauge")
+    lines.extend(
+        f'nixbot_upload_queue_depth{{uploader="{u.uploader}"}} {u.depth}'
+        for u in uploads
+    )
+    lines.append(
+        "# HELP nixbot_upload_queue_retrying Queued paths whose push failed at least once."
+    )
+    lines.append("# TYPE nixbot_upload_queue_retrying gauge")
+    lines.extend(
+        f'nixbot_upload_queue_retrying{{uploader="{u.uploader}"}} {u.retrying}'
+        for u in uploads
+    )
+    lines.append(
+        "# HELP nixbot_upload_queue_oldest_age_seconds Age of the oldest queued path."
+    )
+    lines.append("# TYPE nixbot_upload_queue_oldest_age_seconds gauge")
+    lines.extend(
+        f'nixbot_upload_queue_oldest_age_seconds{{uploader="{u.uploader}"}} {u.oldest_age}'
+        for u in uploads
+    )
+
     return "\n".join(lines) + "\n"
 
 
