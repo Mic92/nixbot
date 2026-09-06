@@ -470,10 +470,20 @@ def test_metrics_are_gauges(client: WebHarness) -> None:
             " VALUES ('cache', '/nix/store/a', 0), ('cache', '/nix/store/b', 1)"
         )
     )
+    effect_id = client.loop.run_until_complete(
+        ctx.pool.fetchval(
+            "INSERT INTO effect_runs (project_id, kind, build_id, name, status)"
+            " SELECT project_id, 'push', id, 'deploy', 'running' FROM builds LIMIT 1"
+            " RETURNING id"
+        )
+    )
     try:
         text = client.get("/metrics").text
     finally:
         client.loop.run_until_complete(ctx.pool.execute("DELETE FROM upload_queue"))
+        client.loop.run_until_complete(
+            ctx.pool.execute("DELETE FROM effect_runs WHERE id = $1", effect_id)
+        )
     assert "# TYPE nixbot_builds gauge" in text
     assert "# TYPE nixbot_attributes gauge" in text
     assert "_total" not in text
@@ -481,6 +491,8 @@ def test_metrics_are_gauges(client: WebHarness) -> None:
     assert 'nixbot_upload_queue_depth{uploader="cache"} 2' in text
     assert 'nixbot_upload_queue_retrying{uploader="cache"} 1' in text
     assert 'nixbot_upload_queue_oldest_age_seconds{uploader="cache"}' in text
+    assert 'nixbot_effects{owner="build",status="running"} ' in text
+    assert 'nixbot_effects_oldest_running_age_seconds{owner="build"}' in text
 
 
 def test_metrics_are_cached(client: WebHarness) -> None:

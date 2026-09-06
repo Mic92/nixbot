@@ -68,6 +68,30 @@ async def render_metrics(pool: asyncpg.Pool) -> str:
     lines.append(f'nixbot_projects{{state="enabled"}} {projects.enabled}')
     lines.append(f'nixbot_projects{{state="total"}} {projects.total}')
 
+    lines.append("# HELP nixbot_effects Effect runs by owner and status.")
+    lines.append("# TYPE nixbot_effects gauge")
+    lines.extend(
+        f'nixbot_effects{{owner="{e.owner}",status="{e.status}"}} {e.count}'
+        for e in await gen.metrics_effect_counts(pool)
+    )
+    lines.append(
+        "# HELP nixbot_effects_oldest_running_age_seconds"
+        " Age of the longest pending or running effect."
+    )
+    lines.append("# TYPE nixbot_effects_oldest_running_age_seconds gauge")
+    lines.extend(
+        f'nixbot_effects_oldest_running_age_seconds{{owner="{e.owner}"}} {e.age}'
+        for e in await gen.metrics_effect_oldest_running(pool)
+    )
+    sched = expect(await gen.metrics_schedule_lag(pool))
+    if sched.schedules:
+        lines.append(
+            "# HELP nixbot_scheduled_effect_lag_seconds"
+            " Time since any scheduled effect last ran."
+        )
+        lines.append("# TYPE nixbot_scheduled_effect_lag_seconds gauge")
+        lines.append(f"nixbot_scheduled_effect_lag_seconds {sched.lag}")
+
     uploads = await gen.metrics_upload_queue(pool)
     lines.append(
         "# HELP nixbot_upload_queue_depth Store paths waiting for a binary-cache push."

@@ -220,6 +220,19 @@ SELECT
     coalesce(extract(epoch FROM now() - min(created_at)), 0)::float AS oldest_age
 FROM upload_queue GROUP BY uploader;
 
+-- name: MetricsEffectCounts :many
+SELECT owner, status, count(*) AS count FROM effect_runs GROUP BY owner, status;
+
+-- name: MetricsEffectOldestRunning :many
+SELECT owner, extract(epoch FROM now() - min(started_at))::float AS age
+FROM effect_runs WHERE status IN ('pending', 'running') GROUP BY owner;
+
+-- name: MetricsScheduleLag :one
+-- Coarse scheduler liveness: time since any schedule last fired.
+SELECT count(*) AS schedules,
+       coalesce(extract(epoch FROM now() - max(last_run)), 0)::float AS lag
+FROM scheduled_effects JOIN projects p ON p.id = project_id WHERE p.enabled;
+
 -- name: WebEvalStats :many
 -- Attributes with eval stats, most expensive first.
 SELECT attr, status, eval_wall_ms, eval_alloc_bytes FROM build_attributes
