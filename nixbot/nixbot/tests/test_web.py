@@ -143,10 +143,19 @@ def test_status_badge_urls(client: WebHarness) -> None:
         )
     )
 
-    # The repository page advertises only the unguessable public URL.
     page = client.get("/repos/github/acme/widget").text
-    assert f"http://test/badge/{token}.svg" in page
-    assert "/repos/github/acme/widget/badge.svg" not in page
+    repository_markdown = (
+        "[![nixbot](http://test/repos/github/acme/widget/badge.svg)]"
+        "(http://test/repos/github/acme/widget)"
+    )
+    public_markdown = (
+        f"[![nixbot](http://test/badge/{token}.svg)]"
+        "(http://test/repos/github/acme/widget)"
+    )
+    assert repository_markdown in page
+    assert public_markdown in page
+    assert 'aria-label="copy repository badge markup"' in page
+    assert 'aria-label="copy public badge markup"' in page
 
     public = client.get(f"/badge/{token}.svg")
     assert public.status_code == 200

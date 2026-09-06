@@ -389,15 +389,26 @@ class _PageRoutes:
                 await store.latest_runs_for_project(project["id"]),
             ),
             can_run_schedules=await self._can_run_schedules(request, project["id"]),
-            badge_markdown=self._badge_markdown(request, project),
+            repository_badge_markdown=self._badge_markdown(
+                request, project, public=False
+            ),
+            public_badge_markdown=self._badge_markdown(
+                request, project, public=True
+            ),
         )
 
-    def _badge_markdown(self, request: Request, project: dict[str, Any]) -> str:
+    def _badge_markdown(
+        self, request: Request, project: dict[str, Any], *, public: bool
+    ) -> str:
         base = (self.ctx.base_url or str(request.base_url)).rstrip("/")
-        badge_url = f"{base}/badge/{project['badge_token']}.svg"
         repo_url = (
             f"{base}/repos/{quote(project['forge'], safe='')}"
             f"/{quote(project['owner'], safe='/')}/{quote(project['name'], safe='')}"
+        )
+        badge_url = (
+            f"{base}/badge/{project['badge_token']}.svg"
+            if public
+            else f"{repo_url}/badge.svg"
         )
         return f"[![nixbot]({badge_url})]({repo_url})"
 
@@ -752,6 +763,8 @@ the instance restricts project visibility.
   -> SSE while the attribute runs: `state` snapshot (no history), then
      drv/line/phase/drv-done deltas with raw text, `done` at the end
 - GET /api/events?build=N -> SSE build/attribute status-change cues
+- GET /repos/{forge}/{owner}/{name}/badge.svg?branch=B
+  -> access-controlled SVG build-status badge for a branch
 - GET /badge/{token}.svg?branch=B
   -> public SVG build-status badge for a branch (token shown on the repo page)
 
