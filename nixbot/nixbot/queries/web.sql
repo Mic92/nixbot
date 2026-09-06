@@ -11,6 +11,9 @@ ORDER BY owner, name;
 -- name: WebRepo :one
 SELECT * FROM projects WHERE forge = $1 AND owner = $2 AND name = $3;
 
+-- name: WebRepoByBadgeToken :one
+SELECT * FROM projects WHERE badge_token = $1;
+
 -- name: WebRepoCandidates :many
 SELECT * FROM projects WHERE owner = $1 AND name = $2
 ORDER BY forge, id;

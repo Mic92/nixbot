@@ -13,6 +13,7 @@ from ..sql_util import row_dict, row_dicts  # noqa: TID252
 
 if TYPE_CHECKING:
     from datetime import datetime
+    from uuid import UUID
 
     import asyncpg
 
@@ -72,6 +73,10 @@ class WebQueries:
         self, forge: str, owner: str, name: str
     ) -> dict[str, Any] | None:
         row = await gen.web_repo(self.pool, forge=forge, owner=owner, name=name)
+        return row_dict(row) if row else None
+
+    async def repo_by_badge_token(self, token: UUID) -> dict[str, Any] | None:
+        row = await gen.web_repo_by_badge_token(self.pool, badge_token=token)
         return row_dict(row) if row else None
 
     async def repo_candidates(self, owner: str, name: str) -> list[dict[str, Any]]:

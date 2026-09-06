@@ -37,8 +37,9 @@ if typing.TYPE_CHECKING:
     import asyncpg.cursor
     import collections.abc
     import datetime
+    import uuid
 
-    type QueryResultsArgsType = int | float | str | memoryview | datetime.date | datetime.time | datetime.datetime | datetime.timedelta | collections.abc.Sequence[QueryResultsArgsType] | None
+    type QueryResultsArgsType = int | float | str | memoryview | uuid.UUID | datetime.date | datetime.time | datetime.datetime | datetime.timedelta | collections.abc.Sequence[QueryResultsArgsType] | None
 
     type ConnectionLike = asyncpg.Connection[asyncpg.Record] | asyncpg.pool.PoolConnectionProxy[asyncpg.Record]
 
@@ -137,11 +138,11 @@ UPDATE projects SET enabled = NOT enabled, updated_at = now() WHERE id = $1
 """
 
 ENABLED_PROJECTS: typing.Final[str] = """-- name: EnabledProjects :many
-SELECT id, forge, forge_repo_id, owner, name, default_branch, url, private, enabled, next_build_number, created_at, updated_at, reconcile_watermark FROM projects WHERE enabled ORDER BY owner, name
+SELECT id, forge, forge_repo_id, owner, name, default_branch, url, private, enabled, next_build_number, created_at, updated_at, reconcile_watermark, badge_token FROM projects WHERE enabled ORDER BY owner, name
 """
 
 PROJECT_BY_ID: typing.Final[str] = """-- name: ProjectById :one
-SELECT id, forge, forge_repo_id, owner, name, default_branch, url, private, enabled, next_build_number, created_at, updated_at, reconcile_watermark FROM projects WHERE id = $1
+SELECT id, forge, forge_repo_id, owner, name, default_branch, url, private, enabled, next_build_number, created_at, updated_at, reconcile_watermark, badge_token FROM projects WHERE id = $1
 """
 
 RECONCILE_WATERMARK: typing.Final[str] = """-- name: ReconcileWatermark :one
@@ -154,7 +155,7 @@ AND (reconcile_watermark IS NULL OR reconcile_watermark < $2)
 """
 
 PROJECT_BY_FORGE_ID: typing.Final[str] = """-- name: ProjectByForgeId :one
-SELECT id, forge, forge_repo_id, owner, name, default_branch, url, private, enabled, next_build_number, created_at, updated_at, reconcile_watermark FROM projects WHERE forge = $1 AND forge_repo_id = $2
+SELECT id, forge, forge_repo_id, owner, name, default_branch, url, private, enabled, next_build_number, created_at, updated_at, reconcile_watermark, badge_token FROM projects WHERE forge = $1 AND forge_repo_id = $2
 """
 
 PROJECT_VISIBILITY_ROWS: typing.Final[str] = """-- name: ProjectVisibilityRows :many
@@ -279,7 +280,7 @@ async def toggle_project_enabled(conn: ConnectionLike, *, id_: int) -> None:
 
 def enabled_projects(conn: ConnectionLike) -> QueryResults[models.Project]:
     def _decode_hook(row: asyncpg.Record) -> models.Project:
-        return models.Project(id_=row[0], forge=row[1], forge_repo_id=row[2], owner=row[3], name=row[4], default_branch=row[5], url=row[6], private=row[7], enabled=row[8], next_build_number=row[9], created_at=row[10], updated_at=row[11], reconcile_watermark=row[12])
+        return models.Project(id_=row[0], forge=row[1], forge_repo_id=row[2], owner=row[3], name=row[4], default_branch=row[5], url=row[6], private=row[7], enabled=row[8], next_build_number=row[9], created_at=row[10], updated_at=row[11], reconcile_watermark=row[12], badge_token=row[13])
 
     return QueryResults(conn, ENABLED_PROJECTS, _decode_hook)
 
@@ -288,7 +289,7 @@ async def project_by_id(conn: ConnectionLike, *, id_: int) -> models.Project | N
     row = await conn.fetchrow(PROJECT_BY_ID, id_)
     if row is None:
         return None
-    return models.Project(id_=row[0], forge=row[1], forge_repo_id=row[2], owner=row[3], name=row[4], default_branch=row[5], url=row[6], private=row[7], enabled=row[8], next_build_number=row[9], created_at=row[10], updated_at=row[11], reconcile_watermark=row[12])
+    return models.Project(id_=row[0], forge=row[1], forge_repo_id=row[2], owner=row[3], name=row[4], default_branch=row[5], url=row[6], private=row[7], enabled=row[8], next_build_number=row[9], created_at=row[10], updated_at=row[11], reconcile_watermark=row[12], badge_token=row[13])
 
 
 async def reconcile_watermark(conn: ConnectionLike, *, id_: int) -> datetime.datetime | None:
@@ -306,7 +307,7 @@ async def project_by_forge_id(conn: ConnectionLike, *, forge: str, forge_repo_id
     row = await conn.fetchrow(PROJECT_BY_FORGE_ID, forge, forge_repo_id)
     if row is None:
         return None
-    return models.Project(id_=row[0], forge=row[1], forge_repo_id=row[2], owner=row[3], name=row[4], default_branch=row[5], url=row[6], private=row[7], enabled=row[8], next_build_number=row[9], created_at=row[10], updated_at=row[11], reconcile_watermark=row[12])
+    return models.Project(id_=row[0], forge=row[1], forge_repo_id=row[2], owner=row[3], name=row[4], default_branch=row[5], url=row[6], private=row[7], enabled=row[8], next_build_number=row[9], created_at=row[10], updated_at=row[11], reconcile_watermark=row[12], badge_token=row[13])
 
 
 def project_visibility_rows(conn: ConnectionLike) -> QueryResults[ProjectVisibilityRowsRow]:

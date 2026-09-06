@@ -29,6 +29,24 @@
                aria-label="branch name, #PR or pr/N"
                value="{{ ref }}">
       </form>
+      <details class="webhook-setup">
+        <summary>status badge</summary>
+        <div class="webhook-panel">
+          <p class="muted">Repository badges require access; public badges do not.</p>
+          <dl>
+            <dt>Repository badge</dt>
+            <dd>
+              <code>{{ repository_badge_markdown }}</code>
+              {{ copy_btn(repository_badge_markdown, "repository badge markup") }}
+            </dd>
+            <dt>Public badge</dt>
+            <dd>
+              <code>{{ public_badge_markdown }}</code>
+              {{ copy_btn(public_badge_markdown, "public badge markup") }}
+            </dd>
+          </dl>
+        </div>
+      </details>
       {% if webhook_url %}
         <details class="webhook-setup">
           <summary>webhook setup</summary>

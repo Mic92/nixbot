@@ -60,6 +60,7 @@ __all__: collections.abc.Sequence[str] = (
     "web_queue",
     "web_recent_builds",
     "web_repo",
+    "web_repo_by_badge_token",
     "web_repo_candidates",
     "web_repo_overview",
 )
@@ -72,8 +73,9 @@ if typing.TYPE_CHECKING:
     import asyncpg.cursor
     import collections.abc
     import datetime
+    import uuid
 
-    type QueryResultsArgsType = int | float | str | memoryview | datetime.date | datetime.time | datetime.datetime | datetime.timedelta | collections.abc.Sequence[QueryResultsArgsType] | None
+    type QueryResultsArgsType = int | float | str | memoryview | uuid.UUID | datetime.date | datetime.time | datetime.datetime | datetime.timedelta | collections.abc.Sequence[QueryResultsArgsType] | None
 
     type ConnectionLike = asyncpg.Connection[asyncpg.Record] | asyncpg.pool.PoolConnectionProxy[asyncpg.Record]
 
@@ -95,6 +97,7 @@ class WebRepoOverviewRow:
     created_at: datetime.datetime
     updated_at: datetime.datetime
     reconcile_watermark: datetime.datetime | None
+    badge_token: uuid.UUID
     last_number: int
     last_status: str
     last_branch: str
@@ -314,23 +317,27 @@ class WebEvalStatsRow:
 
 WEB_PROJECTS: typing.Final[str] = """-- name: WebProjects :many
 
-SELECT id, forge, forge_repo_id, owner, name, default_branch, url, private, enabled, next_build_number, created_at, updated_at, reconcile_watermark FROM projects
+SELECT id, forge, forge_repo_id, owner, name, default_branch, url, private, enabled, next_build_number, created_at, updated_at, reconcile_watermark, badge_token FROM projects
 WHERE ($1::boolean IS NULL OR enabled = $1)
   AND ($2::text IS NULL OR owner || '/' || name ILIKE $2)
 ORDER BY owner, name
 """
 
 WEB_REPO: typing.Final[str] = """-- name: WebRepo :one
-SELECT id, forge, forge_repo_id, owner, name, default_branch, url, private, enabled, next_build_number, created_at, updated_at, reconcile_watermark FROM projects WHERE forge = $1 AND owner = $2 AND name = $3
+SELECT id, forge, forge_repo_id, owner, name, default_branch, url, private, enabled, next_build_number, created_at, updated_at, reconcile_watermark, badge_token FROM projects WHERE forge = $1 AND owner = $2 AND name = $3
+"""
+
+WEB_REPO_BY_BADGE_TOKEN: typing.Final[str] = """-- name: WebRepoByBadgeToken :one
+SELECT id, forge, forge_repo_id, owner, name, default_branch, url, private, enabled, next_build_number, created_at, updated_at, reconcile_watermark, badge_token FROM projects WHERE badge_token = $1
 """
 
 WEB_REPO_CANDIDATES: typing.Final[str] = """-- name: WebRepoCandidates :many
-SELECT id, forge, forge_repo_id, owner, name, default_branch, url, private, enabled, next_build_number, created_at, updated_at, reconcile_watermark FROM projects WHERE owner = $1 AND name = $2
+SELECT id, forge, forge_repo_id, owner, name, default_branch, url, private, enabled, next_build_number, created_at, updated_at, reconcile_watermark, badge_token FROM projects WHERE owner = $1 AND name = $2
 ORDER BY forge, id
 """
 
 WEB_REPO_OVERVIEW: typing.Final[str] = """-- name: WebRepoOverview :many
-SELECT p.id, p.forge, p.forge_repo_id, p.owner, p.name, p.default_branch, p.url, p.private, p.enabled, p.next_build_number, p.created_at, p.updated_at, p.reconcile_watermark,
+SELECT p.id, p.forge, p.forge_repo_id, p.owner, p.name, p.default_branch, p.url, p.private, p.enabled, p.next_build_number, p.created_at, p.updated_at, p.reconcile_watermark, p.badge_token,
        lb.number AS last_number, lb.status AS last_status,
        lb.branch AS last_branch, lb.created_at AS last_created_at,
        lb.started_at, lb.finished_at,
@@ -630,7 +637,7 @@ class QueryResults[T]:
 
 def web_projects(conn: ConnectionLike, *, enabled: bool | None, pattern: str | None) -> QueryResults[models.Project]:
     def _decode_hook(row: asyncpg.Record) -> models.Project:
-        return models.Project(id_=row[0], forge=row[1], forge_repo_id=row[2], owner=row[3], name=row[4], default_branch=row[5], url=row[6], private=row[7], enabled=row[8], next_build_number=row[9], created_at=row[10], updated_at=row[11], reconcile_watermark=row[12])
+        return models.Project(id_=row[0], forge=row[1], forge_repo_id=row[2], owner=row[3], name=row[4], default_branch=row[5], url=row[6], private=row[7], enabled=row[8], next_build_number=row[9], created_at=row[10], updated_at=row[11], reconcile_watermark=row[12], badge_token=row[13])
 
     return QueryResults(conn, WEB_PROJECTS, _decode_hook, enabled, pattern)
 
@@ -639,12 +646,19 @@ async def web_repo(conn: ConnectionLike, *, forge: str, owner: str, name: str) -
     row = await conn.fetchrow(WEB_REPO, forge, owner, name)
     if row is None:
         return None
-    return models.Project(id_=row[0], forge=row[1], forge_repo_id=row[2], owner=row[3], name=row[4], default_branch=row[5], url=row[6], private=row[7], enabled=row[8], next_build_number=row[9], created_at=row[10], updated_at=row[11], reconcile_watermark=row[12])
+    return models.Project(id_=row[0], forge=row[1], forge_repo_id=row[2], owner=row[3], name=row[4], default_branch=row[5], url=row[6], private=row[7], enabled=row[8], next_build_number=row[9], created_at=row[10], updated_at=row[11], reconcile_watermark=row[12], badge_token=row[13])
+
+
+async def web_repo_by_badge_token(conn: ConnectionLike, *, badge_token: uuid.UUID) -> models.Project | None:
+    row = await conn.fetchrow(WEB_REPO_BY_BADGE_TOKEN, badge_token)
+    if row is None:
+        return None
+    return models.Project(id_=row[0], forge=row[1], forge_repo_id=row[2], owner=row[3], name=row[4], default_branch=row[5], url=row[6], private=row[7], enabled=row[8], next_build_number=row[9], created_at=row[10], updated_at=row[11], reconcile_watermark=row[12], badge_token=row[13])
 
 
 def web_repo_candidates(conn: ConnectionLike, *, owner: str, name: str) -> QueryResults[models.Project]:
     def _decode_hook(row: asyncpg.Record) -> models.Project:
-        return models.Project(id_=row[0], forge=row[1], forge_repo_id=row[2], owner=row[3], name=row[4], default_branch=row[5], url=row[6], private=row[7], enabled=row[8], next_build_number=row[9], created_at=row[10], updated_at=row[11], reconcile_watermark=row[12])
+        return models.Project(id_=row[0], forge=row[1], forge_repo_id=row[2], owner=row[3], name=row[4], default_branch=row[5], url=row[6], private=row[7], enabled=row[8], next_build_number=row[9], created_at=row[10], updated_at=row[11], reconcile_watermark=row[12], badge_token=row[13])
 
     return QueryResults(conn, WEB_REPO_CANDIDATES, _decode_hook, owner, name)
 
@@ -665,15 +679,16 @@ def web_repo_overview(conn: ConnectionLike, *, project_ids: collections.abc.Sequ
             created_at=row[10],
             updated_at=row[11],
             reconcile_watermark=row[12],
-            last_number=row[13],
-            last_status=row[14],
-            last_branch=row[15],
-            last_created_at=row[16],
-            started_at=row[17],
-            finished_at=row[18],
-            history=row[19],
-            median_secs=row[20],
-            pass_rate=row[21],
+            badge_token=row[13],
+            last_number=row[14],
+            last_status=row[15],
+            last_branch=row[16],
+            last_created_at=row[17],
+            started_at=row[18],
+            finished_at=row[19],
+            history=row[20],
+            median_secs=row[21],
+            pass_rate=row[22],
         )
 
     return QueryResults(conn, WEB_REPO_OVERVIEW, _decode_hook, project_ids, pattern)
