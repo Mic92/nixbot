@@ -220,6 +220,17 @@ SELECT
     coalesce(extract(epoch FROM now() - min(created_at)), 0)::float AS oldest_age
 FROM upload_queue GROUP BY uploader;
 
+-- name: MetricsWorkQueueCounts :many
+SELECT kind, status, count(*) AS count FROM work_queue GROUP BY kind, status;
+
+-- name: MetricsWorkQueueOldest :many
+SELECT kind, status, extract(epoch FROM now() - min(created_at))::float AS age
+FROM work_queue WHERE status IN ('pending', 'running') GROUP BY kind, status;
+
+-- name: MetricsBuildOldestActive :one
+SELECT coalesce(extract(epoch FROM now() - min(created_at)), 0)::float AS age
+FROM builds WHERE status IN ('pending', 'evaluating', 'building');
+
 -- name: MetricsEffectCounts :many
 SELECT owner, status, count(*) AS count FROM effect_runs GROUP BY owner, status;
 

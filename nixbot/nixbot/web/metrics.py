@@ -17,108 +17,151 @@ from ..db_gen import web as gen  # noqa: TID252
 from ..sql_util import expect  # noqa: TID252
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable, Mapping
+
     import asyncpg
+
+Sample = tuple["Mapping[str, str]", float]
+
+
+class _Gauges:
+    # Everything here is a gauge: status transitions and retention
+    # cleanup shrink the table-derived values, so they are not counters.
+    def __init__(self) -> None:
+        self.lines: list[str] = []
+
+    def add(self, name: str, help_: str, samples: Iterable[Sample]) -> None:
+        self.lines.append(f"# HELP nixbot_{name} {help_}")
+        self.lines.append(f"# TYPE nixbot_{name} gauge")
+        for labels, value in samples:
+            sel = ",".join(f'{k}="{v}"' for k, v in labels.items())
+            self.lines.append(
+                f"nixbot_{name}{{{sel}}} {value}" if sel else f"nixbot_{name} {value}"
+            )
+
+    def one(self, name: str, help_: str, value: float) -> None:
+        self.add(name, help_, [({}, value)])
 
 
 async def render_metrics(pool: asyncpg.Pool) -> str:
-    # Everything here is a gauge: status transitions and retention
-    # cleanup shrink the table-derived values, so they are not counters.
-    lines: list[str] = []
+    g = _Gauges()
 
-    lines.append("# HELP nixbot_builds Builds by final status.")
-    lines.append("# TYPE nixbot_builds gauge")
-    lines.extend(
-        f'nixbot_builds{{status="{row.status}"}} {row.count}'
-        for row in await gen.metrics_build_counts(pool)
+    g.add(
+        "builds",
+        "Builds by final status.",
+        [({"status": r.status}, r.count) for r in await gen.metrics_build_counts(pool)],
     )
-
-    lines.append("# HELP nixbot_attributes Attribute results by status.")
-    lines.append("# TYPE nixbot_attributes gauge")
-    lines.extend(
-        f'nixbot_attributes{{status="{row.status}"}} {row.count}'
-        for row in await gen.metrics_attribute_counts(pool)
+    g.add(
+        "attributes",
+        "Attribute results by status.",
+        [
+            ({"status": r.status}, r.count)
+            for r in await gen.metrics_attribute_counts(pool)
+        ],
     )
-
-    queue_depth = await gen.metrics_queue_depth(pool)
-    lines.append("# HELP nixbot_queue_depth Builds pending or running.")
-    lines.append("# TYPE nixbot_queue_depth gauge")
-    lines.append(f"nixbot_queue_depth {queue_depth}")
+    g.one(
+        "queue_depth",
+        "Builds pending or running.",
+        expect(await gen.metrics_queue_depth(pool)),
+    )
+    g.one(
+        "builds_oldest_active_age_seconds",
+        "Age of the oldest pending or running build.",
+        expect(await gen.metrics_build_oldest_active(pool)),
+    )
 
     duration = expect(await gen.metrics_build_duration(pool))
-    lines.append(
-        "# HELP nixbot_build_duration_seconds_sum Total wall time of finished builds."
+    g.one(
+        "build_duration_seconds_sum",
+        "Total wall time of finished builds.",
+        duration.total,
     )
-    lines.append("# TYPE nixbot_build_duration_seconds_sum gauge")
-    lines.append(f"nixbot_build_duration_seconds_sum {duration.total}")
-    lines.append("# TYPE nixbot_build_duration_seconds_count gauge")
-    lines.append(f"nixbot_build_duration_seconds_count {duration.count}")
-
+    g.one(
+        "build_duration_seconds_count",
+        "Finished builds with a duration.",
+        duration.count,
+    )
     eval_duration = expect(await gen.metrics_eval_duration(pool))
-    lines.append(
-        "# HELP nixbot_eval_duration_seconds_sum Total nix-eval-jobs run time."
+    g.one(
+        "eval_duration_seconds_sum",
+        "Total nix-eval-jobs run time.",
+        eval_duration.total,
     )
-    lines.append("# TYPE nixbot_eval_duration_seconds_sum gauge")
-    lines.append(f"nixbot_eval_duration_seconds_sum {eval_duration.total}")
-    lines.append("# TYPE nixbot_eval_duration_seconds_count gauge")
-    lines.append(f"nixbot_eval_duration_seconds_count {eval_duration.count}")
+    g.one(
+        "eval_duration_seconds_count",
+        "Builds with an eval duration.",
+        eval_duration.count,
+    )
 
     projects = expect(await gen.metrics_projects(pool))
-    lines.append("# HELP nixbot_projects Projects known/enabled.")
-    lines.append("# TYPE nixbot_projects gauge")
-    lines.append(f'nixbot_projects{{state="enabled"}} {projects.enabled}')
-    lines.append(f'nixbot_projects{{state="total"}} {projects.total}')
+    g.add(
+        "projects",
+        "Projects known/enabled.",
+        [
+            ({"state": "enabled"}, projects.enabled),
+            ({"state": "total"}, projects.total),
+        ],
+    )
 
-    lines.append("# HELP nixbot_effects Effect runs by owner and status.")
-    lines.append("# TYPE nixbot_effects gauge")
-    lines.extend(
-        f'nixbot_effects{{owner="{e.owner}",status="{e.status}"}} {e.count}'
-        for e in await gen.metrics_effect_counts(pool)
+    g.add(
+        "work_queue",
+        "Dispatcher work items by kind and status.",
+        [
+            ({"kind": w.kind, "status": w.status}, w.count)
+            for w in await gen.metrics_work_queue_counts(pool)
+        ],
     )
-    lines.append(
-        "# HELP nixbot_effects_oldest_running_age_seconds"
-        " Age of the longest pending or running effect."
+    g.add(
+        "work_queue_oldest_age_seconds",
+        "Age of the oldest pending or running work item.",
+        [
+            ({"kind": w.kind, "status": w.status}, w.age)
+            for w in await gen.metrics_work_queue_oldest(pool)
+        ],
     )
-    lines.append("# TYPE nixbot_effects_oldest_running_age_seconds gauge")
-    lines.extend(
-        f'nixbot_effects_oldest_running_age_seconds{{owner="{e.owner}"}} {e.age}'
-        for e in await gen.metrics_effect_oldest_running(pool)
+
+    g.add(
+        "effects",
+        "Effect runs by owner and status.",
+        [
+            ({"owner": e.owner, "status": e.status}, e.count)
+            for e in await gen.metrics_effect_counts(pool)
+        ],
+    )
+    g.add(
+        "effects_oldest_running_age_seconds",
+        "Age of the longest pending or running effect.",
+        [
+            ({"owner": e.owner}, e.age)
+            for e in await gen.metrics_effect_oldest_running(pool)
+        ],
     )
     sched = expect(await gen.metrics_schedule_lag(pool))
     if sched.schedules:
-        lines.append(
-            "# HELP nixbot_scheduled_effect_lag_seconds"
-            " Time since any scheduled effect last ran."
+        g.one(
+            "scheduled_effect_lag_seconds",
+            "Time since any scheduled effect last ran.",
+            sched.lag,
         )
-        lines.append("# TYPE nixbot_scheduled_effect_lag_seconds gauge")
-        lines.append(f"nixbot_scheduled_effect_lag_seconds {sched.lag}")
 
     uploads = await gen.metrics_upload_queue(pool)
-    lines.append(
-        "# HELP nixbot_upload_queue_depth Store paths waiting for a binary-cache push."
+    g.add(
+        "upload_queue_depth",
+        "Store paths waiting for a binary-cache push.",
+        [({"uploader": u.uploader}, u.depth) for u in uploads],
     )
-    lines.append("# TYPE nixbot_upload_queue_depth gauge")
-    lines.extend(
-        f'nixbot_upload_queue_depth{{uploader="{u.uploader}"}} {u.depth}'
-        for u in uploads
+    g.add(
+        "upload_queue_retrying",
+        "Queued paths whose push failed at least once.",
+        [({"uploader": u.uploader}, u.retrying) for u in uploads],
     )
-    lines.append(
-        "# HELP nixbot_upload_queue_retrying Queued paths whose push failed at least once."
-    )
-    lines.append("# TYPE nixbot_upload_queue_retrying gauge")
-    lines.extend(
-        f'nixbot_upload_queue_retrying{{uploader="{u.uploader}"}} {u.retrying}'
-        for u in uploads
-    )
-    lines.append(
-        "# HELP nixbot_upload_queue_oldest_age_seconds Age of the oldest queued path."
-    )
-    lines.append("# TYPE nixbot_upload_queue_oldest_age_seconds gauge")
-    lines.extend(
-        f'nixbot_upload_queue_oldest_age_seconds{{uploader="{u.uploader}"}} {u.oldest_age}'
-        for u in uploads
+    g.add(
+        "upload_queue_oldest_age_seconds",
+        "Age of the oldest queued path.",
+        [({"uploader": u.uploader}, u.oldest_age) for u in uploads],
     )
 
-    return "\n".join(lines) + "\n"
+    return "\n".join(g.lines) + "\n"
 
 
 # /metrics is unauthenticated: without a cache anyone could run the

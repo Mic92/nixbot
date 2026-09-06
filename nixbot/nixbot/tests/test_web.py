@@ -477,10 +477,19 @@ def test_metrics_are_gauges(client: WebHarness) -> None:
             " RETURNING id"
         )
     )
+    work_id = client.loop.run_until_complete(
+        ctx.pool.fetchval(
+            "INSERT INTO work_queue (kind, dedup_key) VALUES ('change', 'k')"
+            " RETURNING id"
+        )
+    )
     try:
         text = client.get("/metrics").text
     finally:
         client.loop.run_until_complete(ctx.pool.execute("DELETE FROM upload_queue"))
+        client.loop.run_until_complete(
+            ctx.pool.execute("DELETE FROM work_queue WHERE id = $1", work_id)
+        )
         client.loop.run_until_complete(
             ctx.pool.execute("DELETE FROM effect_runs WHERE id = $1", effect_id)
         )
@@ -492,6 +501,11 @@ def test_metrics_are_gauges(client: WebHarness) -> None:
     assert 'nixbot_upload_queue_retrying{uploader="cache"} 1' in text
     assert 'nixbot_upload_queue_oldest_age_seconds{uploader="cache"}' in text
     assert 'nixbot_effects{owner="build",status="running"} ' in text
+    assert 'nixbot_work_queue{kind="change",status="pending"} ' in text
+    assert (
+        'nixbot_work_queue_oldest_age_seconds{kind="change",status="pending"}' in text
+    )
+    assert "nixbot_builds_oldest_active_age_seconds " in text
     assert 'nixbot_effects_oldest_running_age_seconds{owner="build"}' in text
 
 

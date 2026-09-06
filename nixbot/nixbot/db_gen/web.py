@@ -17,6 +17,8 @@ __all__: collections.abc.Sequence[str] = (
     "MetricsProjectsRow",
     "MetricsScheduleLagRow",
     "MetricsUploadQueueRow",
+    "MetricsWorkQueueCountsRow",
+    "MetricsWorkQueueOldestRow",
     "QueryResults",
     "WebAttributeCountsRow",
     "WebAttributeHistoryRow",
@@ -33,6 +35,7 @@ __all__: collections.abc.Sequence[str] = (
     "metrics_attribute_counts",
     "metrics_build_counts",
     "metrics_build_duration",
+    "metrics_build_oldest_active",
     "metrics_effect_counts",
     "metrics_effect_oldest_running",
     "metrics_eval_duration",
@@ -40,6 +43,8 @@ __all__: collections.abc.Sequence[str] = (
     "metrics_queue_depth",
     "metrics_schedule_lag",
     "metrics_upload_queue",
+    "metrics_work_queue_counts",
+    "metrics_work_queue_oldest",
     "web_attribute_counts",
     "web_attribute_history",
     "web_attribute_neighbor_numbers",
@@ -264,6 +269,20 @@ class MetricsUploadQueueRow:
     depth: int
     retrying: int
     oldest_age: float
+
+
+@dataclasses.dataclass()
+class MetricsWorkQueueCountsRow:
+    kind: str
+    status: str
+    count: int
+
+
+@dataclasses.dataclass()
+class MetricsWorkQueueOldestRow:
+    kind: str
+    status: str
+    age: float
 
 
 @dataclasses.dataclass()
@@ -527,6 +546,20 @@ SELECT
     count(*) FILTER (WHERE attempts > 0) AS retrying,
     coalesce(extract(epoch FROM now() - min(created_at)), 0)::float AS oldest_age
 FROM upload_queue GROUP BY uploader
+"""
+
+METRICS_WORK_QUEUE_COUNTS: typing.Final[str] = """-- name: MetricsWorkQueueCounts :many
+SELECT kind, status, count(*) AS count FROM work_queue GROUP BY kind, status
+"""
+
+METRICS_WORK_QUEUE_OLDEST: typing.Final[str] = """-- name: MetricsWorkQueueOldest :many
+SELECT kind, status, extract(epoch FROM now() - min(created_at))::float AS age
+FROM work_queue WHERE status IN ('pending', 'running') GROUP BY kind, status
+"""
+
+METRICS_BUILD_OLDEST_ACTIVE: typing.Final[str] = """-- name: MetricsBuildOldestActive :one
+SELECT coalesce(extract(epoch FROM now() - min(created_at)), 0)::float AS age
+FROM builds WHERE status IN ('pending', 'evaluating', 'building')
 """
 
 METRICS_EFFECT_COUNTS: typing.Final[str] = """-- name: MetricsEffectCounts :many
@@ -1002,6 +1035,27 @@ def metrics_upload_queue(conn: ConnectionLike) -> QueryResults[MetricsUploadQueu
         return MetricsUploadQueueRow(uploader=row[0], depth=row[1], retrying=row[2], oldest_age=row[3])
 
     return QueryResults(conn, METRICS_UPLOAD_QUEUE, _decode_hook)
+
+
+def metrics_work_queue_counts(conn: ConnectionLike) -> QueryResults[MetricsWorkQueueCountsRow]:
+    def _decode_hook(row: asyncpg.Record) -> MetricsWorkQueueCountsRow:
+        return MetricsWorkQueueCountsRow(kind=row[0], status=row[1], count=row[2])
+
+    return QueryResults(conn, METRICS_WORK_QUEUE_COUNTS, _decode_hook)
+
+
+def metrics_work_queue_oldest(conn: ConnectionLike) -> QueryResults[MetricsWorkQueueOldestRow]:
+    def _decode_hook(row: asyncpg.Record) -> MetricsWorkQueueOldestRow:
+        return MetricsWorkQueueOldestRow(kind=row[0], status=row[1], age=row[2])
+
+    return QueryResults(conn, METRICS_WORK_QUEUE_OLDEST, _decode_hook)
+
+
+async def metrics_build_oldest_active(conn: ConnectionLike) -> float | None:
+    row = await conn.fetchrow(METRICS_BUILD_OLDEST_ACTIVE)
+    if row is None:
+        return None
+    return row[0]
 
 
 def metrics_effect_counts(conn: ConnectionLike) -> QueryResults[MetricsEffectCountsRow]:
