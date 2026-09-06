@@ -192,6 +192,12 @@
         retry(hook_registered, timeout_seconds=300)
 
     with subtest("push delivers the webhook"):
+        # Hooks are delivered by sidekiq, which setup-gitlab restarted and
+        # which needs minutes to boot Rails again on a loaded builder.
+        gitlab.wait_until_succeeds(
+            "journalctl -u gitlab-sidekiq _SYSTEMD_INVOCATION_ID=$(systemctl show -P InvocationID gitlab-sidekiq) | grep -q 'Booted Rails'",
+            timeout=600,
+        )
         gitlab.succeed(
             "cd /tmp/test-flake && "
             "echo '# trigger' >> flake.nix && "
