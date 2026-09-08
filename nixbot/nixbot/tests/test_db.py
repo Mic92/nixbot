@@ -51,6 +51,26 @@ async def test_migrations_idempotent(postgres_dsn: str) -> None:
     assert await check() == len(load_migrations())
 
 
+async def test_effect_runs_owner_upgrade_migration(postgres_dsn: str) -> None:
+    """Databases that applied migration 28 before owner was added must upgrade."""
+    conn = await _connect(postgres_dsn)
+    try:
+        await conn.execute("ALTER TABLE effect_runs DROP COLUMN owner")
+        await conn.execute("DELETE FROM schema_migrations WHERE version = 33")
+        await apply_migrations(postgres_dsn)
+
+        generation = await conn.fetchval(
+            """
+            SELECT is_generated
+            FROM information_schema.columns
+            WHERE table_name = 'effect_runs' AND column_name = 'owner'
+            """
+        )
+        assert generation == "ALWAYS"
+    finally:
+        await conn.close()
+
+
 async def test_failed_migration_error_not_masked(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
