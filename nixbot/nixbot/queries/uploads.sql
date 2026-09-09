@@ -25,5 +25,11 @@ UPDATE upload_queue SET attempts = attempts + 1
 WHERE id = ANY(sqlc.arg(ids)::bigint[])
   AND attempts + 1 < sqlc.arg(max_attempts)::int;
 
+-- name: AllPendingUploadPaths :many
+SELECT DISTINCT path FROM upload_queue WHERE uploader = $1;
+
+-- name: DeleteUploadPath :exec
+DELETE FROM upload_queue WHERE uploader = $1 AND path = $2;
+
 -- name: DropUnknownUploaders :exec
 DELETE FROM upload_queue WHERE NOT (uploader = ANY(sqlc.arg(names)::text[]));

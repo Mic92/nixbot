@@ -1,21 +1,25 @@
-"""Binary-cache uploads through one persistent batching queue per uploader.
+"""Binary-cache uploads through one persistent queue per uploader.
 
 Every locally built derivation (intermediates included) and each
-attribute's final outputs land in `upload_queue`. One worker per
-uploader drains whatever accumulated into a single push, so at most one
-push per uploader runs service-wide and a restart loses nothing.
-Intermediates arrive as .drv paths and silently drop out when their
-outputs are invalid (the derivation failed).
+attribute's final outputs land in `upload_queue` so a restart loses
+nothing. Intermediates arrive as .drv paths and silently drop out when
+their outputs are invalid (the derivation failed).
+
+Batch uploaders run one push over whatever accumulated. Stream
+uploaders keep one long-running child (`niks3 push --stdin`) that
+acknowledges each path, so an attribute waits only for its own paths.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
+from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from nixbot_effects.proc import ProcessGroup
 
@@ -37,19 +41,13 @@ RETRY_DELAY = 30.0
 BATCH_LIMIT = 5000
 # Well below ARG_MAX (2 MiB incl. environment on Linux).
 MAX_ARGS_BYTES = 512 * 1024
+STREAM_STOP_GRACE = 10.0
 
 
 @dataclass
 class UploadResult:
     success: bool
     output: str
-
-
-@dataclass
-class _Waiter:
-    future: asyncio.Future[UploadResult]
-    # Highest queue row of this attribute; rows push in id order.
-    last_id: int | None = None
 
 
 def chunk_args(args: Sequence[str], limit: int = MAX_ARGS_BYTES) -> list[list[str]]:
@@ -144,8 +142,12 @@ class Uploader:
     retry_delay: float = RETRY_DELAY
     resolve: Callable[[set[str]], Awaitable[set[str]]] = resolve_valid_outputs
     _wake: asyncio.Event = field(default_factory=asyncio.Event, init=False)
-    _waiters: list[_Waiter] = field(default_factory=list, init=False)
     _buffer: list[str] = field(default_factory=list, init=False)
+
+    @staticmethod
+    def create(config: UploaderConfig, pool: asyncpg.Pool, **kwargs: Any) -> Uploader:
+        cls = StreamUploader if config.paths_via == "stream" else BatchUploader
+        return cls(config, pool, **kwargs)
 
     @property
     def name(self) -> str:
@@ -153,14 +155,42 @@ class Uploader:
 
     def enqueue_nowait(self, drv_path: str) -> None:
         """Best-effort upload of a .drv the build log reported as built;
-        persisted by the worker on its next iteration."""
+        picked up by the worker on its next iteration."""
         self._buffer.append(drv_path)
         self._wake.set()
 
-    async def _flush_buffer(self) -> None:
-        if self._buffer:
-            paths, self._buffer = self._buffer, []
-            await q.enqueue_upload_paths(self.pool, uploader=self.name, paths=paths)
+    def _take_buffer(self) -> list[str]:
+        paths, self._buffer = self._buffer, []
+        return paths
+
+    def _command(self) -> tuple[list[str], dict[str, str]]:
+        # No %(prop:..)s: one process spans many attributes.
+        command = [interpolate(arg, {}) for arg in self.config.command]
+        env = {
+            **os.environ,
+            **{k: interpolate(v, {}) for k, v in self.config.environment.items()},
+        }
+        return command, env
+
+    async def upload(self, paths: list[str]) -> UploadResult:
+        raise NotImplementedError
+
+    async def run(self) -> None:
+        raise NotImplementedError
+
+
+@dataclass
+class _Waiter:
+    future: asyncio.Future[UploadResult]
+    # Highest queue row of this attribute; rows push in id order.
+    last_id: int | None = None
+
+
+@dataclass
+class BatchUploader(Uploader):
+    """One push per iteration over everything queued (argv or stdin)."""
+
+    _waiters: list[_Waiter] = field(default_factory=list, init=False)
 
     async def upload(self, paths: list[str]) -> UploadResult:
         """Upload an attribute's final outputs and wait for the first verdict."""
@@ -190,7 +220,10 @@ class Uploader:
     async def run(self) -> None:
         while True:
             self._wake.clear()
-            await self._flush_buffer()
+            if buffered := self._take_buffer():
+                await q.enqueue_upload_paths(
+                    self.pool, uploader=self.name, paths=buffered
+                )
             rows = await q.pending_upload_paths(
                 self.pool, uploader=self.name, limit=BATCH_LIMIT
             )
@@ -219,15 +252,6 @@ class Uploader:
             if not result.success:
                 await asyncio.sleep(self.retry_delay)
 
-    def _command(self) -> tuple[list[str], dict[str, str]]:
-        # No %(prop:..)s: one batch spans many attributes.
-        command = [interpolate(arg, {}) for arg in self.config.command]
-        env = {
-            **os.environ,
-            **{k: interpolate(v, {}) for k, v in self.config.environment.items()},
-        }
-        return command, env
-
     async def _push(self, raw: set[str]) -> UploadResult:
         paths = sorted(await self.resolve(raw))
         if not paths:
@@ -254,8 +278,109 @@ class Uploader:
         return UploadResult(success=ok, output="".join(outputs))
 
 
+@dataclass
+class StreamUploader(Uploader):
+    """Long-running child speaking `niks3 push --stdin`: store paths in,
+    one JSON `{path, status, message}` line per path out. Queue rows only
+    bridge child or service restarts; retrying is the child's job."""
+
+    _pending: defaultdict[str, list[asyncio.Future[UploadResult]]] = field(
+        default_factory=lambda: defaultdict(list), init=False
+    )
+
+    async def upload(self, paths: list[str]) -> UploadResult:
+        loop = asyncio.get_running_loop()
+        futures = [loop.create_future() for _ in paths]
+        for p, fut in zip(paths, futures, strict=True):
+            self._pending[p].append(fut)
+        self._buffer.extend(paths)
+        self._wake.set()
+        try:
+            results = await asyncio.wait_for(asyncio.gather(*futures), self.timeout)
+        except TimeoutError:
+            return UploadResult(
+                success=False, output=f"timed out after {self.timeout}s"
+            )
+        failed = [r.output for r in results if not r.success]
+        return UploadResult(success=not failed, output="\n".join(failed))
+
+    async def _ack(self, line: bytes) -> None:
+        try:
+            msg = json.loads(line)
+            path, ok = msg["path"], msg["status"] == "ok"
+        except (ValueError, KeyError, TypeError):
+            logger.warning(
+                "uploader emitted garbage",
+                extra={"uploader": self.name, "line": line[:200]},
+            )
+            return
+        result = UploadResult(success=ok, output=str(msg.get("message", "")))
+        if not ok:
+            logger.warning(
+                "upload failed",
+                extra={"uploader": self.name, "path": path, "output": result.output},
+            )
+        for fut in self._pending.pop(path, []):
+            if not fut.done():
+                fut.set_result(result)
+        await q.delete_upload_path(self.pool, uploader=self.name, path=path)
+
+    async def _feed(self, stdin: asyncio.StreamWriter) -> None:
+        paths = list(await q.all_pending_upload_paths(self.pool, uploader=self.name))
+        while True:
+            if paths:
+                stdin.write("".join(f"{p}\n" for p in paths).encode())
+                await stdin.drain()
+            await self._wake.wait()
+            self._wake.clear()
+            paths = sorted(await self.resolve(set(self._take_buffer())))
+            if paths:
+                await q.enqueue_upload_paths(self.pool, uploader=self.name, paths=paths)
+
+    async def _run_child(self) -> None:
+        command, env = self._command()
+        group = await ProcessGroup.start(
+            command,
+            env=env,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+        )
+        proc = group.proc
+        assert proc.stdin is not None  # noqa: S101
+        assert proc.stdout is not None  # noqa: S101
+        logger.info("uploader started", extra={"uploader": self.name})
+        feed = asyncio.create_task(self._feed(proc.stdin))
+        try:
+            async for line in proc.stdout:
+                await self._ack(line)
+        finally:
+            feed.cancel()
+            with contextlib.suppress(asyncio.CancelledError, ConnectionError):
+                await feed
+            if proc.returncode is None:
+                # EOF lets niks3 finish in-flight pushes.
+                proc.stdin.close()
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(proc.wait(), STREAM_STOP_GRACE)
+            await group.reap()
+        logger.warning(
+            "uploader exited",
+            extra={"uploader": self.name, "returncode": proc.returncode},
+        )
+
+    async def run(self) -> None:
+        while True:
+            try:
+                await self._run_child()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("uploader crashed", extra={"uploader": self.name})
+            await asyncio.sleep(self.retry_delay)
+
+
 async def start_uploaders(
-    uploaders: list[Uploader], pool: asyncpg.Pool
+    uploaders: Sequence[Uploader], pool: asyncpg.Pool
 ) -> list[asyncio.Task[None]]:
     await q.drop_unknown_uploaders(pool, names=[u.name for u in uploaders])
     return [asyncio.create_task(u.run(), name=f"uploader-{u.name}") for u in uploaders]

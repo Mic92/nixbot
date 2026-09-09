@@ -228,7 +228,7 @@ class UploaderConfig(BaseModel):
     name: str
     command: list[str | Interpolate]
     environment: Mapping[str, str | Interpolate] = {}
-    paths_via: Literal["argv", "stdin"] = "argv"
+    paths_via: Literal["argv", "stdin", "stream"] = "argv"
 
 
 def glob_to_regex(glob: str) -> re.Pattern:

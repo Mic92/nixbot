@@ -44,20 +44,38 @@ in
   nodes = {
     # GitHub mode against a fake GitHub API: discovery, webhook, eval,
     # build, and commit-status assertions all run against local fakes.
-    github = {
-      imports = [ (import ./github-node.nix { flakeText = testFlake; }) ];
-      services.nixbot.uploaders = [
-        {
-          name = "local-cache";
-          command = [
-            "nix"
-            "copy"
-            "--to"
-            "file:///var/lib/nixbot/cache"
-          ];
-        }
-      ];
-    };
+    github =
+      { pkgs, ... }:
+      {
+        imports = [ (import ./github-node.nix { flakeText = testFlake; }) ];
+        services.nixbot.uploaders = [
+          {
+            name = "local-cache";
+            command = [
+              "nix"
+              "copy"
+              "--to"
+              "file:///var/lib/nixbot/cache"
+            ];
+          }
+          {
+            # Stand-in for `niks3 push --stdin`.
+            name = "stream-cache";
+            pathsVia = "stream";
+            command = [
+              (pkgs.writeShellScript "stream-cache" ''
+                while read -r p; do
+                  if nix copy --to file:///var/lib/nixbot/stream-cache "$p"; then
+                    printf '{"path":"%s","status":"ok"}\n' "$p"
+                  else
+                    printf '{"path":"%s","status":"error","message":"copy failed"}\n' "$p"
+                  fi
+                done
+              '')
+            ];
+          }
+        ];
+      };
 
     # Gitea mode against a real Gitea: discovery registers the webhook,
     # a push delivers it, and nixbot posts commit statuses back.
@@ -212,6 +230,13 @@ in
             "grep -h StorePath: /var/lib/nixbot/cache/*.narinfo"
         )
         print(narinfos)
+        names = {line.rsplit("-", 1)[1] for line in narinfos.split()[1::2]}
+        assert names == {"test", "dep"}, narinfos
+        narinfos = github.wait_until_succeeds(
+            "test $(ls /var/lib/nixbot/stream-cache/*.narinfo | wc -l) -ge 2 && "
+            "grep -h StorePath: /var/lib/nixbot/stream-cache/*.narinfo",
+            timeout=60,
+        )
         names = {line.rsplit("-", 1)[1] for line in narinfos.split()[1::2]}
         assert names == {"test", "dep"}, narinfos
 

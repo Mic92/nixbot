@@ -8,6 +8,8 @@ from __future__ import annotations
 __all__: collections.abc.Sequence[str] = (
     "PendingUploadPathsRow",
     "QueryResults",
+    "all_pending_upload_paths",
+    "delete_upload_path",
     "delete_upload_paths",
     "drop_unknown_uploaders",
     "enqueue_upload_paths",
@@ -63,6 +65,14 @@ WITH dropped AS (
 UPDATE upload_queue SET attempts = attempts + 1
 WHERE id = ANY($1::bigint[])
   AND attempts + 1 < $2::int
+"""
+
+ALL_PENDING_UPLOAD_PATHS: typing.Final[str] = """-- name: AllPendingUploadPaths :many
+SELECT DISTINCT path FROM upload_queue WHERE uploader = $1
+"""
+
+DELETE_UPLOAD_PATH: typing.Final[str] = """-- name: DeleteUploadPath :exec
+DELETE FROM upload_queue WHERE uploader = $1 AND path = $2
 """
 
 DROP_UNKNOWN_UPLOADERS: typing.Final[str] = """-- name: DropUnknownUploaders :exec
@@ -129,6 +139,14 @@ async def delete_upload_paths(conn: ConnectionLike, *, ids: collections.abc.Sequ
 
 async def retry_upload_paths(conn: ConnectionLike, *, ids: collections.abc.Sequence[int], max_attempts: int) -> None:
     await conn.execute(RETRY_UPLOAD_PATHS, ids, max_attempts)
+
+
+def all_pending_upload_paths(conn: ConnectionLike, *, uploader: str) -> QueryResults[str]:
+    return QueryResults(conn, ALL_PENDING_UPLOAD_PATHS, operator.itemgetter(0), uploader)
+
+
+async def delete_upload_path(conn: ConnectionLike, *, uploader: str, path: str) -> None:
+    await conn.execute(DELETE_UPLOAD_PATH, uploader, path)
 
 
 async def drop_unknown_uploaders(conn: ConnectionLike, *, names: collections.abc.Sequence[str]) -> None:

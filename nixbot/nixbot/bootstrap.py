@@ -289,7 +289,7 @@ async def build_service(config: Config) -> tuple[CIService, FastAPI]:
         repos=RepoManager(config.state_dir),
         eval_runner=EvalRunner(limiter=CgroupLimiter.create()),
         executor=executor,
-        uploaders=[Uploader(c, pool) for c in config.uploaders],
+        uploaders=[Uploader.create(c, pool) for c in config.uploaders],
         failed_build_cache=lambda project_id: PostgresFailedBuildCache(
             pool, project_id
         ),

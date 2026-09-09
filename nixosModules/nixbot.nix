@@ -782,9 +782,8 @@ in
       description = ''
         Binary-cache push commands. Each receives batches of store paths:
         every derivation nixbot built locally (intermediates included) plus
-        each attribute's outputs. One push per uploader runs at a time;
-        pending paths survive restarts. Failures are logged, never fail a
-        build.
+        each attribute's outputs. Pending paths survive restarts. Failures
+        are logged, never fail a build.
       '';
       type = lib.types.listOf (
         lib.types.submodule {
@@ -815,9 +814,15 @@ in
               type = lib.types.enum [
                 "argv"
                 "stdin"
+                "stream"
               ];
               default = "argv";
-              description = "`stdin`: newline-separated paths on stdin (e.g. `attic push --stdin`).";
+              description = ''
+                `stdin`: newline-separated paths on stdin per batch (e.g.
+                `attic push --stdin`). `stream`: one long-running process
+                fed paths on stdin that acknowledges each with a JSON
+                `{"path", "status"}` line (`niks3 push --stdin`).
+              '';
             };
           };
         }

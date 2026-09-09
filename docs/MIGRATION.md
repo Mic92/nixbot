@@ -96,7 +96,8 @@ at discovery time.
 **Cache uploads.** `services.nixbot.cachix`/`niks3` now push every derivation
 built locally, not just each attribute's output closure. Custom `nix copy` or
 `attic push` post-build steps belong in `services.nixbot.uploaders` to get the
-same behaviour (attic needs `pathsVia = "stdin"`).
+same behaviour (attic needs `pathsVia = "stdin"`). The niks3 module runs one
+long-lived `niks3 push --stdin` and needs niks3 >= 1.11.
 
 **Buildbot customizations.** Anything that reached into Buildbot itself —
 `services.buildbot-master.extraConfig`, the manhole, `pythonPackages` — has no
