@@ -62,6 +62,7 @@ buildPythonPackage {
     pytest = nixbot.overridePythonAttrs {
       name = "nixbot-tests";
       doCheck = true;
+      __darwinAllowLocalNetworking = true;
 
       nativeCheckInputs = [
         git
