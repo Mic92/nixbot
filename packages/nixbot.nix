@@ -100,6 +100,8 @@ buildPythonPackage {
         # nix refuses a store under its sandbox build dir (/build); this
         # build is sandboxed already.
         echo 'sandbox = false' >> "$NIX_CONF_DIR/nix.conf"
+        # Use internal Nix escape hatch to avoid nested sandboxing on macOS
+        export _NIX_TEST_NO_SANDBOX=1
         # On huge builders more workers only add scheduling overhead and postgres connection pressure.
         export PYTEST_XDIST_AUTO_NUM_WORKERS=$(( NIX_BUILD_CORES > 64 ? 64 : NIX_BUILD_CORES ))
       '';
