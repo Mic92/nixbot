@@ -626,6 +626,8 @@ class EvalRunner:
                 **passthrough_env(),
                 "CLICOLOR_FORCE": "1",
                 "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                # Fallback to /tmp when no `bwrap`
+                "HOME": os.environ.get("HOME", "/tmp"),  # noqa: S108
             },
         )
         assert proc.stdout is not None  # noqa: S101
