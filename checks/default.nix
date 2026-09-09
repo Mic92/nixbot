@@ -13,13 +13,11 @@ let
 in
 {
   treefmt = (inputs.treefmt-nix.lib.evalModule pkgs ../formatter/treefmt.nix).config.build.check self;
+  nixbot-tests = self.packages.${pkgs.stdenv.hostPlatform.system}.nixbot.tests.pytest;
   nixbot-effects-tests = self.packages.${pkgs.stdenv.hostPlatform.system}.nixbot-effects.tests.pytest;
   sqlc-generated = import ./sqlc.nix checkArgs;
 }
 // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
-  # Disable on macOS for now as there are many build failures
-  nixbot-tests = self.packages.${pkgs.stdenv.hostPlatform.system}.nixbot.tests.pytest;
-
   nixbot = import ./nixbot.nix checkArgs;
   nixbot-gitlab = import ./nixbot-gitlab.nix checkArgs;
   nixbot-workload-identity = import ./nixbot-workload-identity.nix checkArgs;
