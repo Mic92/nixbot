@@ -30,6 +30,7 @@
   nixbot ? null,
   callPackage,
   lib,
+  stdenv,
 }:
 let
   nixbot-effects = callPackage ./nixbot-effects.nix { };
@@ -106,7 +107,8 @@ buildPythonPackage {
         export PYTEST_XDIST_AUTO_NUM_WORKERS=$(( NIX_BUILD_CORES > 64 ? 64 : NIX_BUILD_CORES ))
       '';
 
-      env = {
+      # Avoid setting `PLAYWRIGHT_BROWSERS_PATH` on macOS to skip E2E tests
+      env = lib.optionalAttrs stdenv.hostPlatform.isLinux {
         PLAYWRIGHT_BROWSERS_PATH = playwright-driver.browsers;
         PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS = "true";
         # Chromium aborts in Skia without a fontconfig setup.
