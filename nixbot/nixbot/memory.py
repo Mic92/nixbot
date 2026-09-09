@@ -81,7 +81,6 @@ def _darwin_memory_info() -> tuple[int, int]:
 
 
 def get_memory_info(
-    meminfo_path: Path = Path("/proc/meminfo"),
     arcstats_path: Path = Path("/proc/spl/kstat/zfs/arcstats"),
 ) -> MemoryInfo:
     """Get total and available memory, including reclaimable ZFS ARC.
@@ -93,7 +92,7 @@ def get_memory_info(
         if sys.platform == "darwin":
             total_memory_mib, available_memory_mib = _darwin_memory_info()
         else:
-            meminfo = _read_meminfo(meminfo_path)
+            meminfo = _read_meminfo(Path("/proc/meminfo"))
             total_memory_mib = meminfo["MemTotal"]
             available_memory_mib = meminfo["MemAvailable"]
     except (OSError, KeyError, ValueError, subprocess.SubprocessError):

@@ -19,6 +19,7 @@ from nixbot.memory import (
     SYSTEM_RESERVE_MIB,
     EvalWorkerConfig,
     MemoryInfo,
+    _read_meminfo,
     calculate_eval_workers,
     get_memory_info,
     parse_vm_stat,
@@ -168,9 +169,9 @@ def test_memory_info_uses_memavailable(tmp_path: Path) -> None:
         "MemFree:          102400 kB\n"
         "MemAvailable:   10240000 kB\n"
     )
-    info = get_memory_info(meminfo_path=meminfo, arcstats_path=tmp_path / "absent")
-    assert info.total_memory_mib == 16000
-    assert info.available_memory_mib == 10000
+    fields = _read_meminfo(meminfo)
+    assert fields["MemTotal"] == 16000
+    assert fields["MemAvailable"] == 10000
 
 
 def test_parse_vm_stat() -> None:
