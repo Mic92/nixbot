@@ -63,9 +63,6 @@
   /** @param {HTMLElement} card @param {number} idx @param {number|null} line */
   function jump(card, idx, line) {
     card.scrollIntoView({ block: "nearest" });
-    document
-      .querySelectorAll(".log-lines .logline.hit")
-      .forEach((x) => x.classList.remove("hit"));
     if (line == null) return;
     const el = document.getElementById(`d${idx}-L${line}`);
     el?.classList.add("hit");
@@ -93,6 +90,9 @@
       list.querySelector(`.log-card[data-idx="${idx}"]`)
     );
     if (!card) return;
+    document
+      .querySelectorAll(".log-lines .logline.hit")
+      .forEach((x) => x.classList.remove("hit"));
     if (succeeded && succeeded.contains(card)) succeeded.open = true;
     card.open = true; // triggers the htmx fetch if not yet loaded
     if (pick(card, ".log-lines").hasAttribute("aria-busy")) {
