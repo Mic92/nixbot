@@ -19,6 +19,7 @@ import typing
 if typing.TYPE_CHECKING:
     import collections.abc
     import datetime
+    import uuid
 
 
 @dataclasses.dataclass()
@@ -115,6 +116,7 @@ class Project:
     created_at: datetime.datetime
     updated_at: datetime.datetime
     reconcile_watermark: datetime.datetime | None
+    badge_token: uuid.UUID
 
 
 @dataclasses.dataclass()
