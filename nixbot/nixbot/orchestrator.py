@@ -142,7 +142,6 @@ class Orchestrator:
     )
     # Event effects by run id, apart from onPush so an effects restart
     # of a build never touches them.
-    running_event_effects: dict[int, RunningEffect] = field(default_factory=dict)
     # Injectable, default_effects is late-bound so tests can replace it.
     effects: EffectsBackend = field(default_factory=lambda: default_effects())  # noqa: PLW0108
     register_gcroot: GcrootRegistrar = gcroots.register_gcroot

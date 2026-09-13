@@ -334,6 +334,7 @@ UPDATE effect_runs SET
     log_size = $3, log_truncated = $4,
     finished_at = now()
 WHERE build_id = $5 AND kind = $6 AND name = $7
+  AND status IN ('pending', 'running', 'dependency_failed')
 """
 
 EFFECTS_SUMMARY: typing.Final[str] = """-- name: EffectsSummary :one

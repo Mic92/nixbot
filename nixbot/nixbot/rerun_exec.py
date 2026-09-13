@@ -157,10 +157,22 @@ async def cancel_running_effects(
     """Cancel the build's push and check tasks (`names`: only these push
     effects) and wait until they let go of their rows. A hung run would
     otherwise hold its dedup key forever (issue #139)."""
+    if names is None:
+        await cancel_running(o, build_id, None, None)
+    else:
+        await cancel_running(o, build_id, "push", names)
+
+
+async def cancel_running(
+    o: Orchestrator, build_id: int, kind: str | None, names: list[str] | None
+) -> None:
+    """kind None: the build-owned kinds (push, check)."""
     running = [
         r
-        for (bid, kind, name), r in o.running_effects.items()
-        if bid == build_id and (names is None or (kind == "push" and name in names))
+        for (bid, k, name), r in o.running_effects.items()
+        if bid == build_id
+        and (k == kind if kind is not None else k in ("push", "check"))
+        and (names is None or name in names)
     ]
     for r in running:
         r.cancel()

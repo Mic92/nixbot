@@ -231,11 +231,13 @@ JOIN effect_runs d ON d.build_id = e.build_id AND d.kind = 'push'
 WHERE e.build_id = $1 AND e.kind = 'push' AND e.name = $2;
 
 -- name: FinishEffect :exec
+-- Only a live row: a cancel that raced the run keeps its verdict.
 UPDATE effect_runs SET
     status = sqlc.arg(status), error = sqlc.narg(error),
     log_size = sqlc.arg(log_size), log_truncated = sqlc.arg(log_truncated),
     finished_at = now()
-WHERE build_id = sqlc.arg(build_id) AND kind = sqlc.arg(kind) AND name = sqlc.arg(name);
+WHERE build_id = sqlc.arg(build_id) AND kind = sqlc.arg(kind) AND name = sqlc.arg(name)
+  AND status IN ('pending', 'running', 'dependency_failed');
 
 -- name: EffectsSummary :one
 -- Running while anything is in flight, else the worst outcome. Eval

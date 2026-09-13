@@ -21,6 +21,7 @@ from .deliver import event_dedup_key
 from .effects import effects_context
 from .executor import failure_excerpt
 from .gitrepo import GitError, pr_refspec
+from .rerun_exec import cancel_running
 from .running_effect import RunningEffect
 from .workload_identity import EffectIdentity
 
@@ -59,10 +60,7 @@ async def restart_event_effect(
     row = await q.effect_run(o.pool, build_id=build.id_, kind=kind, name=name)
     if row is None:
         return
-    running = o.running_event_effects.get(row.id_)
-    if running is not None:
-        running.cancel()
-        await running.settled.wait()
+    await cancel_running(o, build.id_, kind, [name])
     reset = await ev_q.reset_event_effect(
         o.pool, build_id=build.id_, kind=kind, name=name
     )
@@ -99,7 +97,7 @@ async def run_event_effect_item(  # noqa: PLR0913
     task = asyncio.current_task()
     assert task is not None  # noqa: S101
     running = RunningEffect(task=task)
-    o.running_event_effects[run_id] = running
+    o.running_effects[(build.id_, kind, name)] = running
     try:
         await _run(o, info, build, row, credentials)
     except asyncio.CancelledError:
@@ -108,7 +106,7 @@ async def run_event_effect_item(  # noqa: PLR0913
         if not running.restart:
             raise
     finally:
-        o.running_event_effects.pop(run_id, None)
+        o.running_effects.pop((build.id_, kind, name), None)
         running.settled.set()
 
 
