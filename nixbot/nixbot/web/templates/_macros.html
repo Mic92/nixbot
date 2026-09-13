@@ -59,6 +59,15 @@
               data-copy="{{ value }}"
               aria-label="copy {{ label }}">copy</button>
     {%- endmacro %}
+    {# Fetches the raw log on click. Capped at the tail: clipboards take
+       megabytes, paste targets (issues, chats) do not. #}
+    {% macro copy_log_btn(raw_url, lines=5000) -%}
+      <button class="copy-btn"
+              type="button"
+              data-copy-url="{{ raw_url }}?tail={{ lines }}"
+              title="copy the last {{ lines }} lines"
+              aria-label="copy log">copy</button>
+    {%- endmacro %}
     {# Phase-bar widget. Scroll position drives it client-side. #}
     {# Structured log card, shared by the finished page and the live SSE.
        On the finished page htmx fetches the rows into .log-lines on first

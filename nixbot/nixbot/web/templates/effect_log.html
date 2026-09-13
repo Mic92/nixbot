@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import status_icon %}
+{% from "_macros.html" import status_icon, copy_log_btn %}
 {% if run.kind == "schedule" %}
   {% set label = run.schedule_name if run.schedule_name == run.effect else run.schedule_name ~ " · " ~ run.effect %}
 {% else %}
@@ -23,6 +23,7 @@
               run #{{ run.id }}
             {% endif %}
             · <a href="{{ run_url }}.txt">raw</a>
+            {{ copy_log_btn(run_url ~ ".txt") }}
             {% if run.kind == "schedule" %}
               {% set history_url = repo_path(project) ~ "/schedules/runs?schedule=" ~ (run.schedule_name | urlencode) ~ "&effect=" ~ (run.effect | urlencode) %}
               · <a href="{{ history_url }}">history</a>

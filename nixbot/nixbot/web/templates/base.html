@@ -84,8 +84,14 @@
       document.body.addEventListener("click", async (e) => {
         const btn = e.target.closest?.(".copy-btn");
         if (!btn) return;
-        await navigator.clipboard.writeText(btn.dataset.copy);
         const label = btn.textContent;
+        let text = btn.dataset.copy;
+        if (btn.dataset.copyUrl) {
+          btn.textContent = "…";
+          const r = await fetch(btn.dataset.copyUrl);
+          text = r.ok ? await r.text() : "";
+        }
+        await navigator.clipboard.writeText(text);
         btn.textContent = "copied";
         setTimeout(() => { btn.textContent = label; }, 1200);
       });
