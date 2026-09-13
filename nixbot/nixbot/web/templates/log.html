@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import status_icon, drv_card %}
+{% from "_macros.html" import status_icon, drv_card, copy_log_btn %}
 {% block title %}
   {{ attr }} log
 {% endblock title %}
@@ -25,6 +25,7 @@
           </small>
         </h2>
         <div class="controls">
+          {{ copy_log_btn(build_path(project, build.number) ~ "/logs/raw/" ~ (attr | urlencode)) }}
           {% if can_control and attr_status in ('pending', 'building') %}
             <form method="post"
                   action="{{ build_path(project, build.number) }}/attrs/{{ attr | urlencode }}/cancel">

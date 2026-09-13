@@ -1171,6 +1171,10 @@ def test_eval_error_served_like_build_log(client: WebHarness) -> None:
     assert "ansi-red" in viewer.text
     assert "\x1b" not in viewer.text
     assert "/logs/raw/x86_64-linux.evalfail" in viewer.text
+    assert (
+        'data-copy-url="/repos/github/acme/widget/builds/2/logs/raw/x86_64-linux.evalfail?tail='
+        in viewer.text
+    )
 
     raw = client.get(
         "/repos/github/acme/widget/builds/2/logs/raw/x86_64-linux.evalfail"
@@ -2163,6 +2167,10 @@ def test_scheduled_run_viewer_renders_ansi(client: WebHarness, tmp_path: Path) -
     assert resp.status_code == 200
     assert "ansi-red" in resp.text
     assert f"runs/{run_id}.txt" in resp.text  # raw link present
+    assert (
+        f'data-copy-url="/repos/github/acme/widget/effects/runs/{run_id}.txt?tail='
+        in resp.text
+    )
     # Raw route still works and is not shadowed by the HTML viewer.
     raw = client.get(f"/repos/github/acme/widget/effects/runs/{run_id}.txt")
     assert raw.status_code == 200

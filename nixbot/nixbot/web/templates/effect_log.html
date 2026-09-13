@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import status_icon %}
+{% from "_macros.html" import status_icon, copy_log_btn %}
 {% if run.kind == "schedule" %}
   {% set label = run.schedule_name if run.schedule_name == run.effect else run.schedule_name ~ " · " ~ run.effect %}
 {% else %}
@@ -31,6 +31,7 @@
           </small>
         </h2>
         <div class="controls">
+          {{ copy_log_btn(run_url ~ ".txt") }}
           {% if build and can_control and run.kind == "push" and build.status == "succeeded" and run.status not in ("pending", "running") %}
             <form method="post"
                   action="{{ build_path(project, build.number) }}/effects/restart?name={{ run.effect | urlencode }}">
