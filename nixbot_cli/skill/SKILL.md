@@ -15,7 +15,7 @@ nbo log 412                                  # failure summary with log tails
 nbo log 412 checks.x86_64-linux.foo --tail 200   # or --follow
 nbo build restart 412 --attr treefmt         # token: NIXBOT_TOKEN / hosts.toml
 nbo build restart 412 --effects|--effect deploy  # all or one (repeatable)
-nbo build cancel 412
+nbo build cancel 412 [--effects|--effect deploy]
 nbo effects list | run default.deploy        # local, no token
 ```
 

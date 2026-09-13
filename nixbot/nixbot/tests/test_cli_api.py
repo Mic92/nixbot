@@ -155,6 +155,8 @@ def test_control_requires_token(harness: WebHarness, api: NixbotClient) -> None:
     assert api.restart_effects(REPO, 1)["action"] == "restart-effects"
     assert api.restart_effects(REPO, 1, "deploy")["action"] == "restart-effects"
     assert BACKEND.effect_restarts[-2:] == [(1, None), (1, "deploy")]
+    assert api.cancel_effects(REPO, 1, "deploy")["action"] == "cancel-effects"
+    assert BACKEND.effect_cancels[-1] == (1, "deploy", "push")
     with pytest.raises(ApiError) as err:
         api.restart_effects(REPO, 1, "nope")
     assert err.value.status == 404

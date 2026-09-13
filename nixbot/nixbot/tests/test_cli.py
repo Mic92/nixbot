@@ -209,6 +209,12 @@ def test_build_restart_cancel(
     assert "restarting effect deploy" in capsys.readouterr().out
     assert run_cli(api, "build", "cancel", "2", "-R", "acme/widget") == 0
     assert "cancelling build #2" in capsys.readouterr().out
+    BACKEND.effect_cancels.clear()
+    assert (
+        run_cli(api, "build", "cancel", "1", "-R", "acme/widget", "--effect", "dep")
+        == 0
+    )
+    assert BACKEND.effect_cancels == [(1, "deploy", "push")]
     assert len(BACKEND.cancelled) == 1
 
     # Cancelling a finished build or attribute is an error, not a no-op.

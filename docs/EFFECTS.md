@@ -335,7 +335,10 @@ forge status. Evaluation errors are shown there too, including a broken
 Event effects can be restarted from the build and run pages, with
 `nbo build restart N --effect comment/apply`, or
 `POST /api/repos/.../builds/N/effects/restart?name=apply&kind=comment`. A
-running one is cancelled first. The stored payload is reused.
+running one is cancelled first. The stored payload is reused. A stuck effect can
+be stopped without re-running it: `nbo build cancel N
+--effect NAME` or
+`POST .../effects/cancel?name=...`.
 
 ### Testing locally
 

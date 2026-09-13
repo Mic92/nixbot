@@ -763,6 +763,7 @@ the instance restricts project visibility.
 - POST /api/repos/{forge}/{owner}/{name}/builds/{number}/attrs/{attr}/restart
 - POST /api/repos/{forge}/{owner}/{name}/builds/{number}/attrs/{attr}/cancel
 - POST /api/repos/{forge}/{owner}/{name}/builds/{number}/effects/restart
+- POST /api/repos/{forge}/{owner}/{name}/builds/{number}/effects/cancel
 - POST /api/repos/{forge}/{owner}/{name}/enable (admin)
 - POST /api/repos/{forge}/{owner}/{name}/disable (admin)
 

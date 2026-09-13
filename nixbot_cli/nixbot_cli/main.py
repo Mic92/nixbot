@@ -410,7 +410,14 @@ def cmd_build_cancel(client: NixbotClient, args: argparse.Namespace) -> int:
     repo = resolve_repo(client, args.repo)
     number = resolve_build(client, repo, args.number)
     detail = client.build(repo, number)
-    if args.attr:
+    if args.effects:
+        client.cancel_effects(repo, number)
+        print(f"cancelling effects of build #{number}")
+    elif args.effect:
+        for e in [_match_effect(detail["effects"], sel) for sel in args.effect]:
+            client.cancel_effects(repo, number, e["name"], e.get("kind", "push"))
+            print(f"cancelling effect {e['name']} of build #{number}")
+    elif args.attr:
         for row in [_match_attr(detail["attributes"], a) for a in args.attr]:
             attr, status = row["attr"], row["status"]
             if status not in RUNNING_STATUSES:
@@ -672,7 +679,7 @@ running ones. Piped or in CI it prints one line per finished attribute.""",
     )
     b_restart.set_defaults(func=cmd_build_restart)
 
-    b_cancel = build.add_parser("cancel", help="cancel a build or attribute")
+    b_cancel = build.add_parser("cancel", help="cancel a build, attribute or effects")
     b_cancel.add_argument("number", type=int, nargs="?")
     _add_repo_arg(b_cancel)
     b_cancel.add_argument(
@@ -680,6 +687,13 @@ running ones. Piped or in CI it prints one line per finished attribute.""",
         action="append",
         metavar="ATTR|DRV-PATH",
         help="cancel only this attribute (repeatable)",
+    )
+    b_cancel.add_argument("--effects", action="store_true", help="cancel live effects")
+    b_cancel.add_argument(
+        "--effect",
+        action="append",
+        metavar="NAME",
+        help="cancel only this effect (repeatable)",
     )
     b_cancel.set_defaults(func=cmd_build_cancel)
 

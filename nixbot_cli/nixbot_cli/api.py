@@ -186,11 +186,22 @@ class NixbotClient:
     ) -> dict:
         """Re-run every onPush effect of the build, or a single effect
         by name (and kind, for event effects)."""
+        return self._effects("restart", repo, number, name, kind)
+
+    def cancel_effects(
+        self, repo: RepoRef, number: int, name: str | None = None, kind: str = "push"
+    ) -> dict:
+        """Stop live effects without re-running them."""
+        return self._effects("cancel", repo, number, name, kind)
+
+    def _effects(
+        self, action: str, repo: RepoRef, number: int, name: str | None, kind: str
+    ) -> dict:
         params = None
         if name is not None:
             params = {"name": name} if kind == "push" else {"name": name, "kind": kind}
         return self._json(
-            "POST", f"/api/repos/{repo}/builds/{number}/effects/restart", params
+            "POST", f"/api/repos/{repo}/builds/{number}/effects/{action}", params
         )
 
     # --- logs ----------------------------------------------------------
