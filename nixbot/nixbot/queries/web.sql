@@ -71,7 +71,16 @@ WHERE p.enabled AND (sqlc.narg(project_ids)::bigint[] IS NULL OR p.id = ANY(sqlc
 ORDER BY p.owner, p.name;
 
 -- name: WebRecentBuilds :many
-SELECT b.*, p.owner, p.name AS project_name, p.forge, p.url
+SELECT b.*, p.owner, p.name AS project_name, p.forge, p.url,
+       (SELECT CASE
+            WHEN bool_or(r.status = 'running')
+              OR (bool_or(r.status = 'pending') AND NOT bool_and(r.status = 'pending'))
+              THEN 'running'
+            WHEN bool_or(r.status IN ('failed', 'dependency_failed')) THEN 'failed'
+            WHEN bool_or(r.status = 'pending') THEN 'pending'
+            WHEN bool_or(r.status = 'succeeded') THEN 'succeeded' END
+        FROM effect_runs r WHERE r.build_id = b.id AND r.owner = 'build')::text
+       AS effects_status
 FROM builds b JOIN projects p ON p.id = b.project_id
 WHERE (sqlc.narg(project_ids)::bigint[] IS NULL OR b.project_id = ANY(sqlc.narg(project_ids)))
   AND (sqlc.narg(before)::bigint IS NULL OR b.id < sqlc.narg(before))
@@ -79,15 +88,25 @@ ORDER BY b.id DESC LIMIT sqlc.arg(limit_)::bigint;
 -- name: WebBuildsForRepo :many
 -- Build list page with optional filters; commit is a prefix match so
 -- agents can pass short revs. Fetches limit+1 rows for has_next.
-SELECT * FROM builds
-WHERE project_id = $1
-  AND (sqlc.narg(status)::text IS NULL OR status = sqlc.narg(status))
-  AND (sqlc.narg(branch)::text IS NULL OR branch = sqlc.narg(branch))
-  AND (sqlc.narg(pr_number)::int IS NULL OR pr_number = sqlc.narg(pr_number))
+SELECT b.*,
+       (SELECT CASE
+            WHEN bool_or(r.status = 'running')
+              OR (bool_or(r.status = 'pending') AND NOT bool_and(r.status = 'pending'))
+              THEN 'running'
+            WHEN bool_or(r.status IN ('failed', 'dependency_failed')) THEN 'failed'
+            WHEN bool_or(r.status = 'pending') THEN 'pending'
+            WHEN bool_or(r.status = 'succeeded') THEN 'succeeded' END
+        FROM effect_runs r WHERE r.build_id = b.id AND r.owner = 'build')::text
+       AS effects_status
+FROM builds b
+WHERE b.project_id = $1
+  AND (sqlc.narg(status)::text IS NULL OR b.status = sqlc.narg(status))
+  AND (sqlc.narg(branch)::text IS NULL OR b.branch = sqlc.narg(branch))
+  AND (sqlc.narg(pr_number)::int IS NULL OR b.pr_number = sqlc.narg(pr_number))
   AND (sqlc.narg(commit_prefix)::text IS NULL
-       OR starts_with(commit_sha, sqlc.narg(commit_prefix)))
-  AND (sqlc.narg(before)::bigint IS NULL OR id < sqlc.narg(before))
-ORDER BY number DESC LIMIT sqlc.arg('limit') OFFSET sqlc.arg('offset');
+       OR starts_with(b.commit_sha, sqlc.narg(commit_prefix)))
+  AND (sqlc.narg(before)::bigint IS NULL OR b.id < sqlc.narg(before))
+ORDER BY b.number DESC LIMIT sqlc.arg('limit') OFFSET sqlc.arg('offset');
 
 -- name: WebBuildByNumber :one
 SELECT * FROM builds WHERE project_id = $1 AND number = $2;

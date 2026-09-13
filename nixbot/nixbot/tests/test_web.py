@@ -1770,6 +1770,10 @@ def test_build_page_shows_effects(client: WebHarness) -> None:
     assert 'id="effects-status" class="status skipped"' in pr_text
     assert "not run for pull requests" in pr_text
     assert "effects/restart" not in pr_text
+    # The builds list flags builds whose effects are live or failed.
+    listing = client.get("/repos/github/acme/widget").text
+    assert 'title="effects running"' in listing
+    assert 'title="effects skipped"' not in listing
 
 
 def test_build_page_shows_event_effects(client: WebHarness) -> None:

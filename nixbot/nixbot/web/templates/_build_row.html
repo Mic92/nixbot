@@ -4,6 +4,11 @@
 <tr data-id="{{ b.id }}">
   <td>
     {{ status_icon(b.status) }}<a href="{{ build_path(row, b.number) }}">#{{ b.number }}</a>
+    {%- if b.effects_status %}
+      <a href="{{ build_path(row, b.number) }}#effects-status"
+         title="effects {{ b.effects_status }}">
+      {{- status_icon(b.effects_status, labelled=false) }}<span class="visually-hidden">effects {{ b.effects_status }}</span></a>
+    {%- endif %}
   </td>
   {% if "project_name" in b %}<td>{{ repo_name(b.owner, b.project_name) }}</td>{% endif %}
   <td>{{ ref_link(row, b) }}</td>

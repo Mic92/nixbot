@@ -23,6 +23,7 @@ __all__: collections.abc.Sequence[str] = (
     "WebAttributeCountsRow",
     "WebAttributeHistoryRow",
     "WebAttributeNeighborNumbersRow",
+    "WebBuildsForRepoRow",
     "WebEvalStatsRow",
     "WebNeighborNumbersRow",
     "WebQueueRow",
@@ -138,6 +139,35 @@ class WebRecentBuildsRow:
     project_name: str
     forge: str
     url: str
+    effects_status: str
+
+
+@dataclasses.dataclass()
+class WebBuildsForRepoRow:
+    id_: int
+    project_id: int
+    number: int
+    tree_hash: str | None
+    commit_sha: str
+    branch: str
+    pr_number: int | None
+    pr_author: str | None
+    status: str
+    status_generation: int
+    effects_started: bool
+    error: str | None
+    created_at: datetime.datetime
+    started_at: datetime.datetime | None
+    finished_at: datetime.datetime | None
+    eval_warnings: str | None
+    eval_completed: bool
+    effects_commit_sha: str | None
+    effects_branch: str | None
+    effects_pr_number: int | None
+    eval_duration_ms: int | None
+    actor: str | None
+    merged_pr_number: int | None
+    effects_status: str
 
 
 @dataclasses.dataclass()
@@ -390,7 +420,16 @@ ORDER BY p.owner, p.name
 """
 
 WEB_RECENT_BUILDS: typing.Final[str] = """-- name: WebRecentBuilds :many
-SELECT b.id, b.project_id, b.number, b.tree_hash, b.commit_sha, b.branch, b.pr_number, b.pr_author, b.status, b.status_generation, b.effects_started, b.error, b.created_at, b.started_at, b.finished_at, b.eval_warnings, b.eval_completed, b.effects_commit_sha, b.effects_branch, b.effects_pr_number, b.eval_duration_ms, b.actor, b.merged_pr_number, p.owner, p.name AS project_name, p.forge, p.url
+SELECT b.id, b.project_id, b.number, b.tree_hash, b.commit_sha, b.branch, b.pr_number, b.pr_author, b.status, b.status_generation, b.effects_started, b.error, b.created_at, b.started_at, b.finished_at, b.eval_warnings, b.eval_completed, b.effects_commit_sha, b.effects_branch, b.effects_pr_number, b.eval_duration_ms, b.actor, b.merged_pr_number, p.owner, p.name AS project_name, p.forge, p.url,
+       (SELECT CASE
+            WHEN bool_or(r.status = 'running')
+              OR (bool_or(r.status = 'pending') AND NOT bool_and(r.status = 'pending'))
+              THEN 'running'
+            WHEN bool_or(r.status IN ('failed', 'dependency_failed')) THEN 'failed'
+            WHEN bool_or(r.status = 'pending') THEN 'pending'
+            WHEN bool_or(r.status = 'succeeded') THEN 'succeeded' END
+        FROM effect_runs r WHERE r.build_id = b.id AND r.owner = 'build')::text
+       AS effects_status
 FROM builds b JOIN projects p ON p.id = b.project_id
 WHERE ($1::bigint[] IS NULL OR b.project_id = ANY($1))
   AND ($2::bigint IS NULL OR b.id < $2)
@@ -398,15 +437,25 @@ ORDER BY b.id DESC LIMIT $3::bigint
 """
 
 WEB_BUILDS_FOR_REPO: typing.Final[str] = """-- name: WebBuildsForRepo :many
-SELECT id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms, actor, merged_pr_number FROM builds
-WHERE project_id = $1
-  AND ($2::text IS NULL OR status = $2)
-  AND ($3::text IS NULL OR branch = $3)
-  AND ($4::int IS NULL OR pr_number = $4)
+SELECT b.id, b.project_id, b.number, b.tree_hash, b.commit_sha, b.branch, b.pr_number, b.pr_author, b.status, b.status_generation, b.effects_started, b.error, b.created_at, b.started_at, b.finished_at, b.eval_warnings, b.eval_completed, b.effects_commit_sha, b.effects_branch, b.effects_pr_number, b.eval_duration_ms, b.actor, b.merged_pr_number,
+       (SELECT CASE
+            WHEN bool_or(r.status = 'running')
+              OR (bool_or(r.status = 'pending') AND NOT bool_and(r.status = 'pending'))
+              THEN 'running'
+            WHEN bool_or(r.status IN ('failed', 'dependency_failed')) THEN 'failed'
+            WHEN bool_or(r.status = 'pending') THEN 'pending'
+            WHEN bool_or(r.status = 'succeeded') THEN 'succeeded' END
+        FROM effect_runs r WHERE r.build_id = b.id AND r.owner = 'build')::text
+       AS effects_status
+FROM builds b
+WHERE b.project_id = $1
+  AND ($2::text IS NULL OR b.status = $2)
+  AND ($3::text IS NULL OR b.branch = $3)
+  AND ($4::int IS NULL OR b.pr_number = $4)
   AND ($5::text IS NULL
-       OR starts_with(commit_sha, $5))
-  AND ($6::bigint IS NULL OR id < $6)
-ORDER BY number DESC LIMIT $8 OFFSET $7
+       OR starts_with(b.commit_sha, $5))
+  AND ($6::bigint IS NULL OR b.id < $6)
+ORDER BY b.number DESC LIMIT $8 OFFSET $7
 """
 
 WEB_BUILD_BY_NUMBER: typing.Final[str] = """-- name: WebBuildByNumber :one
@@ -724,14 +773,15 @@ def web_recent_builds(conn: ConnectionLike, *, project_ids: collections.abc.Sequ
             project_name=row[24],
             forge=row[25],
             url=row[26],
+            effects_status=row[27],
         )
 
     return QueryResults(conn, WEB_RECENT_BUILDS, _decode_hook, project_ids, before, limit_)
 
 
-def web_builds_for_repo(conn: ConnectionLike, *, project_id: int, status: str | None, branch: str | None, pr_number: int | None, commit_prefix: str | None, before: int | None, offset: int, limit: int) -> QueryResults[models.Build]:
-    def _decode_hook(row: asyncpg.Record) -> models.Build:
-        return models.Build(
+def web_builds_for_repo(conn: ConnectionLike, *, project_id: int, status: str | None, branch: str | None, pr_number: int | None, commit_prefix: str | None, before: int | None, offset: int, limit: int) -> QueryResults[WebBuildsForRepoRow]:
+    def _decode_hook(row: asyncpg.Record) -> WebBuildsForRepoRow:
+        return WebBuildsForRepoRow(
             id_=row[0],
             project_id=row[1],
             number=row[2],
@@ -755,6 +805,7 @@ def web_builds_for_repo(conn: ConnectionLike, *, project_id: int, status: str | 
             eval_duration_ms=row[20],
             actor=row[21],
             merged_pr_number=row[22],
+            effects_status=row[23],
         )
 
     return QueryResults(conn, WEB_BUILDS_FOR_REPO, _decode_hook, project_id, status, branch, pr_number, commit_prefix, before, offset, limit)
