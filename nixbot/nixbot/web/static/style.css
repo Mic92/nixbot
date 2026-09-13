@@ -646,6 +646,7 @@ details.menu .menu-label {
 }
 .build-header .controls {
 	display: flex;
+	align-items: center;
 	gap: 0.5rem;
 	/* Align with the heading text, not the section top. */
 	margin-top: 0.5rem;
@@ -968,6 +969,13 @@ details.webhook-setup summary {
 .copy-btn {
 	font-size: 0.75rem;
 	padding: 0.15rem 0.5rem;
+}
+.controls form {
+	margin: 0;
+}
+.controls .copy-btn {
+	font-size: revert;
+	padding: 0.3rem 0.8rem;
 }
 
 /* ======================================================================

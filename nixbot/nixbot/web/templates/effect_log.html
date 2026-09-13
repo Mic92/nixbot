@@ -23,7 +23,6 @@
               run #{{ run.id }}
             {% endif %}
             · <a href="{{ run_url }}.txt">raw</a>
-            {{ copy_log_btn(run_url ~ ".txt") }}
             {% if run.kind == "schedule" %}
               {% set history_url = repo_path(project) ~ "/schedules/runs?schedule=" ~ (run.schedule_name | urlencode) ~ "&effect=" ~ (run.effect | urlencode) %}
               · <a href="{{ history_url }}">history</a>
@@ -32,6 +31,7 @@
           </small>
         </h2>
         <div class="controls">
+          {{ copy_log_btn(run_url ~ ".txt") }}
           {% if build and can_control and run.kind == "push" and build.status == "succeeded" and run.status not in ("pending", "running") %}
             <form method="post"
                   action="{{ build_path(project, build.number) }}/effects/restart?name={{ run.effect | urlencode }}">
