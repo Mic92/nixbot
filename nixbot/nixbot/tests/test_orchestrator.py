@@ -1296,6 +1296,39 @@ async def test_rerun_effects_cancels_hung_effect(
     assert status == "succeeded"
 
 
+async def test_cancel_hung_effect(
+    pool: asyncpg.Pool, run_effect_build: EffectBuildRunner, upstream: Path
+) -> None:
+    """Issue #211: a stuck effect can be stopped without re-running it."""
+    add_commit(upstream, "cancel")
+    build, orchestrator, project, _ran = await run_effect_build()
+    assert build is not None
+
+    async def hung_run(ctx: object, name: str, log_write: object = None) -> bool:
+        await asyncio.Event().wait()
+        return True
+
+    orchestrator.effects.run_effect = hung_run  # type: ignore[method-assign,assignment]
+    await orchestrator.rerun_effects(project, build)
+    queue = WorkQueue(pool)
+    item = await queue.claim_next()
+    assert item is not None
+    hung_item = asyncio.create_task(
+        orchestrator.run_effect_item(project, build, item.payload["name"])
+    )
+    await asyncio.sleep(0)
+    assert (build.id_, "push", "deploy") in orchestrator.running_effects
+
+    cancelled = await asyncio.wait_for(
+        orchestrator.cancel_effects(build.id_, "push", ["deploy"]), timeout=5
+    )
+    await hung_item
+    assert cancelled == [("push", "deploy")]
+    assert not orchestrator.running_effects
+    assert await effect_statuses(pool, build.id_) == {"deploy": "cancelled"}
+    assert await orchestrator.cancel_effects(build.id_, "push", None) == []
+
+
 async def test_rerun_single_effect(
     pool: asyncpg.Pool,
     make_env: EnvFactory,

@@ -63,6 +63,25 @@ WHERE w.kind = 'effect' AND w.status = 'pending'
   AND (w.payload->>'build_id')::bigint = sqlc.arg(build_id)::bigint
   AND w.payload->>'kind' = d.kind AND w.payload->>'name' = d.name;
 
+-- name: CancelEffects :many
+-- Live rows to cancelled (names NULL = every build-owned row, else the
+-- named rows of `kind`), their queued items done.
+WITH cancelled AS (
+    UPDATE effect_runs SET status = 'cancelled', finished_at = now(),
+        error = 'cancelled'
+    WHERE build_id = sqlc.arg(build_id)::bigint AND status IN ('pending', 'running')
+      AND CASE WHEN sqlc.narg(names)::text[] IS NULL THEN owner = 'build'
+          ELSE kind = sqlc.arg(kind)::text AND name = ANY(sqlc.narg(names)::text[]) END
+    RETURNING kind, name
+), items AS (
+    UPDATE work_queue w SET status = 'done', finished_at = now()
+    FROM cancelled c
+    WHERE w.kind = 'effect' AND w.status = 'pending'
+      AND (w.payload->>'build_id')::bigint = sqlc.arg(build_id)::bigint
+      AND w.payload->>'kind' = c.kind AND w.payload->>'name' = c.name
+)
+SELECT kind, name FROM cancelled;
+
 -- name: CountUnfinishedAttributes :one
 SELECT count(*) AS count FROM build_attributes
 WHERE build_id = $1 AND status IN ('pending', 'building');

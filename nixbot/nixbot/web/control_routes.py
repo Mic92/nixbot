@@ -42,6 +42,10 @@ class ControlBackend(Protocol):
         kind: str = "push",
     ) -> None: ...
 
+    async def cancel_effects(
+        self, build_id: int, name: str | None = None, kind: str = "push"
+    ) -> None: ...
+
     async def cancel_build(self, build_id: int) -> None: ...
 
     async def cancel_attribute(self, build_id: int, attr: str) -> None: ...
@@ -156,6 +160,21 @@ class _ControlRoutes:
         build = await self._authorize(request, forge, owner, name, number)
         await self._check_effect(build["id"], effect, kind)
         await self.backend.restart_effects(build["id"], effect, kind)
+        return _back(forge, owner, name, number)
+
+    async def cancel_effects(  # noqa: PLR0913
+        self,
+        request: Request,
+        forge: str,
+        owner: str,
+        name: str,
+        number: int,
+        effect: str | None = Query(None, alias="name"),
+        kind: str = Query("push"),
+    ) -> RedirectResponse:
+        build = await self._authorize(request, forge, owner, name, number)
+        await self._check_effect(build["id"], effect, kind)
+        await self.backend.cancel_effects(build["id"], effect, kind)
         return _back(forge, owner, name, number)
 
     async def _check_effect(self, build_id: int, effect: str | None, kind: str) -> None:
@@ -287,6 +306,23 @@ class _ControlRoutes:
         await self.backend.restart_effects(build["id"], effect, kind)
         return {"number": number, "action": "restart-effects"}
 
+    async def api_cancel_effects(  # noqa: PLR0913
+        self,
+        request: Request,
+        forge: str,
+        owner: str,
+        name: str,
+        number: int,
+        effect: str | None = Query(None, alias="name"),
+        kind: str = Query("push"),
+    ) -> dict:
+        """Cancel live effects, or a single one via ?name= (&kind=).
+        Same authz as restart."""
+        build = await self._authorize(request, forge, owner, name, number)
+        await self._check_effect(build["id"], effect, kind)
+        await self.backend.cancel_effects(build["id"], effect, kind)
+        return {"number": number, "action": "cancel-effects"}
+
     async def api_set_enabled(
         self, request: Request, forge: str, owner: str, name: str
     ) -> dict:
@@ -382,6 +418,7 @@ def create_control_router(
     # :path — attribute names may contain slashes.
     router.post(f"{base}/attrs/{{attr:path}}/restart")(routes.restart_attribute)
     router.post(f"{base}/effects/restart")(routes.restart_effects)
+    router.post(f"{base}/effects/cancel")(routes.cancel_effects)
     router.post(f"{base}/attrs/{{attr:path}}/cancel")(routes.cancel_attribute)
     router.post(f"{base}/cancel")(routes.cancel)
     router.post("/builds/cancel-all")(routes.cancel_all)
@@ -425,6 +462,9 @@ def create_control_api_router(
     router.post(
         f"{base}/builds/{{number}}/effects/restart", response_model=ControlAction
     )(routes.api_restart_effects)
+    router.post(
+        f"{base}/builds/{{number}}/effects/cancel", response_model=ControlAction
+    )(routes.api_cancel_effects)
     router.post(f"{base}/enable", response_model=EnableResult)(routes.api_set_enabled)
     router.post(f"{base}/disable", response_model=EnableResult)(routes.api_set_enabled)
     return router

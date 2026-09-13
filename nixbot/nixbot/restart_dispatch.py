@@ -14,7 +14,13 @@ from . import db
 from .db import BuildStatus
 from .db_gen import builds as builds_q
 from .db_gen import maintenance as q
-from .events import BuildResult, ChangeEvent, EvalReport, event_for_build
+from .events import (
+    BuildResult,
+    ChangeEvent,
+    EvalReport,
+    effects_event_for_build,
+    event_for_build,
+)
 from .recovery import check_store_paths, find_unfinished_builds
 from .repos import repo_info
 
@@ -27,6 +33,29 @@ if TYPE_CHECKING:
     from .service import CIService
 
 logger = logging.getLogger(__name__)
+
+
+async def cancel_effects(
+    s: CIService, build_id: int, name: str | None, kind: str
+) -> None:
+    """Stop live effects (name None: every build-owned one) and tell the
+    forge, without re-running anything."""
+    o = s.orchestrator
+    build = await builds_q.get_build(o.pool, id_=build_id)
+    if build is None:
+        return
+    project = await s.repo_store.by_id(build.project_id)
+    if project is None:
+        return
+    cancelled = await o.cancel_effects(build_id, kind, None if name is None else [name])
+    if not cancelled:
+        return
+    event = effects_event_for_build(repo_info(project), build)
+    for _, n in cancelled:
+        await o.reporter.effect_finished(
+            event, build, n, success=False, error="cancelled"
+        )
+    await o.post_effects_summary(event, build)
 
 
 async def restart_effects(s: CIService, build_id: int, name: str | None = None) -> None:

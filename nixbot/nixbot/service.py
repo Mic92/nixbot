@@ -444,6 +444,11 @@ class CIService:
             "effects", f"build-{build_id}", {"build_id": build_id, "name": name}
         )
 
+    async def cancel_effects(
+        self, build_id: int, name: str | None = None, kind: str = "push"
+    ) -> None:
+        await restart_dispatch.cancel_effects(self, build_id, name, kind)
+
     async def run_scheduled_now(
         self, project_id: int, schedule_name: str, effect: str, when_spec: str
     ) -> None:

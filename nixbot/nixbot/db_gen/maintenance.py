@@ -7,6 +7,7 @@ from __future__ import annotations
 
 __all__: collections.abc.Sequence[str] = (
     "AttributesForBuildsRow",
+    "CancelEffectsRow",
     "CleanupOldRowsRow",
     "FailInterruptedEffectsRow",
     "QueryResults",
@@ -17,6 +18,7 @@ __all__: collections.abc.Sequence[str] = (
     "build_effect_run_ids",
     "cancel_attribute",
     "cancel_build",
+    "cancel_effects",
     "cleanup_old_rows",
     "commit_built",
     "commit_eval_result",
@@ -50,6 +52,12 @@ if typing.TYPE_CHECKING:
     type ConnectionLike = asyncpg.Connection[asyncpg.Record] | asyncpg.pool.PoolConnectionProxy[asyncpg.Record]
 
 from nixbot.db_gen import models
+
+
+@dataclasses.dataclass()
+class CancelEffectsRow:
+    kind: str
+    name: str
 
 
 @dataclasses.dataclass()
@@ -130,6 +138,24 @@ FROM dropped d
 WHERE w.kind = 'effect' AND w.status = 'pending'
   AND (w.payload->>'build_id')::bigint = $1::bigint
   AND w.payload->>'kind' = d.kind AND w.payload->>'name' = d.name
+"""
+
+CANCEL_EFFECTS: typing.Final[str] = """-- name: CancelEffects :many
+WITH cancelled AS (
+    UPDATE effect_runs SET status = 'cancelled', finished_at = now(),
+        error = 'cancelled'
+    WHERE build_id = $1::bigint AND status IN ('pending', 'running')
+      AND CASE WHEN $2::text[] IS NULL THEN owner = 'build'
+          ELSE kind = $3::text AND name = ANY($2::text[]) END
+    RETURNING kind, name
+), items AS (
+    UPDATE work_queue w SET status = 'done', finished_at = now()
+    FROM cancelled c
+    WHERE w.kind = 'effect' AND w.status = 'pending'
+      AND (w.payload->>'build_id')::bigint = $1::bigint
+      AND w.payload->>'kind' = c.kind AND w.payload->>'name' = c.name
+)
+SELECT kind, name FROM cancelled
 """
 
 COUNT_UNFINISHED_ATTRIBUTES: typing.Final[str] = """-- name: CountUnfinishedAttributes :one
@@ -349,6 +375,13 @@ async def reset_build_for_restart(conn: ConnectionLike, *, build_id: int, attr: 
 
 async def drop_effects_for_rerun(conn: ConnectionLike, *, build_id: int, names: collections.abc.Sequence[str] | None) -> None:
     await conn.execute(DROP_EFFECTS_FOR_RERUN, build_id, names)
+
+
+def cancel_effects(conn: ConnectionLike, *, build_id: int, names: collections.abc.Sequence[str] | None, kind: str) -> QueryResults[CancelEffectsRow]:
+    def _decode_hook(row: asyncpg.Record) -> CancelEffectsRow:
+        return CancelEffectsRow(kind=row[0], name=row[1])
+
+    return QueryResults(conn, CANCEL_EFFECTS, _decode_hook, build_id, names, kind)
 
 
 async def count_unfinished_attributes(conn: ConnectionLike, *, build_id: int) -> int | None:

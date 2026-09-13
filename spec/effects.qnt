@@ -148,6 +148,15 @@ module effects {
     nextId' = nextId + 1, crashed' = crashed,
   }
 
+  // CancelEffects: stop without re-running.
+  action cancelEffect(n: str): bool = all {
+    not(crashed), live(rows.get(n)),
+    rows' = rows.set(n, Cancelled), tasks' = tasks.exclude(Set(n)),
+    items' = items.filter(i => i.row != n or (i.st == QRunning and not(tasks.contains(n)))),
+    build' = build, effectsStarted' = effectsStarted, ref' = ref, busy' = busy,
+    nextId' = nextId, crashed' = crashed,
+  }
+
   // ClaimNextWorkItem
   action claim(id: int): bool = all {
     not(crashed),
@@ -173,10 +182,10 @@ module effects {
     build' = build, effectsStarted' = effectsStarted, ref' = ref, busy' = busy, nextId' = nextId, crashed' = crashed,
   }
 
-  // FinishEffect: UPDATE by (build, kind, name), whatever row that is now.
+  // FinishEffect only moves a live row.
   action itemFinish(n: str, ok: bool): bool = all {
     not(crashed), tasks.contains(n),
-    rows' = if (rows.get(n) == None) rows else rows.set(n, if (ok) Succeeded else Failed),
+    rows' = if (live(rows.get(n))) rows.set(n, if (ok) Succeeded else Failed) else rows,
     items' = dropRunning(items, n),
     tasks' = tasks.exclude(Set(n)),
     build' = build, effectsStarted' = effectsStarted, ref' = ref, busy' = busy, nextId' = nextId, crashed' = crashed,
@@ -211,6 +220,8 @@ module effects {
     restartEffects(only),
     deliver,
     restartEvent,
+    nondet n = oneOf(ALL)
+    cancelEffect(n),
     nondet id = oneOf(1.to(nextId + 4))
     claim(id),
     nondet n = oneOf(ALL)

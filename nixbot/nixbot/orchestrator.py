@@ -186,6 +186,20 @@ class Orchestrator:
         await self.reset_effect_logs(build_id, names)
         await q.drop_effects_for_rerun(self.pool, build_id=build_id, names=names)
 
+    async def cancel_effects(
+        self, build_id: int, kind: str, names: list[str] | None
+    ) -> list[tuple[str, str]]:
+        """Stop live effects without re-running them. Returns the rows
+        that were cancelled."""
+        if names is None:
+            await rerun_exec.cancel_running_effects(self, build_id, None)
+        else:
+            await rerun_exec.cancel_running(self, build_id, kind, names)
+        rows = await q.cancel_effects(
+            self.pool, build_id=build_id, kind=kind, names=names
+        )
+        return [(r.kind, r.name) for r in rows]
+
     async def reset_build_for_restart(self, build_id: int, attr: str | None) -> None:
         if attr is None:
             await self.drop_effects(build_id, None)

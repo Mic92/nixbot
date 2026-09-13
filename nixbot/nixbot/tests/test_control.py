@@ -59,6 +59,7 @@ class FakeBackend:
     restarted: list[int] = field(default_factory=list)
     attr_restarts: list[tuple[int, str]] = field(default_factory=list)
     effect_restarts: list[tuple] = field(default_factory=list)
+    effect_cancels: list[tuple] = field(default_factory=list)
     cancelled: list[int] = field(default_factory=list)
     attr_cancels: list[tuple[int, str]] = field(default_factory=list)
     scheduled_runs: list[tuple[int, str, str, str]] = field(default_factory=list)
@@ -80,6 +81,11 @@ class FakeBackend:
         self.effect_restarts.append(
             (build_id, name) if kind == "push" else (build_id, name, kind)
         )
+
+    async def cancel_effects(
+        self, build_id: int, name: str | None = None, kind: str = "push"
+    ) -> None:
+        self.effect_cancels.append((build_id, name, kind))
 
     async def cancel_build(self, build_id: int) -> None:
         self.cancelled.append(build_id)
@@ -1111,6 +1117,21 @@ def test_single_effect_restart_route(harness: WebHarness) -> None:
     # Unknown effect is a 404, not an enqueue.
     assert harness.post(f"{url}?name=nope", ROOT).status_code == 404
     assert len(BACKEND.effect_restarts) == 1
+
+
+def test_effect_cancel_route(harness: WebHarness) -> None:
+    url = "/repos/github/acme/widget/builds/1/effects/cancel"
+    assert harness.post(url).status_code == 403
+    assert harness.post(url, ROOT).status_code == 303
+    assert harness.post(f"{url}?name=deploy", ROOT).status_code == 303
+    assert harness.post(f"{url}?name=nope", ROOT).status_code == 404
+    assert BACKEND.effect_cancels == [(1, None, "push"), (1, "deploy", "push")]
+    api = "/api" + url
+    assert harness.post(f"{api}?name=apply&kind=comment", ROOT).json() == {
+        "number": 1,
+        "action": "cancel-effects",
+    }
+    assert BACKEND.effect_cancels[-1] == (1, "apply", "comment")
 
 
 def test_webhook_panel_is_forge_aware(harness: WebHarness) -> None:
