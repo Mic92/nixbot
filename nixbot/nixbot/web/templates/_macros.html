@@ -113,3 +113,21 @@
         </td>
       </tr>
     {%- endmacro %}
+    {# Restart (↻) and, while live, cancel (✕) buttons for one effect row. #}
+    {% macro effect_actions(base, e, kind, restart=true) %}
+      {% set q = "?name=" ~ (e.name | urlencode) ~ ("&kind=" ~ (kind | urlencode) if kind != "push" else "") %}
+      {% if e.status in ("pending", "running") %}
+        <form method="post" action="{{ base }}/effects/cancel{{ q }}">
+          <button class="icon-button"
+                  title="cancel {{ e.name }}"
+                  aria-label="cancel effect {{ e.name }}"><span aria-hidden="true">✕</span></button>
+        </form>
+      {% endif %}
+      {% if restart %}
+        <form method="post" action="{{ base }}/effects/restart{{ q }}">
+          <button class="icon-button"
+                  title="{{ "cancel and restart" if e.status in ("pending", "running") else "restart" }} {{ e.name }}"
+                  aria-label="restart effect {{ e.name }}"><span aria-hidden="true">↻</span></button>
+        </form>
+      {% endif %}
+    {% endmacro %}

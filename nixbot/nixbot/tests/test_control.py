@@ -147,7 +147,9 @@ async def seed(dsn: str) -> None:
         await pool.execute(
             "INSERT INTO effect_runs (project_id, kind, build_id, name, status,"
             " payload) VALUES ((SELECT project_id FROM builds WHERE id = $1),"
-            " 'comment', $1, 'apply', 'succeeded', '{}')",
+            " 'comment', $1, 'apply', 'succeeded', '{}'),"
+            " ((SELECT project_id FROM builds WHERE id = $1),"
+            " 'comment', $1, 'plan', 'pending', '{}')",
             build_id,
         )
         # Queue for the mass-cancel tests: two pending, one running.
@@ -245,6 +247,9 @@ def test_repo_writer_can_control_without_admin_or_authorship(
         # Buttons show for the writer on the build page.
         page = harness.get("/repos/github/acme/widget/builds/1", frank).text
         assert ">restart</button>" in page
+        assert "effects/cancel?name=plan&amp;kind=comment" in page
+        assert "effects/cancel?name=apply" not in page
+        assert "effects/restart?name=apply&amp;kind=comment" in page
         # And the control endpoint accepts the request.
         assert (
             harness.post(

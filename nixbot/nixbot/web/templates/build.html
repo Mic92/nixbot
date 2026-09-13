@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import commit_link, error_row, maybe_link, status_icon, status_pill %}
+{% from "_macros.html" import commit_link, error_row, maybe_link, status_icon, status_pill, effect_actions %}
 {% block title %}
   {{ repo_name(project.owner,
     project.name) }} #{{ build.number }}
@@ -151,6 +151,12 @@
                 else effects_status -}}
             </span>
           </h2>
+          {% if can_control and effects_status in ("pending", "running") %}
+            <form method="post"
+                  action="{{ build_path(project, build.number) }}/effects/cancel">
+              <button>cancel effects</button>
+            </form>
+          {% endif %}
           {% if can_control and build.status == "succeeded" and effects_status != "skipped" %}
             <form method="post"
                   action="{{ build_path(project, build.number) }}/effects/restart">
@@ -180,13 +186,8 @@
               </td>
               <td class="attr-duration">{{ e | duration if e.status != "skipped" }}</td>
               <td class="attr-restart">
-                {% if can_control and build.status == "succeeded" and e.status not in ("pending", "running", "skipped") %}
-                  <form method="post"
-                        action="{{ build_path(project, build.number) }}/effects/restart?name={{ e.name | urlencode }}">
-                    <button class="icon-button"
-                            title="restart {{ e.name }}"
-                            aria-label="restart effect {{ e.name }}"><span aria-hidden="true">↻</span></button>
-                  </form>
+                {% if can_control and build.status == "succeeded" and e.status != "skipped" %}
+                  {{ effect_actions(build_path(project, build.number), e, "push") }}
                 {% endif %}
               </td>
             </tr>
@@ -203,6 +204,7 @@
               <th scope="col">status</th>
               <th scope="col">effect</th>
               <th scope="col">duration</th>
+              <th scope="col">cancel</th>
             </tr>
           </thead>
           {% for e in checks %}
@@ -216,6 +218,11 @@
                 {% endif %}
               </td>
               <td class="attr-duration">{{ e | duration if e.status != "pending" }}</td>
+              <td class="attr-restart">
+                {% if can_control %}
+                  {{ effect_actions(build_path(project, build.number), e, "check", restart=false) }}
+                {% endif %}
+              </td>
             </tr>
             {% if e.error %}{{ error_row(e.error) }}{% endif %}
           {% endfor %}
@@ -251,13 +258,8 @@
               <td class="muted">{{ e.actor or "" }}</td>
               <td class="attr-duration">{{ e | duration if e.status not in ("skipped", "pending") }}</td>
               <td class="attr-restart">
-                {% if can_control and e.payload and e.status != "pending" %}
-                  <form method="post"
-                        action="{{ build_path(project, build.number) }}/effects/restart?name={{ e.name | urlencode }}&kind={{ e.kind | urlencode }}">
-                    <button class="icon-button"
-                            title="{{ "cancel and restart" if e.status == "running" else "restart" }} {{ e.name }}"
-                            aria-label="restart effect {{ e.name }}"><span aria-hidden="true">↻</span></button>
-                  </form>
+                {% if can_control and e.payload is not none %}
+                  {{ effect_actions(build_path(project, build.number), e, e.kind) }}
                 {% endif %}
               </td>
             </tr>
