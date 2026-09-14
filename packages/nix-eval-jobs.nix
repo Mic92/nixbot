@@ -1,4 +1,4 @@
-# TODO: drop when nixpkgs ships nix-eval-jobs >= 2.35.1
+# TODO: drop the src pin when nixpkgs ships nix-eval-jobs >= 2.35.3
 { pkgs, fetchFromGitHub }:
 let
   # boost.context fixes needed by nix 2.35 coroutines (NixOS/nix#16174).
@@ -54,6 +54,10 @@ let
 
   nixComponents = patchIfNeeded nixComponents_2_35;
 
+  # memory budget scheduler, per-attribute warnings and stats
+  pinnedVersion = "2.35.3";
+  needsPin = pkgs.lib.versionOlder pkgs.nix-eval-jobs.version pinnedVersion;
+
   # polyfill for nixpkgs without nix 2.35 (e.g. stable release branches)
   nixComponents_2_35 =
     pkgs.nixVersions.nixComponents_2_35 or (
@@ -76,20 +80,22 @@ in
   inherit nixComponents;
 }).overrideAttrs
   (
-    _finalAttrs: prevAttrs: {
-      # unreleased main: memory budget scheduler, per-attribute warnings and stats
-      version = "2.35.2-unstable-2026-09-01";
-      buildInputs = (prevAttrs.buildInputs or [ ]) ++ [ pkgs.mimalloc ];
+    _finalAttrs: prevAttrs:
+    {
       # The nix CLI nixbot runs (flake prefetch-inputs/archive) must carry
       # the same patches, so expose it alongside nix-eval-jobs.
       passthru = (prevAttrs.passthru or { }) // {
         nix = nixComponents.nix-cli;
       };
+    }
+    // pkgs.lib.optionalAttrs needsPin {
+      version = pinnedVersion;
+      buildInputs = (prevAttrs.buildInputs or [ ]) ++ [ pkgs.mimalloc ];
       src = fetchFromGitHub {
         owner = "NixOS";
         repo = "nix-eval-jobs";
-        rev = "55e658518ae417cf26f36643fcfdebe5c5db17aa";
-        hash = "sha256-4z5GnNd9cbkKChaovYghlxuh1k5rYlxNT7wpZeR1oU0=";
+        tag = "v${pinnedVersion}";
+        hash = "sha256-Ig1h/+qL5sj60fWiy44kQkXjapuff7vJXC9N0Ak8EkY=";
       };
     }
   )
