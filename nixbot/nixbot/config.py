@@ -220,7 +220,12 @@ class PrApprovalConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enable: bool = False
-    trusted_associations: list[str] = ["OWNER", "MEMBER", "COLLABORATOR"]
+    trusted_associations: list[str] = [
+        "OWNER",
+        "MEMBER",
+        "COLLABORATOR",
+        "CONTRIBUTOR",
+    ]
 
 
 class PostBuildStep(BaseModel):

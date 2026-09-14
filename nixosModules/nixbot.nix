@@ -327,10 +327,11 @@ in
           "OWNER"
           "MEMBER"
           "COLLABORATOR"
+          "CONTRIBUTOR"
         ];
         description = ''
           GitHub `author_association` values that build without approval.
-          Add `CONTRIBUTOR` to trust anyone with a previously merged commit.
+          Drop `CONTRIBUTOR` to also gate authors of previously merged commits.
         '';
       };
     };

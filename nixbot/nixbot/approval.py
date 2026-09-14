@@ -74,7 +74,7 @@ class GitHubGatePoster:
     ) -> None:
         self.client = client
         self.store = store
-        self.name = f"{context_prefix}/nix-build"
+        self.name = f"{context_prefix}/nix-eval"
 
     async def post_gate(  # noqa: PLR0913
         self,
@@ -89,9 +89,9 @@ class GitHubGatePoster:
         if installation_id is None:
             return
         token = await self.client.installation_token(installation_id)
-        # Same name as the build summary and registered in the check-run
-        # store, so the approved build PATCHes this run instead of
-        # leaving a stale action_required next to it.
+        # Evaluation is the first thing approval unlocks. Same name as
+        # the eval status and registered in the check-run store, so the
+        # approved build PATCHes this run instead of leaving it stale.
         body = {
             "name": self.name,
             "head_sha": sha,
