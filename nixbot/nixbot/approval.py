@@ -109,7 +109,7 @@ class GitHubGatePoster:
             "actions": [
                 {
                     "label": "Approve CI",
-                    "description": "Build this pull request and later pushes to it",
+                    "description": "Build this PR and later pushes to it",
                     "identifier": APPROVE_ACTION,
                 }
             ],
@@ -125,7 +125,11 @@ class GitHubGatePoster:
         if response.status_code >= 400:  # noqa: PLR2004
             logger.error(
                 "failed to post approval gate",
-                extra={"repo": f"{owner}/{repo}", "status": response.status_code},
+                extra={
+                    "repo": f"{owner}/{repo}",
+                    "status": response.status_code,
+                    "body": response.text[:500],
+                },
             )
             return
         await self.store.set(
