@@ -405,7 +405,6 @@ class CIService:
         )
         if self.gate_poster is not None:
             await self.gate_poster.post_gate(
-                project_id,
                 info.owner,
                 info.repo,
                 change.commit_sha,

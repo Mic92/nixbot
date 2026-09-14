@@ -23,7 +23,6 @@ if TYPE_CHECKING:
 
     from .config import PrApprovalConfig
     from .forge import GitHubAppClient
-    from .status import CheckRunIds
 
 logger = logging.getLogger(__name__)
 
@@ -57,41 +56,26 @@ async def approve(
 
 
 class GatePoster(Protocol):
-    async def post_gate(  # noqa: PLR0913
-        self,
-        project_id: int,
-        owner: str,
-        repo: str,
-        sha: str,
-        pr_number: int,
-        details_url: str,
+    async def post_gate(
+        self, owner: str, repo: str, sha: str, pr_number: int, details_url: str
     ) -> None: ...
 
 
 class GitHubGatePoster:
-    def __init__(
-        self, client: GitHubAppClient, store: CheckRunIds, context_prefix: str
-    ) -> None:
+    def __init__(self, client: GitHubAppClient, context_prefix: str) -> None:
         self.client = client
-        self.store = store
         self.name = f"{context_prefix}/nix-eval"
 
-    async def post_gate(  # noqa: PLR0913
-        self,
-        project_id: int,
-        owner: str,
-        repo: str,
-        sha: str,
-        pr_number: int,
-        details_url: str,
+    async def post_gate(
+        self, owner: str, repo: str, sha: str, pr_number: int, details_url: str
     ) -> None:
         installation_id = await self.client.installation_for_repo(f"{owner}/{repo}")
         if installation_id is None:
             return
         token = await self.client.installation_token(installation_id)
-        # Evaluation is the first thing approval unlocks. Same name as
-        # the eval status and registered in the check-run store, so the
-        # approved build PATCHes this run instead of leaving it stale.
+        # Same name as the eval status: the approved build creates a
+        # fresh run of that name which supersedes this one. (PATCHing
+        # it instead leaves GitHub's PR view showing action_required.)
         body = {
             "name": self.name,
             "head_sha": sha,
@@ -131,7 +115,3 @@ class GitHubGatePoster:
                     "body": response.text[:500],
                 },
             )
-            return
-        await self.store.set(
-            project_id, sha, self.name, None, int(response.json()["id"])
-        )

@@ -305,7 +305,7 @@ async def build_service(config: Config) -> tuple[CIService, FastAPI]:
         gitlab=gitlab,
         credentials_providers=credentials_providers,
         gate_poster=(
-            GitHubGatePoster(github, CheckRunStore(pool), config.status_context_prefix)
+            GitHubGatePoster(github, config.status_context_prefix)
             if github is not None
             else None
         ),

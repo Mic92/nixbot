@@ -285,14 +285,8 @@ async def test_pr_approval_gate(
         handled.append((event.pr_number, event.commit_sha))
 
     class FakeGate:
-        async def post_gate(  # noqa: PLR0913
-            self,
-            project_id: int,
-            owner: str,
-            repo: str,
-            sha: str,
-            pr_number: int,
-            details_url: str,
+        async def post_gate(
+            self, owner: str, repo: str, sha: str, pr_number: int, details_url: str
         ) -> None:
             gates.append((sha, pr_number))
 
