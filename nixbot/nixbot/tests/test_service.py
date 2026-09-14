@@ -17,17 +17,19 @@ import pytest
 from nixbot import restart_dispatch
 from nixbot.bootstrap import _startup, build_service, run_service
 from nixbot.config import (
+    PrApprovalConfig,
     PullBasedConfig,
     PullBasedRepository,
     resolve_credential_path,
 )
+from nixbot.db_gen import approvals as approvals_q
 from nixbot.db_gen import builds as builds_q
 from nixbot.events import BuildResult, NullStatusReporter
 from nixbot.forge import DiscoveredRepo
 from nixbot.schedule_runner import scheduled_worktree_id
 from nixbot.schedules import DueEffect, ScheduleWhen
 from nixbot.status import CheckRunStore
-from nixbot.webhooks import ChangeRequest, CheckRerequested, PrClosed
+from nixbot.webhooks import ChangeRequest, CheckRerequested, PrApproved, PrClosed
 
 from .support import (
     FakeGitlab,
@@ -261,6 +263,116 @@ async def test_build_branches_gates_branch_pushes(
         )
     await service.drain_work()
     assert handled == ["release-1.0"]
+
+
+async def test_pr_approval_gate(
+    make_service: ServiceFactory, git_repo: tuple[Path, str]
+) -> None:
+    """Untrusted GitHub PRs are held until approved. Approval builds
+    the held head and unlocks later pushes. Trusted authors and the
+    per-repo `require_approval = false` opt-out bypass the gate."""
+    repo, sha = git_repo
+    service, _app = await make_service(pr_approval=PrApprovalConfig(enable=True))
+    pool = service.pool
+    project_id = await seed_project(pool, f"file://{repo}")
+    forge_repo_id = await pool.fetchval(
+        "SELECT forge_repo_id FROM projects WHERE id = $1", project_id
+    )
+    handled: list[tuple[int | None, str]] = []
+    gates: list[tuple[str, int]] = []
+
+    async def fake_handle(event: Any, credentials: Any = None) -> None:
+        handled.append((event.pr_number, event.commit_sha))
+
+    class FakeGate:
+        async def post_gate(  # noqa: PLR0913
+            self,
+            project_id: int,
+            owner: str,
+            repo: str,
+            sha: str,
+            pr_number: int,
+            details_url: str,
+        ) -> None:
+            gates.append((sha, pr_number))
+
+    service.orchestrator.handle_change_event = fake_handle  # type: ignore[method-assign]
+    service.gate_poster = FakeGate()
+
+    def pr(number: int, commit: str, association: str) -> ChangeRequest:
+        return ChangeRequest(
+            forge="github",
+            forge_repo_id=forge_repo_id,
+            branch="main",
+            commit_sha=commit,
+            pr_number=number,
+            pr_author="github:eve",
+            author_association=association,
+        )
+
+    await service.submit(pr(5, sha, "MEMBER"))
+    await service.submit(pr(6, "c1", "FIRST_TIME_CONTRIBUTOR"))
+    await service.submit(pr(6, "c2", "FIRST_TIME_CONTRIBUTOR"))
+    await service.drain_work()
+    assert handled == [(5, sha)]
+    assert gates == [("c1", 6), ("c2", 6)]
+    pending = await approvals_q.pending_approvals(pool, project_id=project_id)
+    assert [(p.pr_number, p.commit_sha) for p in pending] == [(6, "c2")]
+
+    await service.submit(
+        PrApproved(forge="github", forge_repo_id=forge_repo_id, pr_number=6)
+    )
+    await service.drain_work()
+    assert handled[-1] == (6, "c2")
+    assert not await approvals_q.pending_approvals(pool, project_id=project_id)
+    # Double click: nothing pending, no second build.
+    await service.approve_pr(project_id, 6, "github:maint")
+    await service.drain_work()
+    assert len(handled) == 2
+
+    await service.submit(pr(6, "c3", "FIRST_TIME_CONTRIBUTOR"))
+    await service.drain_work()
+    assert handled[-1] == (6, "c3")
+    assert len(gates) == 2
+
+    # Pre-approval (no held change yet) still unlocks the PR.
+    await service.approve_pr(project_id, 8, "github:maint")
+    await service.submit(pr(8, "c5", "NONE"))
+    await service.drain_work()
+    assert handled[-1] == (8, "c5")
+
+    (repo / "nixbot.toml").write_text("require_approval = false\n")
+    git(repo, "add", "nixbot.toml")
+    git(repo, "commit", "-m", "opt out of the contributor gate")
+    await service.submit(pr(7, "c4", "NONE"))
+    await service.drain_work()
+    assert handled[-1] == (7, "c4")
+
+
+async def test_pr_approval_disabled_by_default(service: CIService) -> None:
+    pool = service.pool
+    project_id = await seed_project(pool, "http://x")
+    forge_repo_id = await pool.fetchval(
+        "SELECT forge_repo_id FROM projects WHERE id = $1", project_id
+    )
+    handled: list[Any] = []
+
+    async def fake_handle(event: Any, credentials: Any = None) -> None:
+        handled.append(event.pr_number)
+
+    service.orchestrator.handle_change_event = fake_handle  # type: ignore[method-assign]
+    await service.submit(
+        ChangeRequest(
+            forge="github",
+            forge_repo_id=forge_repo_id,
+            branch="main",
+            commit_sha="c1",
+            pr_number=3,
+            author_association="NONE",
+        )
+    )
+    await service.drain_work()
+    assert handled == [3]
 
 
 async def test_restart_gitlab_mr_build_fetches_mr_refs(

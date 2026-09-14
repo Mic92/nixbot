@@ -16,9 +16,10 @@ from datetime import UTC, datetime
 from fnmatch import fnmatch
 from typing import TYPE_CHECKING, Any
 
-from . import db, discovery, restart_dispatch, schedule_runner
+from . import approval, db, discovery, restart_dispatch, schedule_runner
 from .config import ScheduleWhen
 from .db import BuildStatus
+from .db_gen import approvals as approvals_q
 from .db_gen import builds as builds_q
 from .db_gen import events as ev_q
 from .db_gen import failed as failed_q
@@ -29,6 +30,7 @@ from .events import (
     BuildResult,
     ChangeEvent,
     EvalReport,
+    RepoInfo,
     StatusReporter,
     effects_event_for_build,
     event_for_build,
@@ -51,6 +53,7 @@ from .schedules import DueEffect, ScheduledEffectsStore
 from .webhooks import (
     ChangeRequest,
     CheckRerequested,
+    PrApproved,
     PrClosed,
     PrComment,
     PrLabeled,
@@ -71,6 +74,7 @@ if TYPE_CHECKING:
 
     import asyncpg
 
+    from .approval import GatePoster
     from .config import Config
     from .db import BuildRecord
     from .forge import GiteaClient, GitHubAppClient, GitlabClient
@@ -195,6 +199,7 @@ class CIService:
     gitea: GiteaClient | None = None
     gitlab: GitlabClient | None = None
     credentials_providers: dict[str, CredentialsProvider] = field(default_factory=dict)
+    gate_poster: GatePoster | None = None
     # Strong references to fire-and-forget tasks: the event loop only
     # keeps weak references, so an unreferenced running build could be
     # garbage-collected mid-flight.
@@ -254,6 +259,12 @@ class CIService:
             await self._deliver_for_pr(event, "pull_request")
         elif isinstance(event, CheckRerequested):
             await self._submit_rerequest(event)
+        elif isinstance(event, PrApproved):
+            project = await self.repo_store.by_forge_id(
+                event.forge, event.forge_repo_id
+            )
+            if project is not None:
+                await self.approve_pr(project.id_, event.pr_number, event.actor)
         else:
             await self._submit_change(event)
 
@@ -266,6 +277,9 @@ class CIService:
             )
             if project is not None:
                 self.orchestrator.canceller.cancel_pr(project.id_, event.pr_number)
+                await approvals_q.drop_pending_approval(
+                    self.pool, project_id=project.id_, pr_number=event.pr_number
+                )
             # Queued events for the PR would build it after the close.
             await q.supersede_pending_changes(
                 self.pool,
@@ -348,12 +362,68 @@ class CIService:
             dataclasses.asdict(change),
         )
 
+    async def approve_pr(
+        self, project_id: int, pr_number: int, actor: str | None
+    ) -> None:
+        change = await approval.approve(self.pool, project_id, pr_number, actor)
+        logger.info(
+            "pull request approved",
+            extra={"project_id": project_id, "pr": pr_number, "actor": actor},
+        )
+        if change is not None:
+            await self._submit_change(change)
+
+    async def _gated(
+        self,
+        project_id: int,
+        pr_number: int,
+        info: RepoInfo,
+        change: ChangeRequest,
+        credentials: FetchCredentials,
+    ) -> bool:
+        """Hold an untrusted PR for approval. See nixbot.approval."""
+        if not approval.untrusted(self.config.pr_approval, change):
+            return False
+        if await approvals_q.pr_approved(
+            self.pool, project_id=project_id, pr_number=pr_number
+        ):
+            return False
+        repo_config = await self.orchestrator.default_branch_repo_config(
+            info, credentials, fetch=True
+        )
+        if not repo_config.require_approval:
+            return False
+        await approval.gate(self.pool, project_id, pr_number, change)
+        logger.info(
+            "pull request held for approval",
+            extra={
+                "repo": info.name,
+                "pr": pr_number,
+                "author": change.pr_author,
+                "association": change.author_association,
+            },
+        )
+        if self.gate_poster is not None:
+            await self.gate_poster.post_gate(
+                project_id,
+                info.owner,
+                info.repo,
+                change.commit_sha,
+                pr_number,
+                f"{self.config.url.rstrip('/')}/repos/{info.forge}/{info.name}",
+            )
+        return True
+
     async def _process_change(self, change: ChangeRequest) -> None:
         project = await self.repo_store.by_forge_id(change.forge, change.forge_repo_id)
         if project is None or not project.enabled:
             return
         info = repo_info(project)
         credentials = await self.credentials_provider(info.forge).get(info.clone_url)
+        if change.pr_number is not None and await self._gated(
+            project.id_, change.pr_number, info, change, credentials
+        ):
+            return
         if change.pr_number is None and not (
             change.branch == project.default_branch
             or is_merge_queue_branch(change.branch)

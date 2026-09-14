@@ -90,6 +90,41 @@
           </div>
         </details>
       {% endif %}
+      {% if pending_approvals %}
+        <h2 class="section" id="approvals">Waiting for approval</h2>
+        <table class="attrs">
+          <caption class="visually-hidden">pull requests from outside contributors</caption>
+          <thead>
+            <tr>
+              <th scope="col">pull request</th>
+              <th scope="col">author</th>
+              <th scope="col">commit</th>
+              <th scope="col">when</th>
+              <th scope="col">
+                <span class="visually-hidden">actions</span>
+              </th>
+            </tr>
+          </thead>
+          {% for p in pending_approvals %}
+            <tr>
+              <td class="attr-name">
+                <a href="{{ pr_url(project, p.pr_number) }}">PR #{{ p.pr_number }}</a>
+              </td>
+              <td class="muted attr-status">{{ (p.pr_author or "").split(':', 1)[-1] }}</td>
+              <td class="muted attr-status"><code>{{ p.commit_sha[:12] }}</code></td>
+              <td class="muted attr-status">{{ p.created_at | timeago }}</td>
+              <td class="attr-status">
+                {% if can_approve %}
+                  <form method="post"
+                        action="{{ repo_path(project) }}/pulls/{{ p.pr_number }}/approve">
+                    <button>approve CI</button>
+                  </form>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </table>
+      {% endif %}
       {% if schedules %}
         <h2 class="section">Schedules</h2>
         <table class="attrs">

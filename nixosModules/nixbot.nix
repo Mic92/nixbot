@@ -160,6 +160,10 @@ let
       effects_extra_nix_options = cfg.effects.extraNixOptions;
       show_trace_on_failure = cfg.showTrace;
       cache_failed_builds = cfg.cacheFailedBuilds;
+      pr_approval = {
+        enable = cfg.prApproval.enable;
+        trusted_associations = cfg.prApproval.trustedAssociations;
+      };
       allow_unauthenticated_control = cfg.allowUnauthenticatedControl;
       proxy_auth_header = cfg.proxyAuthHeader;
       build_max_silent_time = cfg.buildMaxSilentTime;
@@ -309,6 +313,27 @@ in
     };
 
     cacheFailedBuilds = lib.mkEnableOption "caching failed builds, skipping them until explicitly rebuilt";
+
+    prApproval = {
+      enable = lib.mkEnableOption ''
+        holding GitHub pull requests from outside contributors until a
+        maintainer approves CI for them (check-run button or web UI).
+        Repositories opt out with `require_approval = false` in
+        nixbot.toml. See docs/GITHUB.md
+      '';
+      trustedAssociations = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [
+          "OWNER"
+          "MEMBER"
+          "COLLABORATOR"
+        ];
+        description = ''
+          GitHub `author_association` values that build without approval.
+          Add `CONTRIBUTOR` to trust anyone with a previously merged commit.
+        '';
+      };
+    };
 
     allowUnauthenticatedControl = lib.mkEnableOption ''
       unauthenticated control actions (cancel, restart). Useful behind a VPN

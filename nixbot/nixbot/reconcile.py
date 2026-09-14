@@ -39,6 +39,7 @@ class RemoteHead:
     base_sha: str | None = None
     # Forge-clock PR update time. Feeds the reconcile watermark.
     updated_at: datetime | None = None
+    author_association: str | None = None
 
 
 def max_pr_updated(heads: list[RemoteHead]) -> datetime | None:
@@ -107,6 +108,7 @@ async def github_heads(
             # base branch tip instead (see webhooks._parse_pr_event).
             base_sha=f"refs/heads/{pull['base']['ref']}",
             updated_at=datetime.fromisoformat(pull["updated_at"]),
+            author_association=pull.get("author_association"),
         )
         for pull in pulls
     )
@@ -242,6 +244,7 @@ async def reconcile_repo(
                 pr_number=head.pr_number,
                 pr_author=head.pr_author,
                 base_sha=head.base_sha,
+                author_association=head.author_association,
             )
         )
         submitted += 1

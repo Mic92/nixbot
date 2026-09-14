@@ -65,6 +65,12 @@ class FakeBackend:
     scheduled_runs: list[tuple[int, str, str, str]] = field(default_factory=list)
     refreshes: int = 0
     activated: list[int] = field(default_factory=list)
+    approvals: list[tuple[int, int, str | None]] = field(default_factory=list)
+
+    async def approve_pr(
+        self, project_id: int, pr_number: int, actor: str | None
+    ) -> None:
+        self.approvals.append((project_id, pr_number, actor))
 
     async def restart_build(self, build_id: int) -> None:
         self.restarted.append(build_id)
@@ -267,6 +273,45 @@ def test_repo_writer_can_control_without_admin_or_authorship(
         )
     finally:
         ctx.visibility = saved_visibility
+
+
+def test_approve_pr_requires_writer_not_author(harness: WebHarness) -> None:
+    """The PR-author rule that allows restart must not allow approving
+    one's own gated PR."""
+    ctx = harness.ctx
+    project_id = harness.run(
+        ctx.pool.fetchval("SELECT id FROM projects WHERE forge_repo_id = 'ctl-1'")
+    )
+    harness.run(
+        ctx.pool.execute(
+            "INSERT INTO pr_approvals (project_id, pr_number, pending) VALUES"
+            ' ($1, 7, \'{"pr_author": "github:alice", "commit_sha": "abc"}\')',
+            project_id,
+        )
+    )
+    try:
+        assert (
+            "approve CI</button>"
+            not in harness.get("/repos/github/acme/widget", ALICE).text
+        )
+        assert (
+            "approve CI</button>" in harness.get("/repos/github/acme/widget", ROOT).text
+        )
+        url = "/repos/github/acme/widget/pulls/7/approve"
+        assert harness.post(url).status_code == 403
+        assert harness.post(url, ALICE).status_code == 403
+        assert harness.post(url, ROOT).status_code == 303
+        assert harness.post(f"/api{url}", ROOT).json() == {
+            "pr_number": 7,
+            "action": "approve",
+        }
+        assert BACKEND.approvals == [(project_id, 7, "github:root")] * 2
+    finally:
+        harness.run(
+            ctx.pool.execute(
+                "DELETE FROM pr_approvals WHERE project_id = $1", project_id
+            )
+        )
 
 
 def test_cancel_all_requires_admin(harness: WebHarness) -> None:

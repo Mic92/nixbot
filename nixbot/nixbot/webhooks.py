@@ -12,8 +12,8 @@ deduplicated by delivery GUID. A database outage makes handlers fail
 fast with 500 so the GitHub App redelivers (Gitea and GitLab are
 backstopped by startup reconciliation).
 
-All pull requests build (no trust gating — the Nix sandbox is the
-trust boundary). Merge-queue branches always build.
+All pull requests build unless `pr_approval` gating is enabled (see
+nixbot.approval). Merge-queue branches always build.
 """
 
 from __future__ import annotations
@@ -125,6 +125,8 @@ class ChangeRequest:
     pr_author: str | None = None
     base_sha: str | None = None
     actor: str | None = None
+    # GitHub pull_request.author_association. None for other forges.
+    author_association: str | None = None
 
 
 def _actor(forge: str, payload: dict[str, Any]) -> str | None:
@@ -226,7 +228,24 @@ class CheckRerequested:
     name: str | None = None
 
 
-WebhookEvent = ChangeRequest | PrClosed | PrComment | PrLabeled | CheckRerequested
+APPROVE_ACTION = "approve"
+APPROVE_EXTERNAL_PREFIX = "approve-pr-"
+
+
+@dataclass(frozen=True)
+class PrApproved:
+    """A maintainer clicked the approve button on the gate check run.
+    GitHub only renders action buttons to users with write access."""
+
+    forge: str
+    forge_repo_id: str
+    pr_number: int
+    actor: str | None = None
+
+
+WebhookEvent = (
+    ChangeRequest | PrClosed | PrComment | PrLabeled | CheckRerequested | PrApproved
+)
 
 
 def _pr_action_builds(action: str, payload: dict[str, Any], sync_action: str) -> bool:
@@ -284,6 +303,7 @@ def _parse_pr_event(
         # tested against the current base.
         base_sha=f"refs/heads/{base_ref}" if base_ref else base.get("sha"),
         actor=_actor(forge, payload),
+        author_association=pr.get("author_association"),
     )
 
 
@@ -321,13 +341,26 @@ def parse_github_event(  # noqa: PLR0911
 
 def _parse_github_check_event(
     event_type: str, repo_id: str, payload: dict[str, Any]
-) -> CheckRerequested | None:
+) -> CheckRerequested | PrApproved | None:
+    action = payload.get("action")
+    obj = payload.get(event_type) or {}
+    if event_type == "check_run" and action == "requested_action":
+        requested = (payload.get("requested_action") or {}).get("identifier")
+        external = obj.get("external_id") or ""
+        number = external.removeprefix(APPROVE_EXTERNAL_PREFIX)
+        if requested != APPROVE_ACTION or number == external or not number.isdigit():
+            return None
+        return PrApproved(
+            forge="github",
+            forge_repo_id=repo_id,
+            pr_number=int(number),
+            actor=_actor("github", payload),
+        )
     # "requested" fires on every push (push hook already covers that)
     # and "created"/"completed" are echoes of our own posts. Only the
     # explicit Re-run button matters.
-    if payload.get("action") != "rerequested":
+    if action != "rerequested":
         return None
-    obj = payload.get(event_type) or {}
     if event_type == "check_suite":
         return CheckRerequested(
             forge="github", forge_repo_id=repo_id, head_sha=obj.get("head_sha", "")

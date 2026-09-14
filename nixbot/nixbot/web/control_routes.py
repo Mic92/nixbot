@@ -58,6 +58,15 @@ class ControlBackend(Protocol):
         self, project_id: int, schedule_name: str, effect: str, when_spec: str
     ) -> None: ...
 
+    async def approve_pr(
+        self, project_id: int, pr_number: int, actor: str | None
+    ) -> None: ...
+
+
+class ApproveResult(BaseModel):
+    pr_number: int
+    action: str
+
 
 class ControlAction(BaseModel):
     """Acknowledgement of a restart/cancel request."""
@@ -220,6 +229,46 @@ class _ControlRoutes:
         for build_id in build_ids:
             await self.backend.cancel_build(build_id)
         return RedirectResponse("/builds", status_code=303)
+
+    async def _require_repo_writer(self, request: Request, project_id: int) -> str:
+        """Instance admins or forge-side writers. Deliberately not the
+        PR-author rule: authors must not approve themselves."""
+        if not same_origin(request, self.own_url):
+            raise HTTPException(status_code=403, detail="cross-origin request")
+        user = await self.ctx.request_user(request)
+        if user is None:
+            raise HTTPException(status_code=403, detail="login required")
+        if not is_admin(user, self.authz):
+            controllable = await self.ctx.controllable_repo_ids(request)
+            if controllable is not None and project_id not in controllable:
+                raise HTTPException(status_code=403, detail="not authorized")
+        return user.qualified
+
+    async def api_approve_pr(
+        self,
+        request: Request,
+        forge: str,
+        owner: str,
+        name: str,
+        pr_number: int,
+    ) -> dict:
+        """Approve CI for a pull request held by the contributor gate.
+        Authz: admins or repo writers."""
+        project = await self.ctx.repo_or_404(forge, owner, name, request)
+        actor = await self._require_repo_writer(request, project["id"])
+        await self.backend.approve_pr(project["id"], pr_number, actor)
+        return {"pr_number": pr_number, "action": "approve"}
+
+    async def approve_pr(
+        self,
+        request: Request,
+        forge: str,
+        owner: str,
+        name: str,
+        pr_number: int,
+    ) -> RedirectResponse:
+        await self.api_approve_pr(request, forge, owner, name, pr_number)
+        return RedirectResponse(f"/repos/{forge}/{owner}/{name}", status_code=303)
 
     async def _require_repo_admin(self, request: Request, project_id: int) -> None:
         """Instance admins, or forge-side admins of this repo."""
@@ -430,6 +479,9 @@ def create_control_router(
     router.post("/repos/{forge}/{owner:owner}/{name:segment}/schedules/run")(
         routes.run_schedule
     )
+    router.post(
+        "/repos/{forge}/{owner:owner}/{name:segment}/pulls/{pr_number}/approve"
+    )(routes.approve_pr)
     return router
 
 
@@ -467,4 +519,7 @@ def create_control_api_router(
     )(routes.api_cancel_effects)
     router.post(f"{base}/enable", response_model=EnableResult)(routes.api_set_enabled)
     router.post(f"{base}/disable", response_model=EnableResult)(routes.api_set_enabled)
+    router.post(f"{base}/pulls/{{pr_number}}/approve", response_model=ApproveResult)(
+        routes.api_approve_pr
+    )
     return router

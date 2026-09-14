@@ -23,6 +23,7 @@ from nixbot.webhooks import (
     ChangeRequest,
     CheckRerequested,
     DeliveryDeduper,
+    PrApproved,
     PrClosed,
     PrComment,
     PrLabeled,
@@ -157,6 +158,7 @@ def test_parse_github_pr() -> None:
             "number": 12,
             "title": "Add feature",
             "user": {"login": "alice"},
+            "author_association": "FIRST_TIME_CONTRIBUTOR",
             "head": {"sha": "headsha"},
             "base": {"ref": "main", "sha": "basesha"},
         },
@@ -165,6 +167,7 @@ def test_parse_github_pr() -> None:
     assert isinstance(event, ChangeRequest)
     assert event.pr_number == 12
     assert event.pr_author == "github:alice"
+    assert event.author_association == "FIRST_TIME_CONTRIBUTOR"
     # The pusher, not the PR author, caused this event.
     assert event.actor == "github:bob"
     assert event.base_sha == "refs/heads/main"
@@ -237,6 +240,25 @@ def test_parse_github_check_suite_rerequested() -> None:
         )
         is None
     )
+
+
+def test_parse_github_check_run_approve_action() -> None:
+    payload: dict[str, Any] = {
+        "action": "requested_action",
+        "repository": {"id": 7},
+        "sender": {"login": "maint"},
+        "requested_action": {"identifier": "approve"},
+        "check_run": {"head_sha": "abc", "external_id": "approve-pr-12"},
+    }
+    assert parse_github_event("check_run", payload) == PrApproved(
+        forge="github", forge_repo_id="7", pr_number=12, actor="github:maint"
+    )
+    # Buttons on our regular runs (external_id = build id) are not approvals.
+    payload["check_run"]["external_id"] = "42"
+    assert parse_github_event("check_run", payload) is None
+    payload["check_run"]["external_id"] = "approve-pr-12"
+    payload["requested_action"]["identifier"] = "other"
+    assert parse_github_event("check_run", payload) is None
 
 
 def test_parse_github_pr_retarget() -> None:

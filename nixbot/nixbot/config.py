@@ -212,6 +212,17 @@ class WorkloadIdentityConfig(BaseModel):
     key_rotation_days: int = 30
 
 
+class PrApprovalConfig(BaseModel):
+    """Hold pull requests from outside contributors until a maintainer
+    approves them (docs/GITHUB.md). GitHub only: the decision uses the
+    webhook's `author_association`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enable: bool = False
+    trusted_associations: list[str] = ["OWNER", "MEMBER", "COLLABORATOR"]
+
+
 class PostBuildStep(BaseModel):
     name: str
     environment: Mapping[str, str | Interpolate]
@@ -378,6 +389,7 @@ class Config(BaseModel):
     # nix options for the effect's private daemon, e.g. allowed-uris.
     effects_extra_nix_options: dict[str, str] = {}
     show_trace_on_failure: bool = False
+    pr_approval: PrApprovalConfig = Field(default_factory=PrApprovalConfig)
     cache_failed_builds: bool = False
     allow_unauthenticated_control: bool = False
     # Reverse-proxy auth header for the authenticated username (e.g. X-Remote-User).

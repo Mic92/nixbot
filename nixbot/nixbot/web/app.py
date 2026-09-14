@@ -38,6 +38,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from nixbot.effects_state import TaskTokens
 
 from ..auth import User, can_control_build, is_admin  # noqa: TID252
+from ..db_gen import approvals as approvals_q  # noqa: TID252
 from ..forge_tokens import RevokedSessionStore  # noqa: TID252
 from ..recovery import check_db_health  # noqa: TID252
 from ..schedules import ScheduledEffectsStore, schedule_overview  # noqa: TID252
@@ -389,6 +390,10 @@ class _PageRoutes:
                 await store.latest_runs_for_project(project["id"]),
             ),
             can_run_schedules=await self._can_run_schedules(request, project["id"]),
+            pending_approvals=await approvals_q.pending_approvals(
+                ctx.pool, project_id=project["id"]
+            ),
+            can_approve=await self._can_approve(request, project["id"]),
             badge_markdown=self._badge_markdown(request, project),
         )
 
@@ -399,6 +404,17 @@ class _PageRoutes:
             f"/{quote(project['owner'], safe='/')}/{quote(project['name'], safe='')}"
         )
         return f"[![nixbot]({base}/badge/{project['badge_token']}.svg)]({repo_url})"
+
+    async def _can_approve(self, request: Request, project_id: int) -> bool:
+        """UX only. The approve route re-checks server-side."""
+        ctx = self.ctx
+        user = await ctx.request_user(request)
+        if ctx.authz is None or user is None:
+            return False
+        if is_admin(user, ctx.authz):
+            return True
+        controllable = await ctx.controllable_repo_ids(request)
+        return controllable is None or project_id in controllable
 
     async def _can_run_schedules(self, request: Request, project_id: int) -> bool:
         """UX only. The run-schedule route re-checks server-side."""

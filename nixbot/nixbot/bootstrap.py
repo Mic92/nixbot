@@ -17,6 +17,7 @@ import httpx
 import uvicorn
 
 from .api_tokens import ApiTokenStore
+from .approval import GitHubGatePoster
 from .auth import (
     AuthzConfig,
     OAuthProvider,
@@ -303,6 +304,11 @@ async def build_service(config: Config) -> tuple[CIService, FastAPI]:
         gitea=gitea,
         gitlab=gitlab,
         credentials_providers=credentials_providers,
+        gate_poster=(
+            GitHubGatePoster(github, CheckRunStore(pool), config.status_context_prefix)
+            if github is not None
+            else None
+        ),
         # DB clock, not app clock: the crash sweep compares it against
         # started_at columns set by now() in SQL.
         _started_at=await pool.fetchval("SELECT now()"),
