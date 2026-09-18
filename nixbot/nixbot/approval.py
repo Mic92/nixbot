@@ -1,6 +1,7 @@
 """Approval gate for pull requests from outside contributors.
 
-GitHub only: the webhook carries `author_association`. Untrusted PRs
+GitHub only: the webhook carries `author_association`; PRs whose head
+branch is in the base repository are trusted regardless. Untrusted PRs
 get an `action_required` check run with an approve button instead of a
 build. The click arrives as `check_run.requested_action` (GitHub shows
 the button only to users with write access). The web UI offers the
@@ -29,6 +30,10 @@ logger = logging.getLogger(__name__)
 
 def untrusted(config: PrApprovalConfig, change: ChangeRequest) -> bool:
     if not config.enable or change.forge != "github" or change.pr_number is None:
+        return False
+    # Pushing the head branch to the base repo already needed write
+    # access. Covers GitHub Apps/bots, which always report NONE.
+    if change.head_in_base_repo:
         return False
     return (change.author_association or "NONE") not in config.trusted_associations
 

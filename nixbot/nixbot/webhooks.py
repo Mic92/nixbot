@@ -127,6 +127,8 @@ class ChangeRequest:
     actor: str | None = None
     # GitHub pull_request.author_association. None for other forges.
     author_association: str | None = None
+    # PR head branch lives in the base repository (not a fork).
+    head_in_base_repo: bool = False
 
 
 def _actor(forge: str, payload: dict[str, Any]) -> str | None:
@@ -291,11 +293,13 @@ def _parse_pr_event(
     # title, and the payload lacks the head commit message.
     base = pr.get("base") or {}
     base_ref = base.get("ref", "")
+    head = pr.get("head") or {}
+    head_repo_id = (head.get("repo") or {}).get("id")
     return ChangeRequest(
         forge=forge,
         forge_repo_id=repo_id,
         branch=base_ref,
-        commit_sha=(pr.get("head") or {}).get("sha", ""),
+        commit_sha=head.get("sha", ""),
         pr_number=number,
         pr_author=f"{forge}:{(pr.get('user') or {}).get('login', '')}",
         # base.sha is frozen at PR creation while the base branch moves
@@ -304,6 +308,7 @@ def _parse_pr_event(
         base_sha=f"refs/heads/{base_ref}" if base_ref else base.get("sha"),
         actor=_actor(forge, payload),
         author_association=pr.get("author_association"),
+        head_in_base_repo=head_repo_id is not None and str(head_repo_id) == repo_id,
     )
 
 

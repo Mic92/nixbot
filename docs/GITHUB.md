@@ -137,14 +137,16 @@ authors can restart or cancel the builds of their own pull requests.
 
 Off by default. With `services.nixbot.prApproval.enable = true` pull requests
 whose `author_association` is not in `prApproval.trustedAssociations` (default
-`OWNER`, `MEMBER`, `COLLABORATOR`, `CONTRIBUTOR`) are not built (repositories
-opt out with `require_approval = false` in the default branch's `nixbot.toml`).
-Instead the head commit gets an `action_required` check run with an **Approve
-CI** button. GitHub shows that button only to users with write access. The
-project page in the web UI offers the same to repo writers and instance admins
-(`POST /api/repos/github/<owner>/<repo>/pulls/<n>/approve`). Approval unlocks
-the whole pull request: the held head builds immediately and later pushes build
-without asking again. Gitea and GitLab are unaffected.
+`OWNER`, `MEMBER`, `COLLABORATOR`, `CONTRIBUTOR`) are not built. Pull requests
+whose head branch is in the repository itself (GitHub Apps, bots, maintainers
+pushing branches) always build, since that already required write access
+(repositories opt out with `require_approval = false` in the default branch's
+`nixbot.toml`). Instead the head commit gets an `action_required` check run with
+an **Approve CI** button. GitHub shows that button only to users with write
+access. The project page in the web UI offers the same to repo writers and
+instance admins (`POST /api/repos/github/<owner>/<repo>/pulls/<n>/approve`).
+Approval unlocks the whole pull request: the held head builds immediately and
+later pushes build without asking again. Gitea and GitLab are unaffected.
 
 ## Troubleshooting
 
