@@ -45,11 +45,22 @@ let
     hash = "sha256-3QBE/cmolXVFcak1T49fC2vftb9CJyUsoJ4Z7WDqVJ4=";
   };
 
+  # With the dedup fix every node is visited, including relative path
+  # inputs (`url = "path:.."` subflakes), which cannot be fetched on
+  # their own and made prefetch-inputs fail (numtide/system-manager).
+  prefetchInputsRelativePatch = pkgs.fetchpatch {
+    url = "https://github.com/Mic92/nix-1/commit/db9b1a345c55e04c041bb12ab2eb58b0a368b3eb.patch";
+    hash = "sha256-D7bHtx6ZWHeCHn66KEXrVO/l5UNkfx4AuZIwQhTJjTo=";
+  };
+
   patchIfNeeded =
     components:
     components.appendPatches (
       pkgs.lib.optional (pkgs.lib.versionOlder components.version "2.36") srcToStoreCachePatch
-      ++ [ prefetchInputsDedupPatch ]
+      ++ [
+        prefetchInputsDedupPatch
+        prefetchInputsRelativePatch
+      ]
     );
 
   nixComponents = patchIfNeeded nixComponents_2_35;
