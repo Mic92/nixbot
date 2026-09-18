@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import socket
 import time
 from pathlib import Path
@@ -303,6 +304,14 @@ async def test_pr_approval_gate(
             pr_author="github:eve",
             author_association=association,
         )
+
+    # App/bot PRs report NONE but push to the base repo: trusted.
+    await service.submit(
+        dataclasses.replace(pr(4, "c0", "NONE"), head_in_base_repo=True)
+    )
+    await service.drain_work()
+    assert handled == [(4, "c0")]
+    handled.clear()
 
     await service.submit(pr(5, sha, "MEMBER"))
     await service.submit(pr(6, "c1", "FIRST_TIME_CONTRIBUTOR"))

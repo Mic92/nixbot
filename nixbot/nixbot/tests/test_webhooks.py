@@ -242,6 +242,49 @@ def test_parse_github_check_suite_rerequested() -> None:
     )
 
 
+def test_parse_github_pr_from_app_in_base_repo_is_trusted() -> None:
+    """Recorded shape of Mic92/dotfiles#5907: GitHub reports NONE for
+    app-created PRs even though the head branch lives in the base repo,
+    which already required push access. Fork PRs keep their association
+    (nix-community/disko#1297)."""
+    payload: dict[str, Any] = {
+        "action": "opened",
+        "repository": {"id": 23974149, "full_name": "Mic92/dotfiles"},
+        "sender": {"login": "buildbot-mic92[bot]", "type": "Bot"},
+        "pull_request": {
+            "number": 5907,
+            "state": "open",
+            "user": {"login": "buildbot-mic92[bot]", "type": "Bot"},
+            "author_association": "NONE",
+            "head": {
+                "ref": "update-flake",
+                "sha": "1111111111111111111111111111111111111111",
+                "repo": {"id": 23974149, "full_name": "Mic92/dotfiles"},
+            },
+            "base": {
+                "ref": "main",
+                "sha": "2222222222222222222222222222222222222222",
+                "repo": {"id": 23974149, "full_name": "Mic92/dotfiles"},
+            },
+        },
+    }
+    event = parse_github_event("pull_request", payload)
+    assert isinstance(event, ChangeRequest)
+    assert event.head_in_base_repo is True
+
+    payload["pull_request"]["author_association"] = "FIRST_TIME_CONTRIBUTOR"
+    payload["pull_request"]["user"] = {"login": "T2an", "type": "User"}
+    payload["pull_request"]["head"]["repo"] = {"id": 999, "full_name": "T2an/disko"}
+    event = parse_github_event("pull_request", payload)
+    assert isinstance(event, ChangeRequest)
+    assert event.head_in_base_repo is False
+    # Deleted fork: head.repo is null.
+    payload["pull_request"]["head"]["repo"] = None
+    event = parse_github_event("pull_request", payload)
+    assert isinstance(event, ChangeRequest)
+    assert event.head_in_base_repo is False
+
+
 def test_parse_github_check_run_approve_action() -> None:
     payload: dict[str, Any] = {
         "action": "requested_action",
