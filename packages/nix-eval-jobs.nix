@@ -31,8 +31,7 @@ let
       });
 
   # nix 2.35 eval perf regression: srcToStore cache not populated on
-  # fetcher cache hits (NixOS/nix#16190, fixed after 2.35.2). Applied
-  # only for nix < 2.36; patch fails if already included upstream.
+  # fetcher cache hits (NixOS/nix#16190, fixed after 2.35.2).
   srcToStoreCachePatch = pkgs.fetchpatch {
     url = "https://github.com/NixOS/nix/commit/30820a54b112f4842bdb7df28b61b2a607e54033.patch";
     hash = "sha256-Yvn9a059LvW9FkSGH20LRPlBIhmVqQxGMBXke+hxkgs=";
@@ -47,17 +46,18 @@ let
 
   # With the dedup fix every node is visited, including relative path
   # inputs (`url = "path:.."` subflakes), which cannot be fetched on
-  # their own and made prefetch-inputs fail (numtide/system-manager).
+  # their own and made prefetch-inputs fail (numtide/system-manager, NixOS/nix#16487).
   prefetchInputsRelativePatch = pkgs.fetchpatch {
     url = "https://github.com/Mic92/nix-1/commit/db9b1a345c55e04c041bb12ab2eb58b0a368b3eb.patch";
     hash = "sha256-D7bHtx6ZWHeCHn66KEXrVO/l5UNkfx4AuZIwQhTJjTo=";
   };
 
+  # All fixed upstream in 2.36.
   patchIfNeeded =
     components:
     components.appendPatches (
-      pkgs.lib.optional (pkgs.lib.versionOlder components.version "2.36") srcToStoreCachePatch
-      ++ [
+      pkgs.lib.optionals (pkgs.lib.versionOlder components.version "2.36") [
+        srcToStoreCachePatch
         prefetchInputsDedupPatch
         prefetchInputsRelativePatch
       ]
