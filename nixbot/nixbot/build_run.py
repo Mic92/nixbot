@@ -16,7 +16,7 @@ import shutil
 import time
 from typing import TYPE_CHECKING, Any
 
-from . import db
+from . import build_reuse, db
 from .after_build import after_build
 from .build_scheduler import (
     TERMINAL_FAILURES,
@@ -234,10 +234,10 @@ async def _settle_aborted(
     await q.settle_unfinished_attributes(o.pool, build_id=build.id_)
     await db.set_build_status(o.pool, build.id_, status, error=error)
     if status == BuildStatus.CANCELLED:
-        await o.reporter.eval_cancelled(event, build)
+        await build_reuse.report_eval_cancelled(o, event, build)
     else:
-        await o.reporter.eval_finished(
-            event, build, EvalReport(success=False, error=error)
+        await build_reuse.report_eval_finished(
+            o, event, build, EvalReport(success=False, error=error)
         )
     await o.report_build_finished(
         event, build, BuildResult(status, build.status_generation, [])
@@ -268,7 +268,8 @@ async def _record_eval_success(
         if isinstance(job, NixEvalJobSuccess) and job.system in o.config.build_systems
     ]
     await commit_eval_result(o.pool, build.id_, buildable, result.duration_ms)
-    await o.reporter.eval_finished(
+    await build_reuse.report_eval_finished(
+        o,
         event,
         build,
         EvalReport(
@@ -484,7 +485,9 @@ async def _try_reuse_eval(
         return False
     await commit_eval_result(o.pool, build.id_, reused)
     await db.set_build_status(o.pool, build.id_, BuildStatus.BUILDING)
-    await o.reporter.eval_finished(event, build, EvalReport(success=True, jobs=reused))
+    await build_reuse.report_eval_finished(
+        o, event, build, EvalReport(success=True, jobs=reused)
+    )
     # cache_failures=False: see _ReadOnlyFailedBuildCache.
     await build_attributes(
         o,

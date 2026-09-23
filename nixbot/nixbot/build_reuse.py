@@ -129,6 +129,25 @@ async def report_events(
     ] or [event]
 
 
+async def report_eval_finished(
+    o: Orchestrator,
+    event: ChangeEvent,
+    build: BuildRecord,
+    report: EvalReport,
+) -> None:
+    """Fan an evaluation verdict out through every persisted target."""
+    for target_event in await report_events(o, event, build):
+        await o.reporter.eval_finished(target_event, build, report)
+
+
+async def report_eval_cancelled(
+    o: Orchestrator, event: ChangeEvent, build: BuildRecord
+) -> None:
+    """Fan evaluation cancellation out through persisted targets."""
+    for target_event in await report_events(o, event, build):
+        await o.reporter.eval_cancelled(target_event, build)
+
+
 async def report_build_finished(
     o: Orchestrator,
     event: ChangeEvent,

@@ -25,13 +25,14 @@ from nixbot.config import (
 )
 from nixbot.db_gen import approvals as approvals_q
 from nixbot.db_gen import builds as builds_q
-from nixbot.events import BuildResult, ChangeEvent, NullStatusReporter
+from nixbot.events import BuildResult, ChangeEvent, EvalReport, NullStatusReporter
 from nixbot.forge import DiscoveredRepo
 from nixbot.repos import repo_info
 from nixbot.schedule_runner import scheduled_worktree_id
 from nixbot.schedules import DueEffect, ScheduleWhen
-from nixbot.status import CheckRunStore
+from nixbot.status import CheckPermissionError, CheckRunStore
 from nixbot.webhooks import ChangeRequest, CheckRerequested, PrApproved, PrClosed
+from nixbot.work_queue import WorkQueue
 
 from .support import (
     FakeGitlab,
@@ -917,6 +918,8 @@ class TargetRecordingReporter(AttributeRecordingReporter):
         super().__init__()
         self.restarted: list[tuple[str, str]] = []
         self.final_results: list[tuple[str, BuildResult]] = []
+        self.eval_results: list[tuple[str, bool]] = []
+        self.eval_cancellations: list[str] = []
 
     async def build_restarted(
         self,
@@ -929,6 +932,14 @@ class TargetRecordingReporter(AttributeRecordingReporter):
 
     async def build_finished(self, event: Any, build: Any, result: BuildResult) -> None:
         self.final_results.append((event.commit_sha, result))
+
+    async def eval_finished(
+        self, event: Any, build: Any, report: EvalReport
+    ) -> None:
+        self.eval_results.append((event.commit_sha, report.success))
+
+    async def eval_cancelled(self, event: Any, build: Any) -> None:
+        self.eval_cancellations.append(event.commit_sha)
 
 
 async def test_restart_and_final_report_use_persisted_targets_after_restart(
@@ -970,6 +981,30 @@ async def test_restart_and_final_report_use_persisted_targets_after_restart(
         ("main-sha", "hydraJobs"),
     }
 
+    build = await builds_q.get_build(pool, id_=build_id)
+    project = await service.repo_store.by_id(project_id)
+    assert build is not None
+    assert project is not None
+    source_event = ChangeEvent(
+        repo=repo_info(project), branch="feature", commit_sha="pr-sha", pr_number=7
+    )
+    await build_reuse.report_eval_finished(
+        service.orchestrator, source_event, build, EvalReport(success=True)
+    )
+    await build_reuse.report_eval_finished(
+        service.orchestrator, source_event, build, EvalReport(success=False)
+    )
+    await build_reuse.report_eval_cancelled(
+        service.orchestrator, source_event, build
+    )
+    assert set(reporter.eval_results) == {
+        ("pr-sha", True),
+        ("main-sha", True),
+        ("pr-sha", False),
+        ("main-sha", False),
+    }
+    assert set(reporter.eval_cancellations) == {"pr-sha", "main-sha"}
+
     # No linked_events survive a process restart; durable targets still receive
     # the authoritative completion.
     service.orchestrator.linked_events.clear()
@@ -978,13 +1013,9 @@ async def test_restart_and_final_report_use_persisted_targets_after_restart(
         build_id,
     )
     build = await builds_q.get_build(pool, id_=build_id)
-    project = await service.repo_store.by_id(project_id)
     assert build is not None
-    assert project is not None
     await service.orchestrator.report_build_finished(
-        ChangeEvent(
-            repo=repo_info(project), branch="feature", commit_sha="pr-sha", pr_number=7
-        ),
+        source_event,
         build,
         BuildResult("succeeded", build.status_generation, []),
     )
@@ -1062,6 +1093,102 @@ async def test_attribute_report_hint_is_best_effort_but_preserves_cancellation(
     service.enqueue_work = cancelled_enqueue  # type: ignore[method-assign]
     with pytest.raises(asyncio.CancelledError):
         await service.request_attribute_report(1, "a")
+
+
+async def test_live_reconciliation_repairs_queue_write_and_retry_update_failures(
+    service: CIService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pool = service.pool
+    project_id = await seed_project(pool, "http://example/repo")
+    build_id = await insert_build(
+        pool, project_id, commit_sha="terminal-sha", status="failed"
+    )
+    await builds_q.record_build_report_target(
+        pool,
+        build_id=build_id,
+        commit_sha="terminal-sha",
+        branch="main",
+        pr_number=None,
+    )
+
+    class RecoveringReporter(TargetRecordingReporter):
+        available = False
+
+        async def build_finished(
+            self, event: Any, build: Any, result: BuildResult
+        ) -> None:
+            if not self.available:
+                msg = "GitHub Checks permission unavailable"
+                raise CheckPermissionError(msg)
+            await super().build_finished(event, build, result)
+
+    reporter = RecoveringReporter()
+    service.orchestrator.reporter = reporter
+    service.orchestrator.request_build_report = service.request_build_report
+    unreconciled_terminal_builds = builds_q.unreconciled_terminal_builds
+
+    async def terminal_for_this_build(*args: Any, **kwargs: Any) -> list[int]:
+        return [
+            candidate
+            for candidate in await unreconciled_terminal_builds(*args, **kwargs)
+            if candidate == build_id
+        ]
+
+    monkeypatch.setattr(
+        builds_q, "unreconciled_terminal_builds", terminal_for_this_build
+    )
+
+    original_enqueue = service.enqueue_work
+
+    async def failed_enqueue(*args: Any, **kwargs: Any) -> None:
+        msg = "queue database write failed"
+        raise RuntimeError(msg)
+
+    service.enqueue_work = failed_enqueue  # type: ignore[method-assign]
+    await service.request_build_report(build_id)
+    service.enqueue_work = original_enqueue  # type: ignore[method-assign]
+    assert await pool.fetchval(
+        "SELECT reported_generation FROM build_reporting WHERE build_id = $1",
+        build_id,
+    ) is None
+    assert await pool.fetchval(
+        "SELECT count(*) FROM work_queue WHERE kind = 'report'"
+    ) == 0
+
+    queue = WorkQueue(pool)
+    await service._reconcile_terminal_reports(queue)  # noqa: SLF001
+    item = await queue.claim_next()
+    assert item is not None
+    original_retry = queue.retry
+
+    async def failed_retry(*args: Any, **kwargs: Any) -> bool:
+        msg = "retry update failed"
+        raise RuntimeError(msg)
+
+    queue.retry = failed_retry  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="retry update failed"):
+        await service._execute_work(queue, item)  # noqa: SLF001
+    queue.retry = original_retry  # type: ignore[method-assign]
+    assert await pool.fetchval(
+        "SELECT status FROM work_queue WHERE id = $1", item.id
+    ) == "running"
+
+    # The idle-loop lease sweep repairs the otherwise unleased running row
+    # without requiring a process restart.
+    await pool.execute(
+        "UPDATE work_queue SET claimed_at = now() - interval '1 hour' "
+        "WHERE id = $1",
+        item.id,
+    )
+    reporter.available = True
+    await service._reconcile_terminal_reports(queue)  # noqa: SLF001
+    await service.drain_work()
+
+    assert {commit for commit, _ in reporter.final_results} == {"terminal-sha"}
+    assert await pool.fetchval(
+        "SELECT reported_generation FROM build_reporting WHERE build_id = $1",
+        build_id,
+    ) == 0
 
 
 async def test_attribute_report_reloads_persisted_failure_retries_and_fans_out(
@@ -1253,6 +1380,44 @@ async def test_cancel_not_running_posts_forge_status(service: CIService) -> None
     # Cancelling again is a no-op: no duplicate forge status.
     await service.cancel_build(build_id)
     assert len(reporter.finished) == 1
+
+
+async def test_direct_cancel_fans_out_and_acknowledges_durable_targets(
+    service: CIService,
+) -> None:
+    pool = service.pool
+    project_id = await seed_project(pool, "http://example/repo")
+    build_id = await insert_build(
+        pool, project_id, commit_sha="pr-sha", status="building"
+    )
+    for commit_sha, branch, pr_number in (
+        ("pr-sha", "feature", 4),
+        ("main-sha", "main", None),
+    ):
+        await builds_q.record_build_report_target(
+            pool,
+            build_id=build_id,
+            commit_sha=commit_sha,
+            branch=branch,
+            pr_number=pr_number,
+        )
+    reporter = TargetRecordingReporter()
+    service.orchestrator.reporter = reporter
+    service.orchestrator.request_build_report = service.request_build_report
+
+    await service.cancel_build(build_id)
+
+    assert {commit for commit, _ in reporter.final_results} == {
+        "pr-sha",
+        "main-sha",
+    }
+    generation = await pool.fetchval(
+        "SELECT status_generation FROM builds WHERE id = $1", build_id
+    )
+    assert await pool.fetchval(
+        "SELECT reported_generation FROM build_reporting WHERE build_id = $1",
+        build_id,
+    ) == generation
 
 
 async def test_check_rerequested_dispatch(service: CIService) -> None:

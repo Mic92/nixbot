@@ -93,8 +93,7 @@ class StatusPostError(Exception):
 
 
 class CheckPermissionError(ForgeError):
-    """The GitHub App lacks Checks: write. Latched so we stop
-    hammering the API until the operator fixes the permission."""
+    """The GitHub App installation or Checks: write grant is unavailable."""
 
 
 def _raise_for_status(response: httpx.Response, repo: str) -> None:
@@ -213,7 +212,8 @@ class GitHubCheckRunPoster:
         installation_id = await self.client.installation_for_repo(f"{owner}/{repo}")
         if installation_id is None:
             # installation_for_repo already logged the failed lookup.
-            return
+            msg = f"GitHub App installation for {owner}/{repo} is unavailable"
+            raise CheckPermissionError(msg)
         token = await self.client.installation_token(installation_id)
         headers = {
             "Authorization": f"Bearer {token}",
@@ -518,7 +518,9 @@ class ForgeStatusReporter:
     ) -> bool:
         poster = self.posters.get(event.repo.forge)
         if poster is None:
-            return False
+            # Pull-based repositories and disabled forge integrations have no
+            # remote status sink, so there is no required delivery to await.
+            return True
         try:
             await poster.post(
                 event.repo.owner,
@@ -537,12 +539,14 @@ class ForgeStatusReporter:
                 force_new=force_new,
             )
         except CheckPermissionError:
-            # Per-org and not transient: log the hint and move on, never
-            # latch off posting for the whole forge.
+            # Per-org: never latch off the whole forge. Terminal delivery must
+            # still retry because installation/permissions can recover later.
             logger.exception(
                 "failed to post commit status",
                 extra={"forge": event.repo.forge},
             )
+            if propagate:
+                raise
             return False
         except (httpx.HTTPError, ForgeError, StatusPostError):
             # Transient failures must not propagate into the

@@ -174,6 +174,12 @@ FROM builds b
 JOIN build_reporting r ON r.build_id = b.id
 WHERE b.status IN ('succeeded', 'failed', 'cancelled')
   AND r.reported_generation IS DISTINCT FROM b.status_generation
+  AND NOT EXISTS (
+      SELECT 1 FROM work_queue w
+      WHERE w.kind = 'report'
+        AND w.status IN ('pending', 'running')
+        AND (w.payload->>'build_id')::bigint = b.id
+  )
 ORDER BY b.id;
 
 -- name: AttributeForReport :one

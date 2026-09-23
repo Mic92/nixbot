@@ -192,7 +192,9 @@ async def _report_interrupted(s: CIService, resumable: ResumableBuild) -> None:
     event = await change_event_for(s, resumable)
     if build is None or event is None:
         return
-    await s.orchestrator.reporter.eval_finished(event, build, EvalReport(success=False))
+    await build_reuse.report_eval_finished(
+        s.orchestrator, event, build, EvalReport(success=False)
+    )
     await s.orchestrator.report_build_finished(
         event, build, BuildResult(BuildStatus.FAILED, build.status_generation, [])
     )

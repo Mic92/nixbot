@@ -894,7 +894,8 @@ async def test_reporter_forwards_attr_and_text() -> None:
 
 async def test_check_permission_error_does_not_disable_forge() -> None:
     """One repo's missing Checks grant must not stop posting for every
-    other repo: a 403 is logged and swallowed, never latched off."""
+    other repo: non-terminal delivery is best-effort, while terminal
+    delivery propagates so durable reconciliation cannot acknowledge it."""
     calls = 0
 
     class ForbiddenPoster:
@@ -908,7 +909,8 @@ async def test_check_permission_error_does_not_disable_forge() -> None:
         {"github": ForbiddenPoster()}, MemoryFailedStatuses(), "https://ci"
     )
     await reporter.build_started(EVENT, BUILD)
-    await reporter.build_finished(EVENT, BUILD, BuildResult("succeeded", 1, []))
+    with pytest.raises(CheckPermissionError):
+        await reporter.build_finished(EVENT, BUILD, BuildResult("succeeded", 1, []))
     # Both phases still attempt to post. The forge is never latched off.
     assert calls == 2
 
@@ -963,6 +965,28 @@ class _StubGitHub:
 
     async def installation_token(self, installation_id: int) -> str:
         return "ghs_token"
+
+
+async def test_github_missing_installation_is_retryable_delivery_failure() -> None:
+    class MissingInstallation(_StubGitHub):
+        async def installation_for_repo(self, name: str) -> int | None:
+            return None
+
+    transport = httpx.MockTransport(lambda _request: httpx.Response(500))
+    poster = GitHubCheckRunPoster(
+        cast("GitHubAppClient", MissingInstallation(transport)),
+        _MemoryCheckRunIds(),
+    )
+    with pytest.raises(CheckPermissionError, match="installation"):
+        await poster.post(
+            "acme",
+            "widget",
+            "sha",
+            "nixbot/nix-build",
+            StatusState.success,
+            "succeeded",
+            "https://ci/build/1",
+        )
 
 
 def _check_run_poster(

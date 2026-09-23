@@ -100,6 +100,36 @@ WHERE w.status = 'running' AND EXISTS (
       AND p.status = 'pending'
 );
 
+-- name: RequeueStaleReportWork :exec
+-- Durable report jobs use a live-service lease as well as startup recovery.
+-- This repairs a claimed row when the retry UPDATE itself failed. A pending
+-- replacement wins; otherwise the stale row returns to pending.
+WITH requeued AS (
+    UPDATE work_queue w SET status = 'pending', claimed_at = NULL
+    WHERE w.status = 'running'
+      AND w.kind IN ('report', 'attribute-report')
+      AND w.claimed_at < now() - make_interval(
+          secs => sqlc.arg(lease_seconds)::double precision
+      )
+      AND NOT EXISTS (
+          SELECT 1 FROM work_queue p
+          WHERE p.kind = w.kind AND p.dedup_key = w.dedup_key
+            AND p.status = 'pending'
+      )
+)
+UPDATE work_queue w SET status = 'failed', finished_at = now(),
+    error = 'stale report lease; superseded by a pending reconciliation'
+WHERE w.status = 'running'
+  AND w.kind IN ('report', 'attribute-report')
+  AND w.claimed_at < now() - make_interval(
+      secs => sqlc.arg(lease_seconds)::double precision
+  )
+  AND EXISTS (
+      SELECT 1 FROM work_queue p
+      WHERE p.kind = w.kind AND p.dedup_key = w.dedup_key
+        AND p.status = 'pending'
+  );
+
 -- name: CleanupWorkQueue :exec
 DELETE FROM work_queue
 WHERE finished_at IS NOT NULL

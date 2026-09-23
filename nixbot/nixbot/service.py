@@ -93,6 +93,7 @@ _STATIC_CREDENTIALS = StaticCredentialsProvider()
 DISCOVERY_INTERVAL = 60 * 60
 REFRESH_COOLDOWN = 60
 MAINTENANCE_INTERVAL = 60 * 60
+REPORT_WORK_LEASE_SECONDS = 15 * 60
 
 
 class PullBasedCredentialsProvider:
@@ -635,11 +636,29 @@ class CIService:
                 logger.exception("work claim failed")
                 item = None
             if item is None:
+                try:
+                    await self._reconcile_terminal_reports(queue)
+                except Exception:
+                    logger.exception("terminal report reconciliation failed")
                 with contextlib.suppress(TimeoutError):
                     await asyncio.wait_for(self._work_event.wait(), timeout=5)
                 self._work_event.clear()
                 continue
             self._spawn(self._execute_work(queue, item))
+
+    async def _reconcile_terminal_reports(self, queue: WorkQueue) -> None:
+        """Repair lost queue writes and expired durable-report leases."""
+        await queue.requeue_stale_reports(REPORT_WORK_LEASE_SECONDS)
+        enqueued = False
+        for build_id in await builds_q.unreconciled_terminal_builds(self.pool):
+            enqueued = (
+                await queue.enqueue(
+                    "report", f"report-{build_id}", {"build_id": build_id}
+                )
+                or enqueued
+            )
+        if enqueued:
+            self._work_event.set()
 
     async def drain_work(self) -> None:
         """Execute claimable work to completion (tests)."""
@@ -906,10 +925,7 @@ class CIService:
             await self.request_attribute_report(row.build_id, row.attr)
         # Terminal state is the durable reconciliation intent. Queue every
         # generation not yet acknowledged after all persisted targets posted.
-        for build_id in await builds_q.unreconciled_terminal_builds(self.pool):
-            await self.enqueue_work(
-                "report", f"report-{build_id}", {"build_id": build_id}
-            )
+        await self._reconcile_terminal_reports(WorkQueue(self.pool))
         settled_effects = await fail_interrupted_effects(self.pool, self._started_at)
         await self._report_interrupted_effects(settled_effects)
         for resumable in await find_unfinished_builds(self.pool):
@@ -999,7 +1015,7 @@ class CIService:
         if project is None:
             return
         change = event_for_build(repo_info(project), build)
-        await self.orchestrator.reporter.build_finished(
+        await self.orchestrator.report_build_finished(
             change, build, BuildResult(status, generation, [])
         )
 

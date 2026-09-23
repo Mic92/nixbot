@@ -12,6 +12,7 @@ __all__: collections.abc.Sequence[str] = (
     "enqueue_effect_items",
     "enqueue_work_item",
     "finish_work_item",
+    "requeue_stale_report_work",
     "retry_work_item",
     "settle_interrupted_work",
 )
@@ -125,6 +126,34 @@ WHERE w.status = 'running' AND EXISTS (
 )
 """
 
+REQUEUE_STALE_REPORT_WORK: typing.Final[str] = """-- name: RequeueStaleReportWork :exec
+WITH requeued AS (
+    UPDATE work_queue w SET status = 'pending', claimed_at = NULL
+    WHERE w.status = 'running'
+      AND w.kind IN ('report', 'attribute-report')
+      AND w.claimed_at < now() - make_interval(
+          secs => $1::double precision
+      )
+      AND NOT EXISTS (
+          SELECT 1 FROM work_queue p
+          WHERE p.kind = w.kind AND p.dedup_key = w.dedup_key
+            AND p.status = 'pending'
+      )
+)
+UPDATE work_queue w SET status = 'failed', finished_at = now(),
+    error = 'stale report lease; superseded by a pending reconciliation'
+WHERE w.status = 'running'
+  AND w.kind IN ('report', 'attribute-report')
+  AND w.claimed_at < now() - make_interval(
+      secs => $1::double precision
+  )
+  AND EXISTS (
+      SELECT 1 FROM work_queue p
+      WHERE p.kind = w.kind AND p.dedup_key = w.dedup_key
+        AND p.status = 'pending'
+  )
+"""
+
 CLEANUP_WORK_QUEUE: typing.Final[str] = """-- name: CleanupWorkQueue :exec
 DELETE FROM work_queue
 WHERE finished_at IS NOT NULL
@@ -161,6 +190,10 @@ async def retry_work_item(conn: ConnectionLike, *, error: str, delay: float, id_
 
 async def settle_interrupted_work(conn: ConnectionLike) -> None:
     await conn.execute(SETTLE_INTERRUPTED_WORK)
+
+
+async def requeue_stale_report_work(conn: ConnectionLike, *, lease_seconds: float) -> None:
+    await conn.execute(REQUEUE_STALE_REPORT_WORK, lease_seconds)
 
 
 async def cleanup_work_queue(conn: ConnectionLike, *, retention_days: int) -> None:

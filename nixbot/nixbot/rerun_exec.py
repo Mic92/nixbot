@@ -13,7 +13,7 @@ import logging
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
-from . import build_run, db
+from . import build_reuse, build_run, db
 from .canceller import branch_key
 from .db import BuildStatus
 from .db_gen import builds as builds_q
@@ -110,7 +110,9 @@ async def rerun_pending_attributes(
         ):
             # No re-eval on this path: re-post the eval context green,
             # the previous run may have left it red or pending.
-            await o.reporter.eval_finished(event, build, EvalReport(success=True))
+            await build_reuse.report_eval_finished(
+                o, event, build, EvalReport(success=True)
+            )
             # cache_failures=False: see _ReadOnlyFailedBuildCache.
             # effects_started keeps a recovered, already-deployed
             # build from re-deploying.

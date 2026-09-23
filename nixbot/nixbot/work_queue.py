@@ -106,6 +106,10 @@ class WorkQueue:
         would be needed instead)."""
         await q.settle_interrupted_work(self.pool)
 
+    async def requeue_stale_reports(self, lease_seconds: float) -> None:
+        """Repair durable report rows whose live-service lease expired."""
+        await q.requeue_stale_report_work(self.pool, lease_seconds=lease_seconds)
+
     async def cleanup(self, retention_days: int) -> None:
         await q.cleanup_work_queue(self.pool, retention_days=retention_days)
 
