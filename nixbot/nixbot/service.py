@@ -131,6 +131,16 @@ class RetryingReporter:
     async def eval_cancelled(self, event: ChangeEvent, build: BuildRecord) -> None:
         await self.inner.eval_cancelled(event, build)
 
+    async def terminal_eval_finished(
+        self, event: ChangeEvent, build: BuildRecord, report: EvalReport
+    ) -> None:
+        await self.inner.terminal_eval_finished(event, build, report)
+
+    async def terminal_eval_cancelled(
+        self, event: ChangeEvent, build: BuildRecord
+    ) -> None:
+        await self.inner.terminal_eval_cancelled(event, build)
+
     async def attribute_failed(  # noqa: PLR0913
         self,
         event: ChangeEvent,
@@ -760,7 +770,7 @@ class CIService:
     async def _re_report(self, build_id: int) -> None:
         """Re-post the build summary from database state."""
         build = await builds_q.get_build(self.orchestrator.pool, id_=build_id)
-        if build is None:
+        if build is None or build.status not in BuildStatus.TERMINAL:
             return
         project = await self.repo_store.by_id(build.project_id)
         if project is None:
@@ -798,6 +808,18 @@ class CIService:
                 for target in targets
             ] or [event_for_build(repo_info(project), build)]
             for event in events:
+                if build.status == BuildStatus.CANCELLED:
+                    await reporter.terminal_eval_cancelled(event, build)
+                else:
+                    await reporter.terminal_eval_finished(
+                        event,
+                        build,
+                        EvalReport(
+                            success=build.status == BuildStatus.SUCCEEDED or bool(rows),
+                            error=build.error,
+                            duration_ms=build.eval_duration_ms,
+                        ),
+                    )
                 await reporter.build_finished(
                     event,
                     build,

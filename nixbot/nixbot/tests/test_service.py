@@ -1025,6 +1025,161 @@ async def test_restart_and_final_report_use_persisted_targets_after_restart(
     }
 
 
+async def test_old_terminal_report_does_not_post_after_restart_reset(
+    service: CIService,
+) -> None:
+    pool = service.pool
+    project_id = await seed_project(pool, "http://example/repo")
+    build_id = await insert_build(
+        pool, project_id, commit_sha="failed-sha", status="failed"
+    )
+    await builds_q.record_build_report_target(
+        pool,
+        build_id=build_id,
+        commit_sha="failed-sha",
+        branch="main",
+        pr_number=None,
+    )
+    reporter = TargetRecordingReporter()
+    service.orchestrator.reporter = reporter
+    await service.enqueue_work(
+        "report", f"report-{build_id}", {"build_id": build_id}
+    )
+
+    await service.orchestrator.reset_build_for_restart(build_id, None)
+    await service.drain_work()
+
+    build = await builds_q.get_build(pool, id_=build_id)
+    assert build is not None
+    assert build.status == "pending"
+    assert build.status_generation == 1
+    assert reporter.eval_results == []
+    assert reporter.eval_cancellations == []
+    assert reporter.final_results == []
+
+
+async def test_terminal_eval_api_failure_blocks_ack_until_retry(
+    service: CIService,
+) -> None:
+    pool = service.pool
+    project_id = await seed_project(pool, "http://example/repo")
+    build_id = await insert_build(
+        pool, project_id, commit_sha="pr-sha", status="failed"
+    )
+    for commit_sha, branch, pr_number in (
+        ("pr-sha", "feature", 8),
+        ("main-sha", "main", None),
+    ):
+        await builds_q.record_build_report_target(
+            pool,
+            build_id=build_id,
+            commit_sha=commit_sha,
+            branch=branch,
+            pr_number=pr_number,
+        )
+    await pool.execute(
+        "INSERT INTO build_attributes (build_id, attr, status, finished_at) "
+        "VALUES ($1, 'broken', 'failed', now())",
+        build_id,
+    )
+
+    class FlakyTerminalEvalReporter(TargetRecordingReporter):
+        fail_terminal_eval = True
+
+        async def terminal_eval_finished(
+            self, event: Any, build: Any, report: EvalReport
+        ) -> None:
+            if self.fail_terminal_eval:
+                self.fail_terminal_eval = False
+                msg = "forge unavailable during terminal eval"
+                raise httpx.ConnectError(msg)
+            await super().terminal_eval_finished(event, build, report)
+
+    reporter = FlakyTerminalEvalReporter()
+    service.orchestrator.reporter = reporter
+    service.orchestrator.request_build_report = service.request_build_report
+
+    await service.orchestrator.request_build_report(build_id)
+    assert await pool.fetchval(
+        "SELECT reported_generation FROM build_reporting WHERE build_id = $1",
+        build_id,
+    ) is None
+    assert reporter.final_results == []
+
+    await service.drain_work()
+
+    assert set(reporter.eval_results) == {("pr-sha", True), ("main-sha", True)}
+    assert {commit for commit, _ in reporter.final_results} == {
+        "pr-sha",
+        "main-sha",
+    }
+    assert await pool.fetchval(
+        "SELECT reported_generation FROM build_reporting WHERE build_id = $1",
+        build_id,
+    ) == 0
+
+
+async def test_late_target_crash_recovers_terminal_eval_and_final(
+    service: CIService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pool = service.pool
+    project_id = await seed_project(pool, "http://example/repo")
+    build_id = await insert_build(
+        pool, project_id, commit_sha="pr-sha", status="failed"
+    )
+    await builds_q.record_build_report_target(
+        pool,
+        build_id=build_id,
+        commit_sha="pr-sha",
+        branch="feature",
+        pr_number=11,
+    )
+    await pool.execute(
+        "INSERT INTO build_attributes (build_id, attr, status, finished_at) "
+        "VALUES ($1, 'broken', 'failed', now())",
+        build_id,
+    )
+    build = await builds_q.get_build(pool, id_=build_id)
+    project = await service.repo_store.by_id(project_id)
+    assert build is not None
+    assert project is not None
+    late = ChangeEvent(repo=repo_info(project), branch="main", commit_sha="main-sha")
+    await service.orchestrator.record_report_target(late, build)
+    # Simulated crash here: the target is durable, but terminal replay never ran.
+
+    async def no_early_failures(*args: Any, **kwargs: Any) -> list[Any]:
+        return []
+
+    async def only_this_terminal(*args: Any, **kwargs: Any) -> list[int]:
+        return [build_id]
+
+    async def no_unfinished_builds(*args: Any, **kwargs: Any) -> list[Any]:
+        return []
+
+    monkeypatch.setattr(
+        builds_q, "reportable_attribute_failures", no_early_failures
+    )
+    monkeypatch.setattr(
+        builds_q, "unreconciled_terminal_builds", only_this_terminal
+    )
+    monkeypatch.setattr("nixbot.service.find_unfinished_builds", no_unfinished_builds)
+    reporter = TargetRecordingReporter()
+    service.orchestrator.reporter = reporter
+
+    await service.recover_unfinished_builds()
+    await service.drain_work()
+
+    assert set(reporter.eval_results) == {("pr-sha", True), ("main-sha", True)}
+    assert {commit for commit, _ in reporter.final_results} == {
+        "pr-sha",
+        "main-sha",
+    }
+    assert await pool.fetchval(
+        "SELECT reported_generation FROM build_reporting WHERE build_id = $1",
+        build_id,
+    ) == 0
+
+
 async def test_late_terminal_target_gets_rich_failures_and_final_status(
     service: CIService,
 ) -> None:

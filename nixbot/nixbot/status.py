@@ -574,6 +574,21 @@ class ForgeStatusReporter:
     async def eval_finished(
         self, event: ChangeEvent, build: BuildRecord, report: EvalReport
     ) -> None:
+        await self._eval_finished(event, build, report, terminal=False)
+
+    async def terminal_eval_finished(
+        self, event: ChangeEvent, build: BuildRecord, report: EvalReport
+    ) -> None:
+        await self._eval_finished(event, build, report, terminal=True)
+
+    async def _eval_finished(
+        self,
+        event: ChangeEvent,
+        build: BuildRecord,
+        report: EvalReport,
+        *,
+        terminal: bool,
+    ) -> None:
         # Failed evals show the error tail. Successful ones the warnings.
         if not report.success and report.error:
             text: str | None = _fence(report.error)
@@ -588,8 +603,9 @@ class ForgeStatusReporter:
             StatusState.success if report.success else StatusState.failure,
             eval_description(report.success, report.warnings, report.duration_ms),
             text=text,
+            propagate=terminal,
         )
-        if report.success:
+        if report.success and not terminal:
             await self._post(
                 event,
                 build,
@@ -612,6 +628,18 @@ class ForgeStatusReporter:
             f"{self.context_prefix}/nix-eval",
             StatusState.error,
             "build cancelled",
+        )
+
+    async def terminal_eval_cancelled(
+        self, event: ChangeEvent, build: BuildRecord
+    ) -> None:
+        await self._post(
+            event,
+            build,
+            f"{self.context_prefix}/nix-eval",
+            StatusState.error,
+            "build cancelled",
+            propagate=True,
         )
 
     async def effect_started(

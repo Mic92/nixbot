@@ -151,6 +151,16 @@ class RecordingReporter:
     async def eval_cancelled(self, event: ChangeEvent, build: BuildRecord) -> None:
         self.events.append(("eval-cancelled", build.id_))
 
+    async def terminal_eval_finished(
+        self, event: ChangeEvent, build: BuildRecord, report: EvalReport
+    ) -> None:
+        await self.eval_finished(event, build, report)
+
+    async def terminal_eval_cancelled(
+        self, event: ChangeEvent, build: BuildRecord
+    ) -> None:
+        await self.eval_cancelled(event, build)
+
     async def attribute_failed(  # noqa: PLR0913
         self,
         event: ChangeEvent,

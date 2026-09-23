@@ -110,6 +110,14 @@ class StatusReporter(Protocol):
 
     async def eval_cancelled(self, event: ChangeEvent, build: BuildRecord) -> None: ...
 
+    async def terminal_eval_finished(
+        self, event: ChangeEvent, build: BuildRecord, report: EvalReport
+    ) -> None: ...
+
+    async def terminal_eval_cancelled(
+        self, event: ChangeEvent, build: BuildRecord
+    ) -> None: ...
+
     async def attribute_failed(  # noqa: PLR0913
         self,
         event: ChangeEvent,
@@ -172,6 +180,16 @@ class NullStatusReporter:
 
     async def eval_cancelled(self, event: ChangeEvent, build: BuildRecord) -> None:
         pass
+
+    async def terminal_eval_finished(
+        self, event: ChangeEvent, build: BuildRecord, report: EvalReport
+    ) -> None:
+        await self.eval_finished(event, build, report)
+
+    async def terminal_eval_cancelled(
+        self, event: ChangeEvent, build: BuildRecord
+    ) -> None:
+        await self.eval_cancelled(event, build)
 
     async def attribute_failed(  # noqa: PLR0913
         self,

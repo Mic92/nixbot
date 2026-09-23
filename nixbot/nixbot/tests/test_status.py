@@ -854,6 +854,11 @@ async def test_poster_network_errors_do_not_propagate() -> None:
     reporter = ForgeStatusReporter({"github": ExplodingPoster()}, store, "https://ci")
 
     await reporter.build_started(EVENT, BUILD)  # must not raise
+    await reporter.eval_finished(EVENT, BUILD, EvalReport(success=False))
+    with pytest.raises(httpx.ConnectError):
+        await reporter.terminal_eval_finished(
+            EVENT, BUILD, EvalReport(success=False)
+        )
     with pytest.raises(httpx.ConnectError):
         await reporter.build_finished(EVENT, BUILD, BuildResult("succeeded", 1, []))
 
@@ -910,9 +915,13 @@ async def test_check_permission_error_does_not_disable_forge() -> None:
     )
     await reporter.build_started(EVENT, BUILD)
     with pytest.raises(CheckPermissionError):
+        await reporter.terminal_eval_finished(
+            EVENT, BUILD, EvalReport(success=False)
+        )
+    with pytest.raises(CheckPermissionError):
         await reporter.build_finished(EVENT, BUILD, BuildResult("succeeded", 1, []))
-    # Both phases still attempt to post. The forge is never latched off.
-    assert calls == 2
+    # Every phase still attempts to post. The forge is never latched off.
+    assert calls == 3
 
 
 def test_check_run_output_title_and_truncate() -> None:
