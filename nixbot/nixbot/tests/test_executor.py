@@ -18,6 +18,7 @@ import pytest
 import nixbot.executor as executor_mod
 from nixbot.ansi import strip_ansi
 from nixbot.build_scheduler import BuildOutcome
+from nixbot.config import BuildStoreConfig, Config
 from nixbot.executor import (
     FRAME_FLUSH_THRESHOLD,
     STRUCTURED_QUEUE_MAXSIZE,
@@ -37,6 +38,7 @@ from nixbot.executor import (
 from nixbot.logstore import LogContainerReader
 
 from .support import mk_job
+from .test_workload_identity import decode, make_issuer, push_identity
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -234,6 +236,30 @@ def test_build_nix_command(tmp_path: Path) -> None:
     idx = cmd.index("extra-experimental-features")
     assert cmd[idx - 1] == "--option"
     assert cmd[idx + 1] == "nix-command flakes"
+
+
+def test_build_nix_command_remote_store(tmp_path: Path) -> None:
+    settings = BuildSettings(
+        log_dir=tmp_path,
+        store=BuildStoreConfig(url="grpc://farm.example.com:50051?system=x86_64-linux"),
+    )
+    cmd = build_nix_command(mk_job(), settings, tmp_path / "result-foo")
+    assert cmd[cmd.index("--store") + 1].startswith("grpc://farm.example.com")
+    assert cmd[cmd.index("--eval-store") + 1] == "auto"
+    assert "--out-link" not in cmd
+    assert cmd[-1] == "/nix/store/foo.drv^*"
+
+
+def test_uploaders_conflict_with_build_store() -> None:
+    with pytest.raises(ValueError, match="cannot be combined"):
+        Config.model_validate(
+            {
+                "build_systems": ["x86_64-linux"],
+                "url": "https://ci.example.com",
+                "build_store": {"url": "grpc://farm:50051"},
+                "uploaders": [{"name": "u", "command": ["true"]}],
+            }
+        )
 
 
 def test_is_transient_error() -> None:
@@ -1008,3 +1034,46 @@ async def test_executor_reports_built_drvs(tmp_path: Path, fake_nix: Path) -> No
     await writer.close()
     assert outcome == BuildOutcome.success
     assert built == ["/nix/store/dep.drv", job.drv_path]
+
+
+async def test_store_token_is_written_and_refreshed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    seen = tmp_path / "seen"
+    script = bindir / "nix"
+    script.write_text(
+        f"""#!/bin/sh
+cat "$FARM_TOKEN" >> {seen}; echo >> {seen}
+sleep 2
+cat "$FARM_TOKEN" >> {seen}; echo >> {seen}
+"""
+    )
+    script.chmod(script.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv("PATH", f"{bindir}:{os.environ['PATH']}")
+    issuer = make_issuer(tmp_path)
+    issuer.token_ttl = 1
+    settings = BuildSettings(
+        log_dir=tmp_path,
+        store=BuildStoreConfig(
+            url="grpc://farm:50051",
+            oidc_audience="nix-farm",
+            credential_env="FARM_TOKEN",
+        ),
+        issuer=issuer,
+    )
+    executor = NixBuildExecutor(FairScheduler(1), settings)
+    writer = LogWriter(path=tmp_path / "log.zst")
+    outcome = await executor.build_attribute(
+        "b", mk_job(), writer, tmp_path, identity=push_identity(effect="build")
+    )
+    await writer.close()
+    assert outcome == BuildOutcome.success
+    first, second = seen.read_text().split()
+    assert first != second
+    claims = decode(issuer, first)
+    assert claims["effect"] == "build"
+    assert claims["aud"] == "nix-farm"
+    assert claims["sub"] == "repo:github:acme/widgets:ref:refs/heads/main"
+    assert not list(tmp_path.glob("nixbot-token-*"))

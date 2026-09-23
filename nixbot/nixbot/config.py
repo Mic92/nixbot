@@ -17,7 +17,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, GetCoreSchemaHandler, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    GetCoreSchemaHandler,
+    field_validator,
+    model_validator,
+)
 from pydantic_core import CoreSchema, core_schema
 
 
@@ -212,6 +219,15 @@ class WorkloadIdentityConfig(BaseModel):
     key_rotation_days: int = 30
 
 
+class BuildStoreConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    url: str
+    oidc_audience: str | None = None
+    # Environment variable that carries the token file path to nix.
+    credential_env: str = "NIX_GRPC_TOKEN_FILE"
+
+
 class PrApprovalConfig(BaseModel):
     """Hold pull requests from outside contributors until a maintainer
     approves them (docs/GITHUB.md). GitHub only: the decision uses the
@@ -363,6 +379,7 @@ class Config(BaseModel):
     eval_concurrency: int = 1
     # Global cap on concurrent attribute builds; None = derive from CPU count.
     build_concurrency: int | None = None
+    build_store: BuildStoreConfig | None = None
 
     gitea: GiteaConfig | None = None
     gitlab: GitlabConfig | None = None
@@ -421,6 +438,14 @@ class Config(BaseModel):
     # Also bind the TCP port when a unix socket is configured. Off by
     # default because the TCP listener would bypass the TLS proxy.
     http_listen: bool = False
+
+    @model_validator(mode="after")
+    def _uploaders_need_local_outputs(self) -> Config:
+        # Outputs stay in the remote store.
+        if self.build_store is not None and self.uploaders:
+            msg = "build_store and uploaders cannot be combined"
+            raise ValueError(msg)
+        return self
 
     @classmethod
     def load(cls, path: Path) -> Config:

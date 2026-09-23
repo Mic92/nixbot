@@ -274,6 +274,19 @@ async def build_service(config: Config) -> tuple[CIService, FastAPI]:
             context_prefix=config.status_context_prefix,
         )
 
+    identity_issuer = None
+    if config.workload_identity.enable:
+        identity_issuer = load_issuer(
+            config.state_dir,
+            config.url,
+            signing_key_file=resolve_credential_path(
+                config.workload_identity.signing_key_file
+            ),
+            token_ttl=config.workload_identity.token_ttl,
+            key_rotation_interval=timedelta(
+                days=config.workload_identity.key_rotation_days
+            ),
+        )
     executor = NixBuildExecutor(
         FairScheduler(config.build_concurrency or os.cpu_count() or 4),
         BuildSettings(
@@ -282,6 +295,8 @@ async def build_service(config: Config) -> tuple[CIService, FastAPI]:
             max_silent_time=config.build_max_silent_time,
             show_trace=config.show_trace_on_failure,
             log_size_limit=config.log_size_limit,
+            store=config.build_store,
+            issuer=identity_issuer,
         ),
     )
     orchestrator = Orchestrator(
@@ -317,19 +332,6 @@ async def build_service(config: Config) -> tuple[CIService, FastAPI]:
         orchestrator.reporter = RetryingReporter(reporter, service)
 
     # Web application.
-    identity_issuer = None
-    if config.workload_identity.enable:
-        identity_issuer = load_issuer(
-            config.state_dir,
-            config.url,
-            signing_key_file=resolve_credential_path(
-                config.workload_identity.signing_key_file
-            ),
-            token_ttl=config.workload_identity.token_ttl,
-            key_rotation_interval=timedelta(
-                days=config.workload_identity.key_rotation_days
-            ),
-        )
     app = create_app(
         pool,
         config.state_dir,

@@ -37,6 +37,7 @@ from .models import CacheStatus, NixEvalJobSuccess
 from .nix_eval import EvalError, EvalResult, EvalSettings
 from .post_build import build_props, run_post_build_steps
 from .repo_config import BranchConfig
+from .workload_identity import identity_from_event
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -713,6 +714,9 @@ class _OrchestratorExecutor:
                     attr_cancel,
                     on_start=mark_building,
                     on_built=on_built if self.o.uploaders else None,
+                    identity=identity_from_event(
+                        self.event, "build", self.build_record.id_
+                    ),
                 )
                 if outcome == BuildOutcome.success:
                     outcome = await self._after_success(job, writer)

@@ -54,6 +54,7 @@ if TYPE_CHECKING:
     from nixbot.db import BuildRecord
     from nixbot.executor import LogWriter
     from nixbot.models import NixEvalJobSuccess
+    from nixbot.workload_identity import EffectIdentity
 
 pytestmark = [
     pytest.mark.skipif(shutil.which("git") is None, reason="git not available"),
@@ -123,6 +124,7 @@ class FakeExecutor:
         cancel_event: asyncio.Event | None = None,
         on_start: Callable[[], Awaitable[bool]] | None = None,
         on_built: Callable[[str], None] | None = None,
+        identity: EffectIdentity | None = None,
     ) -> BuildOutcome:
         if on_start is not None and not await on_start():
             return BuildOutcome.cancelled

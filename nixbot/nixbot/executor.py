@@ -27,10 +27,13 @@ import contextlib
 import io
 import json
 import logging
+import os
 import re
+import tempfile
 import time
 from collections import OrderedDict, deque
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
@@ -44,9 +47,10 @@ from .logstore import LogContainerWriter
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
-    from pathlib import Path
 
+    from .config import BuildStoreConfig
     from .models import NixEvalJobSuccess
+    from .workload_identity import EffectIdentity, IdentityIssuer
 
 logger = logging.getLogger(__name__)
 
@@ -355,6 +359,8 @@ class BuildSettings:
     log_size_limit: int = 64 * 1024 * 1024
     # Extra `nix build` arguments, e.g. --option overrides.
     extra_args: list[str] = field(default_factory=list)
+    store: BuildStoreConfig | None = None
+    issuer: IdentityIssuer | None = None
 
 
 def build_installables(job: NixEvalJobSuccess) -> list[str]:
@@ -392,10 +398,21 @@ def build_nix_command(
         "nix-command flakes",
         "--accept-flake-config",
         *settings.extra_args,
-        "--out-link",
-        str(out_link),
+        *(
+            ["--store", settings.store.url, "--eval-store", "auto"]
+            if settings.store
+            else ["--out-link", str(out_link)]
+        ),
         *build_installables(job),
     ]
+
+
+def _write_token(path: Path, token: str) -> None:
+    # The store re-reads the file per call; rename keeps it whole.
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".token.")
+    with os.fdopen(fd, "w") as f:
+        f.write(token)
+    Path(tmp).replace(path)
 
 
 # nix names failures only in prose: "build of" (remote) / "builder for"
@@ -799,6 +816,7 @@ class NixBuildExecutor:
         cancel_event: asyncio.Event | None = None,
         on_start: Callable[[], Awaitable[bool]] | None = None,
         on_built: Callable[[str], None] | None = None,
+        identity: EffectIdentity | None = None,
     ) -> BuildOutcome:
         """Run `nix build` for one attribute, with one automatic retry
         on transient errors (suppressed when cancellation is requested).
@@ -843,7 +861,7 @@ class NixBuildExecutor:
             if on_start is not None and not await on_start():
                 return BuildOutcome.cancelled
             outcome, transient = await self._run_once(
-                job, log_writer, cwd, cancel_event, on_built
+                job, log_writer, cwd, cancel_event, on_built, identity
             )
             if outcome == BuildOutcome.failure and transient:
                 if cancel_event.is_set():
@@ -855,27 +873,74 @@ class NixBuildExecutor:
                     b"\n\nnixbot: transient error detected, retrying once\n\n"
                 )
                 outcome, _ = await self._run_once(
-                    job, log_writer, cwd, cancel_event, on_built
+                    job, log_writer, cwd, cancel_event, on_built, identity
                 )
             return outcome
         finally:
             self.queue.release()
 
-    async def _run_once(
+    @contextlib.asynccontextmanager
+    async def _store_env(
+        self, identity: EffectIdentity | None
+    ) -> AsyncIterator[dict[str, str] | None]:
+        """Environment pointing nix at a token file that is kept fresh."""
+        store, issuer = self.settings.store, self.settings.issuer
+        if store is None or store.oidc_audience is None:
+            yield None
+            return
+        if issuer is None or identity is None:
+            msg = "build_store.oidc_audience needs workload identity"
+            raise RuntimeError(msg)
+        audience = store.oidc_audience
+
+        async def refresh(path: Path) -> None:
+            while True:
+                await asyncio.sleep(max(issuer.token_ttl * 2 / 3, 1))
+                _write_token(path, issuer.mint(identity, audience).token)
+
+        with tempfile.TemporaryDirectory(prefix="nixbot-token-") as token_dir:
+            path = Path(token_dir) / "token"
+            _write_token(path, issuer.mint(identity, audience).token)
+            task = asyncio.create_task(refresh(path))
+            try:
+                yield {**os.environ, store.credential_env: str(path)}
+            finally:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+
+    async def _run_once(  # noqa: PLR0913
         self,
         job: NixEvalJobSuccess,
         log_writer: LogWriter,
         cwd: Path,
         cancel_event: asyncio.Event,
         on_built: Callable[[str], None] | None = None,
+        identity: EffectIdentity | None = None,
     ) -> tuple[BuildOutcome, bool]:
         if cancel_event.is_set():
             return BuildOutcome.cancelled, False
         out_link = cwd / f"result-{safe_attr_filename(job.attr)}"
         cmd = build_nix_command(job, self.settings, out_link)
+        async with self._store_env(identity) as env:
+            return await self._run_nix(
+                cmd, env, job, log_writer, cwd, cancel_event, on_built
+            )
+
+    async def _run_nix(  # noqa: PLR0913
+        self,
+        cmd: list[str],
+        env: dict[str, str] | None,
+        job: NixEvalJobSuccess,
+        log_writer: LogWriter,
+        cwd: Path,
+        cancel_event: asyncio.Event,
+        on_built: Callable[[str], None] | None,
+    ) -> tuple[BuildOutcome, bool]:
         group = await ProcessGroup.start(
             cmd,
             cwd=cwd,
+            env=env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             limit=STREAM_LIMIT,

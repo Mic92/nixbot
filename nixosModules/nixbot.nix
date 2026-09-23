@@ -44,6 +44,15 @@ let
       eval_max_memory_size = cfg.evalMaxMemorySize;
       eval_worker_count = cfg.evalWorkerCount;
       build_concurrency = cfg.buildConcurrency;
+      build_store =
+        if cfg.buildStore.url == null then
+          null
+        else
+          {
+            url = cfg.buildStore.url;
+            oidc_audience = cfg.buildStore.oidcAudience;
+            credential_env = cfg.buildStore.credentialEnv;
+          };
       gitea =
         if !cfg.gitea.enable then
           null
@@ -280,6 +289,38 @@ in
       type = lib.types.nullOr lib.types.int;
       default = null;
       description = "Global cap on concurrent attribute builds. Defaults to the CPU count.";
+    };
+
+    buildStore = {
+      url = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "grpc://nix-store.example.com:50051?system=x86_64-linux";
+        description = ''
+          Build in this remote store (`nix build --store`) instead of the
+          local one. Outputs stay there, so this cannot be combined with
+          {option}`uploaders`.
+        '';
+      };
+
+      oidcAudience = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "nix-farm";
+        description = ''
+          Authenticate to the store with a nixbot ID token for this
+          audience, minted per build and refreshed while it runs. The
+          claims are those of workload identity with `effect = "build"`,
+          see docs/WORKLOAD_IDENTITY.md. Needs
+          {option}`workloadIdentity.enable`.
+        '';
+      };
+
+      credentialEnv = lib.mkOption {
+        type = lib.types.str;
+        default = "NIX_GRPC_TOKEN_FILE";
+        description = "Environment variable that carries the token file path to nix.";
+      };
     };
 
     evalMaxMemorySize = lib.mkOption {

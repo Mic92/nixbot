@@ -79,6 +79,7 @@ if TYPE_CHECKING:
     from .repo_config import BranchConfig
     from .running_effect import RunningEffect
     from .upload import Uploader
+    from .workload_identity import EffectIdentity
 
     GcrootRegistrar = Callable[[Path, str, str, str], Awaitable[None]]
     OutputWriter = Callable[[Path, str, str, str, str, str, str], Path]
@@ -115,6 +116,7 @@ class AttributeExecutor(Protocol):
         cancel_event: asyncio.Event | None = None,
         on_start: Callable[[], Awaitable[bool]] | None = None,
         on_built: Callable[[str], None] | None = None,
+        identity: EffectIdentity | None = None,
     ) -> BuildOutcome: ...
 
 

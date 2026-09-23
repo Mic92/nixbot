@@ -114,3 +114,16 @@ generates the key in its state directory and rotates it every `keyRotationDays`
 verifying. An operator-provided key is used as-is and never rotated — rotate it
 by replacing the file and restarting nixbot, which invalidates tokens signed
 with the old key.
+
+## Building in a remote store
+
+`services.nixbot.buildStore.url` runs
+`nix build --store <url> --eval-store auto` instead of building locally, for
+example against a nix-grpc-store farm. Outputs stay in that store, so it cannot
+be combined with `uploaders`.
+
+With `buildStore.oidcAudience` set, nixbot writes an ID token for that audience
+to a private file per build, refreshes it every two thirds of `tokenTtl`, and
+points nix at it through the environment variable `buildStore.credentialEnv`
+(default `NIX_GRPC_TOKEN_FILE`). The claims are the ones above with
+`effect = "build"`, so the store can match `sub`, `ref` or `event`.
