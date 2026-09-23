@@ -138,14 +138,43 @@ SET attribute_prefix = EXCLUDED.attribute_prefix;
 SELECT attribute_prefix FROM build_reporting WHERE build_id = $1;
 
 -- name: RecordBuildReportTarget :exec
+WITH reporting AS (
+    INSERT INTO build_reporting (build_id) VALUES ($1)
+    ON CONFLICT (build_id) DO UPDATE SET reported_generation = NULL
+    RETURNING build_id
+)
 INSERT INTO build_report_targets (build_id, commit_sha, branch, pr_number)
-VALUES ($1, $2, $3, $4)
+SELECT build_id, $2, $3, $4 FROM reporting
 ON CONFLICT (build_id, commit_sha) DO UPDATE
 SET branch = EXCLUDED.branch, pr_number = EXCLUDED.pr_number;
 
 -- name: BuildReportTargets :many
 SELECT commit_sha, branch, pr_number FROM build_report_targets
 WHERE build_id = $1 ORDER BY commit_sha;
+
+-- name: MarkBuildReportDelivered :exec
+UPDATE build_reporting r
+SET reported_generation = sqlc.arg(generation)::bigint
+FROM builds b
+WHERE r.build_id = sqlc.arg(build_id)::bigint
+  AND b.id = r.build_id
+  AND b.status_generation = sqlc.arg(generation)::bigint
+  AND b.status IN ('succeeded', 'failed', 'cancelled')
+  -- A target attached while forge calls were in flight must keep this
+  -- generation unreconciled; the caller's snapshot did not include it.
+  AND NOT EXISTS (
+      SELECT 1 FROM build_report_targets t
+      WHERE t.build_id = b.id
+        AND NOT (t.commit_sha = ANY(sqlc.arg(commit_shas)::text[]))
+  );
+
+-- name: UnreconciledTerminalBuilds :many
+SELECT b.id
+FROM builds b
+JOIN build_reporting r ON r.build_id = b.id
+WHERE b.status IN ('succeeded', 'failed', 'cancelled')
+  AND r.reported_generation IS DISTINCT FROM b.status_generation
+ORDER BY b.id;
 
 -- name: AttributeForReport :one
 SELECT a.attr, a.status, a.error, a.system, a.drv_path, a.finished_at,

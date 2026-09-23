@@ -118,6 +118,8 @@ def work_retry_delay(attempt: int, retry_after: float | None, base: float) -> fl
     """Exponential backoff starting at `base` seconds, but never shorter
     than the forge's Retry-After: GitHub escalates rate limits when it
     is ignored."""
-    backoff = min(base * 2 ** (attempt - 1), 900)
+    # Durable report jobs can retry indefinitely. Bound the exponent as well
+    # as the resulting delay so a very long outage cannot overflow float.
+    backoff = min(base * 2 ** min(attempt - 1, 30), 900)
     hinted = retry_after or 0.0
     return min(max(backoff, hinted), MAX_WORK_DELAY_SECONDS)

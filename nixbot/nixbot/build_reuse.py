@@ -15,20 +15,21 @@ import logging
 from typing import TYPE_CHECKING
 
 from .after_build import after_build
+from .build_scheduler import AttributeResult, AttributeStatus
 from .canceller import RegisterOutcome
 from .db import BuildStatus
 from .db_gen import builds as builds_q
 from .db_gen import maintenance as q
 from .effects_run import post_effects_summary
-from .events import BuildResult, EvalReport
+from .events import BuildResult, ChangeEvent, EvalReport
 from .gcroots import GcrootRegistrationError
 from .gitrepo import GitError, run_git
+from .models import NixEvalJobError
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     from .db import BuildRecord
-    from .events import ChangeEvent
     from .gitrepo import FetchCredentials
     from .orchestrator import Orchestrator
 
@@ -70,6 +71,15 @@ async def replay_terminal_status(
     nix-eval/nix-build checks stay pending forever. A succeeded
     build with zero attributes is a genuine empty-but-green eval,
     not an eval failure."""
+    if build.status != BuildStatus.CANCELLED:
+        for row in await builds_q.attribute_statuses(o.pool, build_id=build.id_):
+            if row.status in (
+                "failed",
+                "failed_eval",
+                "dependency_failed",
+                "cached_failure",
+            ):
+                await o.request_attribute_report(build.id_, row.attr)
     if build.status == BuildStatus.CANCELLED:
         await o.reporter.eval_cancelled(event, build)
     else:
@@ -77,9 +87,62 @@ async def replay_terminal_status(
             await builds_q.attribute_statuses(o.pool, build_id=build.id_)
         )
         await o.reporter.eval_finished(event, build, EvalReport(success=eval_success))
-    await o.reporter.build_finished(
-        event, build, BuildResult(build.status, build.status_generation, [])
+    rows = await builds_q.attribute_report_rows(o.pool, build_id=build.id_)
+    prefix = await builds_q.build_attribute_prefix(o.pool, build_id=build.id_)
+    result = BuildResult(
+        build.status,
+        build.status_generation,
+        [
+            AttributeResult(
+                attr=row.attr,
+                status=AttributeStatus(row.status),
+                job=NixEvalJobError(
+                    error=row.error or "",
+                    attr=row.attr,
+                    attr_path=row.attr.split("."),
+                ),
+                error=row.error,
+                drv_path=row.drv_path,
+                system=row.system,
+            )
+            for row in rows
+        ],
+        attr_statuses={row.attr: row.status for row in rows},
+        attr_prefix=prefix or "checks",
     )
+    await report_build_finished(o, event, build, result)
+
+
+async def report_events(
+    o: Orchestrator, event: ChangeEvent, build: BuildRecord
+) -> list[ChangeEvent]:
+    """Reconstruct every accepted report context from durable targets."""
+    targets = await builds_q.build_report_targets(o.pool, build_id=build.id_)
+    return [
+        ChangeEvent(
+            repo=event.repo,
+            branch=target.branch,
+            commit_sha=target.commit_sha,
+            pr_number=target.pr_number,
+        )
+        for target in targets
+    ] or [event]
+
+
+async def report_build_finished(
+    o: Orchestrator,
+    event: ChangeEvent,
+    build: BuildRecord,
+    result: BuildResult,
+) -> None:
+    """Report a terminal generation through durable service reconciliation.
+
+    Standalone orchestrators retain a direct persisted-target fallback.
+    """
+    if await o.request_build_report(build.id_):
+        return
+    for target_event in await report_events(o, event, build):
+        await o.reporter.build_finished(target_event, build, result)
 
 
 async def replay_effect_statuses(
@@ -106,8 +169,11 @@ async def finish_linked(
     *,
     eval_success: bool | None = None,
 ) -> None:
-    """Final status fan-out for second contexts attached to this
-    build. eval_success is None when no eval result exists."""
+    """Finish the eval phase for live linked contexts.
+
+    Build status fan-out uses persisted targets in report_build_finished,
+    including when this process has no linked_events state.
+    """
     for linked in o.linked_events.pop(build.id_, []):
         if eval_success is not None:
             await o.reporter.eval_finished(
@@ -117,7 +183,6 @@ async def finish_linked(
             # Cancel during eval: the linked contexts' nix-eval
             # status would otherwise stay pending forever.
             await o.reporter.eval_cancelled(linked, build)
-        await o.reporter.build_finished(linked, build, result)
 
 
 async def is_ancestor(

@@ -27,7 +27,7 @@ from nixbot.web.control_routes import (
     create_control_router,
 )
 from nixbot.web.token_routes import create_token_router
-from nixbot.work_queue import MAX_WORK_ATTEMPTS, work_retry_delay
+from nixbot.work_queue import MAX_WORK_ATTEMPTS, WorkQueue, work_retry_delay
 
 from .support import (
     WebHarness,
@@ -868,7 +868,7 @@ def test_work_retry_delay_honors_retry_after() -> None:
 
 async def test_report_retry(postgres_dsn: str, tmp_path: Path) -> None:
     """A failed terminal status post is retried from database state and
-    gives up after MAX_WORK_ATTEMPTS instead of looping."""
+    remains durable beyond the ordinary work-attempt limit."""
 
     config = make_config(postgres_dsn, tmp_path / "state")
     service, _app = await build_service(config)
@@ -913,17 +913,26 @@ async def test_report_retry(postgres_dsn: str, tmp_path: Path) -> None:
         # The retry re-derives attribute state from the database.
         assert posts[-1]["attrs"] == {"x86_64-linux.a": "succeeded"}
 
-        # Permanent failure: attempts are bounded.
+        # A long outage does not strand terminal reconciliation after the
+        # ordinary work-attempt limit.
         posts.clear()
         fail = True
         await wrapper.build_finished(event, build, BuildResult("succeeded", 0, []))
-        await service.drain_work()
-        assert len(posts) == MAX_WORK_ATTEMPTS + 1  # inline + retries
+        queue = WorkQueue(pool)
+        for _ in range(MAX_WORK_ATTEMPTS + 2):
+            item = await queue.claim_next()
+            assert item is not None
+            await service._execute_work(queue, item)  # noqa: SLF001
+        assert len(posts) == MAX_WORK_ATTEMPTS + 3  # inline + durable retries
         row = await pool.fetchrow(
             "SELECT count(*), max(attempts) AS attempts FROM work_queue "
-            "WHERE kind = 'report' AND status = 'failed'"
+            "WHERE kind = 'report' AND status = 'pending'"
         )
-        assert (row["count"], row["attempts"]) == (1, MAX_WORK_ATTEMPTS - 1)
+        assert (row["count"], row["attempts"]) == (1, MAX_WORK_ATTEMPTS + 2)
+
+        fail = False
+        await service.drain_work()
+        assert posts[-1]["attrs"] == {"x86_64-linux.a": "succeeded"}
     finally:
         await pool.close()
 

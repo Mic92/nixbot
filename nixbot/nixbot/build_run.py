@@ -239,7 +239,7 @@ async def _settle_aborted(
         await o.reporter.eval_finished(
             event, build, EvalReport(success=False, error=error)
         )
-    await o.reporter.build_finished(
+    await o.report_build_finished(
         event, build, BuildResult(status, build.status_generation, [])
     )
     await o.finish_linked(
@@ -578,7 +578,7 @@ async def build_attributes(  # noqa: PLR0913
         await db.set_build_status(
             o.pool, build.id_, BuildStatus.FAILED, error=post_process_error
         )
-    await o.reporter.build_finished(
+    await o.report_build_finished(
         event,
         build,
         BuildResult(

@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from . import db
+from . import build_reuse, db
 from .db import BuildStatus
 from .db_gen import builds as builds_q
 from .db_gen import maintenance as q
@@ -94,9 +94,11 @@ async def rerun(
         if build is None:
             return
         attr_prefix = await builds_q.build_attribute_prefix(o.pool, build_id=build_id)
-        await o.reporter.build_restarted(
-            event_for_build(info, build), build, attr, attr_prefix or "checks"
-        )
+        event = event_for_build(info, build)
+        for target_event in await build_reuse.report_events(o, event, build):
+            await o.reporter.build_restarted(
+                target_event, build, attr, attr_prefix or "checks"
+            )
     credentials = await s.credentials_provider(info.forge).get(info.clone_url)
     results = await find_unfinished_builds(s.pool, build_id=build_id)
     resumable = results[0] if results else None
@@ -191,6 +193,6 @@ async def _report_interrupted(s: CIService, resumable: ResumableBuild) -> None:
     if build is None or event is None:
         return
     await s.orchestrator.reporter.eval_finished(event, build, EvalReport(success=False))
-    await s.orchestrator.reporter.build_finished(
+    await s.orchestrator.report_build_finished(
         event, build, BuildResult(BuildStatus.FAILED, build.status_generation, [])
     )

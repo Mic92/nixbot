@@ -249,6 +249,55 @@ async def test_failed_status_store_component(pool: asyncpg.Pool) -> None:
     assert await store.delivered_attempt("budget-rev", accepted_context) == "attempt-1"
 
 
+async def test_terminal_report_ack_rejects_late_target_snapshot(
+    pool: asyncpg.Pool,
+) -> None:
+    project_id = await insert_project(pool, forge_repo_id="report-ack")
+    build_id = await insert_build(
+        pool, project_id, commit_sha="pr-sha", status="failed"
+    )
+    await builds_q.record_build_report_target(
+        pool,
+        build_id=build_id,
+        commit_sha="pr-sha",
+        branch="feature",
+        pr_number=1,
+    )
+    await builds_q.mark_build_report_delivered(
+        pool, build_id=build_id, generation=0, commit_shas=["pr-sha"]
+    )
+    assert await pool.fetchval(
+        "SELECT reported_generation FROM build_reporting WHERE build_id = $1",
+        build_id,
+    ) == 0
+
+    # Attaching main invalidates the ack. An older in-flight API snapshot may
+    # finish afterward, but cannot acknowledge a target it never posted.
+    await builds_q.record_build_report_target(
+        pool,
+        build_id=build_id,
+        commit_sha="main-sha",
+        branch="main",
+        pr_number=None,
+    )
+    await builds_q.mark_build_report_delivered(
+        pool, build_id=build_id, generation=0, commit_shas=["pr-sha"]
+    )
+    assert await pool.fetchval(
+        "SELECT reported_generation FROM build_reporting WHERE build_id = $1",
+        build_id,
+    ) is None
+    assert build_id in await builds_q.unreconciled_terminal_builds(pool)
+
+    await builds_q.mark_build_report_delivered(
+        pool,
+        build_id=build_id,
+        generation=0,
+        commit_shas=["pr-sha", "main-sha"],
+    )
+    assert build_id not in await builds_q.unreconciled_terminal_builds(pool)
+
+
 async def test_failed_build_cache_component(pool: asyncpg.Pool) -> None:
     project_id = await insert_project(pool, "cache", forge_repo_id="fb-0")
     cache = PostgresFailedBuildCache(pool, project_id)

@@ -91,6 +91,10 @@ async def _ignore_attribute_report(build_id: int, attr: str) -> None:
     pass
 
 
+async def _ignore_build_report(_build_id: int) -> bool:
+    return False
+
+
 def default_effects() -> EffectsBackend:
     return NixEffects()
 
@@ -134,6 +138,9 @@ class Orchestrator:
     request_attribute_report: Callable[[int, str], Awaitable[None]] = (
         _ignore_attribute_report
     )
+    # The service installs durable final reconciliation. False keeps
+    # standalone orchestrator users on the direct reporter fallback.
+    request_build_report: Callable[[int], Awaitable[bool]] = _ignore_build_report
     uploaders: list[Uploader] = field(default_factory=list)
     # Project id -> cache. Scoped so one project's failures cannot
     # affect another's builds.
@@ -596,6 +603,12 @@ class Orchestrator:
         """Final status fan-out for second contexts attached to this
         build. eval_success is None when no eval result exists."""
         await build_reuse.finish_linked(self, build, result, eval_success=eval_success)
+
+    async def report_build_finished(
+        self, event: ChangeEvent, build: BuildRecord, result: BuildResult
+    ) -> None:
+        """Fan terminal status out through durable report targets."""
+        await build_reuse.report_build_finished(self, event, build, result)
 
     async def post_process_skipped(
         self, event: ChangeEvent, skipped: list[tuple[str, str]]

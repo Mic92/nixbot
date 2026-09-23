@@ -316,6 +316,7 @@ async def build_service(config: Config) -> tuple[CIService, FastAPI]:
     if reporter is not None:
         orchestrator.reporter = RetryingReporter(reporter, service)
         orchestrator.request_attribute_report = service.request_attribute_report
+        orchestrator.request_build_report = service.request_build_report
 
     # Web application.
     identity_issuer = None

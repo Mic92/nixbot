@@ -45,6 +45,7 @@ __all__: collections.abc.Sequence[str] = (
     "lock_build_identity",
     "lock_build_row",
     "mark_attribute_building",
+    "mark_build_report_delivered",
     "mark_effects_started",
     "record_attributes",
     "record_build_report_target",
@@ -55,6 +56,7 @@ __all__: collections.abc.Sequence[str] = (
     "set_build_status",
     "set_eval_warnings",
     "settle_unfinished_attributes",
+    "unreconciled_terminal_builds",
 )
 
 import dataclasses
@@ -287,8 +289,13 @@ SELECT attribute_prefix FROM build_reporting WHERE build_id = $1
 """
 
 RECORD_BUILD_REPORT_TARGET: typing.Final[str] = """-- name: RecordBuildReportTarget :exec
+WITH reporting AS (
+    INSERT INTO build_reporting (build_id) VALUES ($1)
+    ON CONFLICT (build_id) DO UPDATE SET reported_generation = NULL
+    RETURNING build_id
+)
 INSERT INTO build_report_targets (build_id, commit_sha, branch, pr_number)
-VALUES ($1, $2, $3, $4)
+SELECT build_id, $2, $3, $4 FROM reporting
 ON CONFLICT (build_id, commit_sha) DO UPDATE
 SET branch = EXCLUDED.branch, pr_number = EXCLUDED.pr_number
 """
@@ -296,6 +303,32 @@ SET branch = EXCLUDED.branch, pr_number = EXCLUDED.pr_number
 BUILD_REPORT_TARGETS: typing.Final[str] = """-- name: BuildReportTargets :many
 SELECT commit_sha, branch, pr_number FROM build_report_targets
 WHERE build_id = $1 ORDER BY commit_sha
+"""
+
+MARK_BUILD_REPORT_DELIVERED: typing.Final[str] = """-- name: MarkBuildReportDelivered :exec
+UPDATE build_reporting r
+SET reported_generation = $1::bigint
+FROM builds b
+WHERE r.build_id = $2::bigint
+  AND b.id = r.build_id
+  AND b.status_generation = $1::bigint
+  AND b.status IN ('succeeded', 'failed', 'cancelled')
+  -- A target attached while forge calls were in flight must keep this
+  -- generation unreconciled; the caller's snapshot did not include it.
+  AND NOT EXISTS (
+      SELECT 1 FROM build_report_targets t
+      WHERE t.build_id = b.id
+        AND NOT (t.commit_sha = ANY($3::text[]))
+  )
+"""
+
+UNRECONCILED_TERMINAL_BUILDS: typing.Final[str] = """-- name: UnreconciledTerminalBuilds :many
+SELECT b.id
+FROM builds b
+JOIN build_reporting r ON r.build_id = b.id
+WHERE b.status IN ('succeeded', 'failed', 'cancelled')
+  AND r.reported_generation IS DISTINCT FROM b.status_generation
+ORDER BY b.id
 """
 
 ATTRIBUTE_FOR_REPORT: typing.Final[str] = """-- name: AttributeForReport :one
@@ -819,6 +852,14 @@ def build_report_targets(conn: ConnectionLike, *, build_id: int) -> QueryResults
         return BuildReportTargetsRow(commit_sha=row[0], branch=row[1], pr_number=row[2])
 
     return QueryResults(conn, BUILD_REPORT_TARGETS, _decode_hook, build_id)
+
+
+async def mark_build_report_delivered(conn: ConnectionLike, *, generation: int, build_id: int, commit_shas: collections.abc.Sequence[str]) -> None:
+    await conn.execute(MARK_BUILD_REPORT_DELIVERED, generation, build_id, commit_shas)
+
+
+def unreconciled_terminal_builds(conn: ConnectionLike) -> QueryResults[int]:
+    return QueryResults(conn, UNRECONCILED_TERMINAL_BUILDS, operator.itemgetter(0))
 
 
 async def attribute_for_report(conn: ConnectionLike, *, build_id: int, attr: str) -> AttributeForReportRow | None:

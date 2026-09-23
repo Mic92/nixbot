@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 import pytest
 
-from nixbot import restart_dispatch
+from nixbot import build_reuse, restart_dispatch
 from nixbot.bootstrap import _startup, build_service, run_service
 from nixbot.config import (
     PrApprovalConfig,
@@ -25,8 +25,9 @@ from nixbot.config import (
 )
 from nixbot.db_gen import approvals as approvals_q
 from nixbot.db_gen import builds as builds_q
-from nixbot.events import BuildResult, NullStatusReporter
+from nixbot.events import BuildResult, ChangeEvent, NullStatusReporter
 from nixbot.forge import DiscoveredRepo
+from nixbot.repos import repo_info
 from nixbot.schedule_runner import scheduled_worktree_id
 from nixbot.schedules import DueEffect, ScheduleWhen
 from nixbot.status import CheckRunStore
@@ -911,6 +912,140 @@ class AttributeRecordingReporter(NullStatusReporter):
         self.finished.extend((event.commit_sha, item.error) for item in result.results)
 
 
+class TargetRecordingReporter(AttributeRecordingReporter):
+    def __init__(self) -> None:
+        super().__init__()
+        self.restarted: list[tuple[str, str]] = []
+        self.final_results: list[tuple[str, BuildResult]] = []
+
+    async def build_restarted(
+        self,
+        event: Any,
+        build: Any,
+        attr: str | None,
+        attr_prefix: str = "checks",
+    ) -> None:
+        self.restarted.append((event.commit_sha, attr_prefix))
+
+    async def build_finished(self, event: Any, build: Any, result: BuildResult) -> None:
+        self.final_results.append((event.commit_sha, result))
+
+
+async def test_restart_and_final_report_use_persisted_targets_after_restart(
+    service: CIService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pool = service.pool
+    project_id = await seed_project(pool, "http://example/repo")
+    build_id = await insert_build(
+        pool, project_id, commit_sha="pr-sha", status="failed"
+    )
+    for commit_sha, branch, pr_number in (
+        ("pr-sha", "feature", 7),
+        ("main-sha", "main", None),
+    ):
+        await builds_q.record_build_report_target(
+            pool,
+            build_id=build_id,
+            commit_sha=commit_sha,
+            branch=branch,
+            pr_number=pr_number,
+        )
+    await builds_q.set_build_attribute_prefix(
+        pool, build_id=build_id, attribute_prefix="hydraJobs"
+    )
+    reporter = TargetRecordingReporter()
+    service.orchestrator.reporter = reporter
+    service.orchestrator.request_build_report = service.request_build_report
+
+    async def no_resumable_builds(*args: Any, **kwargs: Any) -> list[Any]:
+        return []
+
+    monkeypatch.setattr(
+        restart_dispatch, "find_unfinished_builds", no_resumable_builds
+    )
+    await restart_dispatch.rerun(service, build_id, restart=True)
+
+    assert set(reporter.restarted) == {
+        ("pr-sha", "hydraJobs"),
+        ("main-sha", "hydraJobs"),
+    }
+
+    # No linked_events survive a process restart; durable targets still receive
+    # the authoritative completion.
+    service.orchestrator.linked_events.clear()
+    await pool.execute(
+        "UPDATE builds SET status = 'succeeded', finished_at = now() WHERE id = $1",
+        build_id,
+    )
+    build = await builds_q.get_build(pool, id_=build_id)
+    project = await service.repo_store.by_id(project_id)
+    assert build is not None
+    assert project is not None
+    await service.orchestrator.report_build_finished(
+        ChangeEvent(
+            repo=repo_info(project), branch="feature", commit_sha="pr-sha", pr_number=7
+        ),
+        build,
+        BuildResult("succeeded", build.status_generation, []),
+    )
+    assert {commit for commit, _ in reporter.final_results} == {
+        "pr-sha",
+        "main-sha",
+    }
+
+
+async def test_late_terminal_target_gets_rich_failures_and_final_status(
+    service: CIService,
+) -> None:
+    pool = service.pool
+    project_id = await seed_project(pool, "http://example/repo")
+    build_id = await insert_build(
+        pool, project_id, commit_sha="pr-sha", status="failed"
+    )
+    await builds_q.record_build_report_target(
+        pool,
+        build_id=build_id,
+        commit_sha="pr-sha",
+        branch="feature",
+        pr_number=9,
+    )
+    await builds_q.set_build_attribute_prefix(
+        pool, build_id=build_id, attribute_prefix="hydraJobs"
+    )
+    await pool.execute(
+        "INSERT INTO build_attributes "
+        "(build_id, attr, system, drv_path, status, error, finished_at) "
+        "VALUES ($1, 'x86_64-linux.broken', 'x86_64-linux', "
+        "'/nix/store/broken.drv', 'failed', $2, now())",
+        build_id,
+        "error: persisted rich diagnostic",
+    )
+    build = await builds_q.get_build(pool, id_=build_id)
+    project = await service.repo_store.by_id(project_id)
+    assert build is not None
+    assert project is not None
+    event = ChangeEvent(repo=repo_info(project), branch="main", commit_sha="main-sha")
+    reporter = TargetRecordingReporter()
+    service.orchestrator.reporter = reporter
+    service.orchestrator.request_attribute_report = service.request_attribute_report
+    service.orchestrator.request_build_report = service.request_build_report
+
+    await service.orchestrator.record_report_target(event, build)
+    await build_reuse.replay_terminal_status(service.orchestrator, event, build)
+    await service.drain_work()
+
+    main_results = [
+        result for commit, result in reporter.final_results if commit == "main-sha"
+    ]
+    assert len(main_results) == 1
+    assert main_results[0].attr_prefix == "hydraJobs"
+    assert main_results[0].results[0].error == "error: persisted rich diagnostic"
+    main_failures = [failure for failure in reporter.failures if failure[0] == "main-sha"]
+    assert len(main_failures) == 1
+    assert main_failures[0][2] == "error: persisted rich diagnostic"
+    assert main_failures[0][5] == "hydraJobs"
+
+
 async def test_attribute_report_hint_is_best_effort_but_preserves_cancellation(
     service: CIService,
 ) -> None:
@@ -979,6 +1114,18 @@ async def test_attribute_report_reloads_persisted_failure_retries_and_fans_out(
     monkeypatch.setattr(
         builds_q, "reportable_attribute_failures", reportable_for_this_build
     )
+    unreconciled_terminal_builds = builds_q.unreconciled_terminal_builds
+
+    async def terminal_for_this_build(*args: Any, **kwargs: Any) -> list[int]:
+        return [
+            candidate
+            for candidate in await unreconciled_terminal_builds(*args, **kwargs)
+            if candidate == build_id
+        ]
+
+    monkeypatch.setattr(
+        builds_q, "unreconciled_terminal_builds", terminal_for_this_build
+    )
 
     await service.recover_unfinished_builds()
     await service.drain_work()
@@ -1015,6 +1162,74 @@ async def test_attribute_report_reloads_persisted_failure_retries_and_fans_out(
     await service.request_attribute_report(build_id, "x86_64-linux.broken")
     await service.drain_work()
     assert reporter.calls == 3
+
+
+async def test_terminal_recovery_reconciles_failure_beyond_early_slice(
+    service: CIService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pool = service.pool
+    project_id = await seed_project(pool, "http://example/repo")
+    build_id = await insert_build(
+        pool, project_id, commit_sha="terminal-sha", status="failed"
+    )
+    await builds_q.record_build_report_target(
+        pool,
+        build_id=build_id,
+        commit_sha="terminal-sha",
+        branch="main",
+        pr_number=None,
+    )
+    await builds_q.set_build_attribute_prefix(
+        pool, build_id=build_id, attribute_prefix="hydraJobs"
+    )
+    attrs = [
+        f"x86_64-linux.failure-{index:03d}"
+        for index in range(service.config.failed_build_report_limit + 1)
+    ]
+    await pool.executemany(
+        "INSERT INTO build_attributes "
+        "(build_id, attr, status, error, finished_at) "
+        "VALUES ($1, $2, 'failed', $3, now())",
+        [(build_id, attr, f"rich diagnostic for {attr}") for attr in attrs],
+    )
+    early = await builds_q.reportable_attribute_failures(
+        pool, report_limit=service.config.failed_build_report_limit
+    )
+    assert attrs[-1] not in {
+        row.attr for row in early if row.build_id == build_id
+    }
+
+    async def no_early_failures(*args: Any, **kwargs: Any) -> list[Any]:
+        return []
+
+    async def only_terminal_build(*args: Any, **kwargs: Any) -> list[int]:
+        return [build_id]
+
+    monkeypatch.setattr(
+        builds_q, "reportable_attribute_failures", no_early_failures
+    )
+    monkeypatch.setattr(
+        builds_q, "unreconciled_terminal_builds", only_terminal_build
+    )
+    reporter = TargetRecordingReporter()
+    service.orchestrator.reporter = reporter
+
+    await service.recover_unfinished_builds()
+    await service.drain_work()
+
+    assert len(reporter.final_results) == 1
+    result = reporter.final_results[0][1]
+    assert result.attr_prefix == "hydraJobs"
+    assert {item.attr for item in result.results} == set(attrs)
+    assert next(item for item in result.results if item.attr == attrs[-1]).error == (
+        f"rich diagnostic for {attrs[-1]}"
+    )
+    assert await pool.fetchval(
+        "SELECT reported_generation FROM build_reporting WHERE build_id = $1",
+        build_id,
+    ) == await pool.fetchval(
+        "SELECT status_generation FROM builds WHERE id = $1", build_id
+    )
 
 
 async def test_cancel_not_running_posts_forge_status(service: CIService) -> None:

@@ -596,6 +596,32 @@ class CIService:
                 extra={"build_id": build_id, "attr": attr},
             )
 
+    async def request_build_report(self, build_id: int) -> bool:
+        """Reconcile immediately, leaving durable retry intent on outage."""
+        try:
+            await self._re_report(build_id)
+        except asyncio.CancelledError:
+            raise
+        except TransientError as e:
+            try:
+                await self.enqueue_work(
+                    "report",
+                    f"report-{build_id}",
+                    {"build_id": build_id},
+                    delay=work_retry_delay(
+                        1, e.retry_after, self.config.work_retry_backoff
+                    ),
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # The terminal build generation remains unreconciled and the
+                # startup sweep repairs a lost queue write.
+                logger.exception(
+                    "failed to queue build report", extra={"build_id": build_id}
+                )
+        return True
+
     def wake_work(self) -> None:
         self._work_event.set()
 
@@ -628,9 +654,12 @@ class CIService:
             delay = work_retry_delay(
                 item.attempts + 1, e.retry_after, self.config.work_retry_backoff
             )
-            if item.attempts + 1 < MAX_WORK_ATTEMPTS and await queue.retry(
+            durable_report = item.kind in {"report", "attribute-report"}
+            should_retry = durable_report or item.attempts + 1 < MAX_WORK_ATTEMPTS
+            retried = should_retry and await queue.retry(
                 item.id, delay=delay, error=str(e)
-            ):
+            )
+            if retried:
                 logger.warning(
                     "work item failed, retrying",
                     extra={
@@ -640,11 +669,15 @@ class CIService:
                         "error": str(e),
                     },
                 )
-            else:
+            elif not durable_report:
                 logger.exception(
                     "work item failed, giving up",
                     extra={"work_id": item.id, "kind": item.kind, "error": str(e)},
                 )
+                await queue.finish(item.id, error=str(e))
+            else:
+                # A same-key retry already exists. Retire only this duplicate;
+                # the durable replacement remains pending.
                 await queue.finish(item.id, error=str(e))
         except Exception as e:
             logger.exception("work item failed", extra={"work_id": item.id})
@@ -757,6 +790,12 @@ class CIService:
                         attr_prefix=prefix or "checks",
                     ),
                 )
+            await builds_q.mark_build_report_delivered(
+                self.pool,
+                build_id=build_id,
+                generation=build.status_generation,
+                commit_shas=[event.commit_sha for event in events],
+            )
         except Exception as e:
             raise TransientError(
                 str(e), retry_after=getattr(e, "retry_after", None)
@@ -865,6 +904,12 @@ class CIService:
             self.pool, report_limit=self.config.failed_build_report_limit
         ):
             await self.request_attribute_report(row.build_id, row.attr)
+        # Terminal state is the durable reconciliation intent. Queue every
+        # generation not yet acknowledged after all persisted targets posted.
+        for build_id in await builds_q.unreconciled_terminal_builds(self.pool):
+            await self.enqueue_work(
+                "report", f"report-{build_id}", {"build_id": build_id}
+            )
         settled_effects = await fail_interrupted_effects(self.pool, self._started_at)
         await self._report_interrupted_effects(settled_effects)
         for resumable in await find_unfinished_builds(self.pool):
