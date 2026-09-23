@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
+import json
 import socket
 import time
 from pathlib import Path
@@ -30,7 +31,13 @@ from nixbot.forge import DiscoveredRepo
 from nixbot.repos import repo_info
 from nixbot.schedule_runner import scheduled_worktree_id
 from nixbot.schedules import DueEffect, ScheduleWhen
-from nixbot.status import CheckPermissionError, CheckRunStore
+from nixbot.status import (
+    CheckPermissionError,
+    CheckRunStore,
+    FailedStatusStore,
+    ForgeStatusReporter,
+    StatusState,
+)
 from nixbot.webhooks import ChangeRequest, CheckRerequested, PrApproved, PrClosed
 from nixbot.work_queue import WorkQueue
 
@@ -1231,6 +1238,104 @@ async def test_terminal_report_distinguishes_completed_and_incomplete_cancellati
 
     assert reporter.eval_cancellations == ["cancelled-during-eval-sha"]
     assert len(reporter.eval_reports) == 1
+
+
+async def test_terminal_report_formats_production_warning_groups_through_forge(
+    service: CIService,
+) -> None:
+    class RecordingPoster:
+        def __init__(self) -> None:
+            self.posts: list[tuple[str, str, StatusState, str, str | None]] = []
+
+        async def post(  # noqa: PLR0913
+            self,
+            owner: str,
+            repo: str,
+            sha: str,
+            context: str,
+            state: StatusState,
+            description: str,
+            target_url: str,
+            **extra: object,
+        ) -> None:
+            text = extra.get("text")
+            self.posts.append(
+                (sha, context, state, description, text if isinstance(text, str) else None)
+            )
+
+    pool = service.pool
+    project_id = await seed_project(pool, "http://example/repo")
+    warning_groups = json.dumps(
+        [
+            {"level": "error", "message": "download failed", "count": 3},
+            {"level": "warning", "message": "input is deprecated", "count": 1},
+        ]
+    )
+    build_ids: list[int] = []
+    for number, (sha, status, eval_completed) in enumerate(
+        (
+            ("warning-success", "succeeded", True),
+            ("warning-failure", "failed", False),
+        ),
+        start=1,
+    ):
+        build_id = await insert_build(
+            pool,
+            project_id,
+            number=number,
+            commit_sha=sha,
+            status=status,
+            eval_completed=eval_completed,
+        )
+        build_ids.append(build_id)
+        await builds_q.record_build_report_target(
+            pool,
+            build_id=build_id,
+            commit_sha=sha,
+            branch="main",
+            pr_number=None,
+        )
+        await pool.execute(
+            "UPDATE builds SET eval_warnings = $2::jsonb WHERE id = $1",
+            build_id,
+            warning_groups,
+        )
+
+    poster = RecordingPoster()
+    service.orchestrator.reporter = ForgeStatusReporter(
+        {"github": poster}, FailedStatusStore(pool), "https://ci.test"
+    )
+    for build_id in build_ids:
+        await service.request_build_report(build_id)
+
+    for sha, eval_state, build_state in (
+        ("warning-success", StatusState.success, StatusState.success),
+        ("warning-failure", StatusState.failure, StatusState.failure),
+    ):
+        eval_post = next(
+            post
+            for post in poster.posts
+            if post[0] == sha and post[1] == "nixbot/nix-eval"
+        )
+        assert eval_post[2] == eval_state
+        assert "2 warnings" in eval_post[3]
+        assert eval_post[4] is not None
+        assert "download failed (\u00d73)" in eval_post[4]
+        assert "input is deprecated" in eval_post[4]
+        assert any(
+            post[0] == sha
+            and post[1] == "nixbot/nix-build"
+            and post[2] == build_state
+            for post in poster.posts
+        )
+
+    assert [
+        await pool.fetchval(
+            "SELECT reported_generation FROM build_reporting WHERE build_id = $1",
+            build_id,
+        )
+        for build_id in build_ids
+    ] == [0, 0]
 
 
 async def test_late_target_crash_recovers_terminal_eval_and_final(

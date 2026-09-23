@@ -96,6 +96,40 @@ MAINTENANCE_INTERVAL = 60 * 60
 REPORT_WORK_LEASE_SECONDS = 15 * 60
 
 
+def _eval_warning_messages(raw: str | None) -> list[str]:
+    """Convert persisted live-warning groups to forge display lines.
+
+    Older rows stored a plain list of strings. Unknown shapes are ignored so
+    diagnostics can never prevent authoritative terminal reconciliation.
+    """
+    if not raw:
+        return []
+    try:
+        decoded: object = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    if isinstance(decoded, str):
+        return [decoded]
+    if not isinstance(decoded, list):
+        return []
+
+    messages: list[str] = []
+    for warning in decoded:
+        if isinstance(warning, str):
+            messages.append(warning)
+            continue
+        if not isinstance(warning, dict):
+            continue
+        message = warning.get("message")
+        if not isinstance(message, str) or not message:
+            continue
+        count = warning.get("count")
+        if isinstance(count, int) and not isinstance(count, bool) and count > 1:
+            message = f"{message} (\u00d7{count})"
+        messages.append(message)
+    return messages
+
+
 class PullBasedCredentialsProvider:
     """Per-repo SSH credentials for pull-based repositories."""
 
@@ -797,9 +831,7 @@ class CIService:
             # The wrapper would enqueue a competing item on failure.
             reporter = reporter.inner
         try:
-            eval_warnings = (
-                json.loads(build.eval_warnings) if build.eval_warnings else []
-            )
+            eval_warnings = _eval_warning_messages(build.eval_warnings)
             targets = await builds_q.build_report_targets(self.pool, build_id=build_id)
             events = [
                 ChangeEvent(
