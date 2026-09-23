@@ -34,6 +34,7 @@ from .canceller import (
     has_skip_ci_marker,
 )
 from .db import BuildStatus
+from .db_gen import builds as builds_q
 from .db_gen import events as ev_q
 from .db_gen import maintenance as q
 from .effects import EffectsBackend, NixEffects
@@ -86,6 +87,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+async def _ignore_attribute_report(build_id: int, attr: str) -> None:
+    pass
+
+
 def default_effects() -> EffectsBackend:
     return NixEffects()
 
@@ -126,6 +131,9 @@ class Orchestrator:
     eval_runner: EvalRunnerLike
     executor: AttributeExecutor
     reporter: StatusReporter = field(default_factory=NullStatusReporter)
+    request_attribute_report: Callable[[int, str], Awaitable[None]] = (
+        _ignore_attribute_report
+    )
     uploaders: list[Uploader] = field(default_factory=list)
     # Project id -> cache. Scoped so one project's failures cannot
     # affect another's builds.
@@ -174,6 +182,18 @@ class Orchestrator:
         """Return once no run owns build_id (holds its cancel_events slot)."""
         while build_id in self.cancel_events:
             await self._run_released.wait()
+
+    async def record_report_target(
+        self, event: ChangeEvent, build: BuildRecord
+    ) -> None:
+        """Persist an accepted commit context for retry/recovery fan-out."""
+        await builds_q.record_build_report_target(
+            self.pool,
+            build_id=build.id_,
+            commit_sha=event.commit_sha,
+            branch=event.branch,
+            pr_number=event.pr_number,
+        )
 
     def _log_dir(self, build_id: int) -> Path:
         return build_log_dir(self.config.state_dir, build_id)
@@ -404,6 +424,7 @@ class Orchestrator:
                     BuildResult(BuildStatus.CANCELLED, build.status_generation, []),
                 )
             return
+        await self.record_report_target(event, build)
         if not rebuild:
             await build_reuse.attach_linked_event(self, event, build)
             return

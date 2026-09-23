@@ -991,9 +991,13 @@ async def test_restart_attribute_posts_pending(
 
         class FakeReporter(NullStatusReporter):
             async def build_restarted(
-                self, event: ChangeEvent, build: Any, attr: str | None
+                self,
+                event: ChangeEvent,
+                build: Any,
+                attr: str | None,
+                attr_prefix: str = "checks",
             ) -> None:
-                del event
+                del event, attr_prefix
                 restarts.append((build.id_, attr))
 
         service.orchestrator.reporter = FakeReporter()

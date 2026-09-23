@@ -5,10 +5,11 @@ stale-generation dropping (with fake posters and in-memory store)."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from nixbot.forge import GitHubAppClient
@@ -75,6 +76,8 @@ class FakePoster:
 class MemoryFailedStatuses:
     def __init__(self) -> None:
         self.failed: dict[str, set[str]] = {}
+        self.reservations: dict[str, set[str]] = {}
+        self.attempts: dict[tuple[str, str], str] = {}
 
     async def mark_failed(self, revision: str, status_name: str) -> None:
         self.failed.setdefault(revision, set()).add(status_name)
@@ -84,6 +87,30 @@ class MemoryFailedStatuses:
 
     async def clear(self, revision: str, status_name: str) -> None:
         self.failed.get(revision, set()).discard(status_name)
+
+    async def reserve(
+        self,
+        revision: str,
+        status_name: str,
+        report_limit: int,
+        *,
+        always_allow: bool = False,
+    ) -> bool:
+        reserved = self.reservations.setdefault(revision, set())
+        if status_name in reserved:
+            return True
+        if not always_allow and len(reserved) >= report_limit:
+            return False
+        reserved.add(status_name)
+        return True
+
+    async def delivered_attempt(self, revision: str, status_name: str) -> str | None:
+        return self.attempts.get((revision, status_name))
+
+    async def acknowledge_attempt(
+        self, revision: str, status_name: str, attempt: str
+    ) -> None:
+        self.attempts[(revision, status_name)] = attempt
 
 
 PROJECT = RepoInfo(
@@ -562,9 +589,7 @@ async def test_attribute_descriptions_are_ansi_stripped() -> None:
     assert attr_post.description == "error: boom"
 
 
-async def test_previously_failed_reposts_do_not_consume_budget() -> None:
-    """Re-posts of previously-failed contexts must not eat the report
-    limit for new failures on a rebuild."""
+async def test_failure_budget_is_shared_across_early_and_final_reports() -> None:
     reporter, poster, store = make_reporter(limit=2)
 
     # First build: a0, a1 fail (consume the full budget).
@@ -578,7 +603,7 @@ async def test_previously_failed_reposts_do_not_consume_budget() -> None:
         ),
     )
     poster.posts.clear()
-    # Rebuild: same two still fail, plus one new failure.
+    # Rebuild/final reconciliation: same two still fail, plus one new failure.
     await reporter.build_finished(
         EVENT,
         BUILD,
@@ -591,8 +616,136 @@ async def test_previously_failed_reposts_do_not_consume_budget() -> None:
     failure_posts = {
         p.context for p in poster.posts if p.context.startswith("nixbot/nix-build ")
     }
-    # a2 is reported: the re-posts did not exhaust the budget of 2.
-    assert attr_status_context("github", "acme/widget", "a2") in failure_posts
+    # The revision-wide reservations remain exhausted; final reconciliation
+    # cannot create an extra context beyond the early-report budget.
+    assert attr_status_context("github", "acme/widget", "a2") not in failure_posts
+
+
+async def test_early_failure_deduplicates_and_keeps_rich_error() -> None:
+    reporter, poster, _ = make_reporter()
+    result = attr_result(
+        "a",
+        AttributeStatus.failed,
+        error="drv> error: rich executor diagnostic\nlast line",
+    )
+    await reporter.attribute_failed(EVENT, BUILD, result, attempt="one", generation=0)
+    await reporter.attribute_failed(EVENT, BUILD, result, attempt="one", generation=0)
+    assert len(poster.posts) == 1
+    assert poster.posts[0].description == "last line"
+    assert "rich executor diagnostic" in poster.extras[0]["text"]
+    await reporter.attribute_failed(EVENT, BUILD, result, attempt="two", generation=1)
+    assert len(poster.posts) == 2  # a new persisted attempt updates the check
+
+
+async def test_failed_early_delivery_is_retried_and_acknowledged_after_success() -> (
+    None
+):
+    class FlakyPoster(FakePoster):
+        failed = False
+
+        async def post(  # noqa: PLR0913
+            self,
+            owner: str,
+            repo: str,
+            sha: str,
+            context: str,
+            state: StatusState,
+            description: str,
+            target_url: str,
+            **extra: object,
+        ) -> None:
+            if not self.failed:
+                self.failed = True
+                msg = "forge unavailable"
+                raise httpx.ConnectError(msg)
+            await super().post(
+                owner,
+                repo,
+                sha,
+                context,
+                state,
+                description,
+                target_url,
+                **extra,
+            )
+
+    poster = FlakyPoster()
+    store = MemoryFailedStatuses()
+    reporter = ForgeStatusReporter({"github": poster}, store, "https://ci.test")
+    result = attr_result("a", AttributeStatus.failed, error="boom")
+
+    with pytest.raises(httpx.ConnectError):
+        await reporter.attribute_failed(
+            EVENT, BUILD, result, attempt="one", generation=0
+        )
+    assert await store.get_failed("sha1") == set()
+    await reporter.attribute_failed(EVENT, BUILD, result, attempt="one", generation=0)
+    assert await store.get_failed("sha1") == {
+        attr_status_context("github", "acme/widget", "a")
+    }
+
+
+async def test_final_reconciliation_flips_early_failure_to_success() -> None:
+    reporter, poster, _ = make_reporter()
+    await reporter.attribute_failed(
+        EVENT,
+        BUILD,
+        attr_result("a", AttributeStatus.failed, error="boom"),
+        attempt="one",
+        generation=0,
+    )
+    await reporter.build_finished(
+        EVENT,
+        BUILD,
+        BuildResult("succeeded", 1, [], attr_statuses={"a": "succeeded"}),
+    )
+    context = attr_status_context("github", "acme/widget", "a")
+    assert [post.state for post in poster.posts if post.context == context] == [
+        StatusState.failure,
+        StatusState.success,
+    ]
+
+
+async def test_restart_generation_orders_pending_after_in_flight_failure() -> None:
+    reporter, poster, _ = make_reporter()
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    original = poster.post
+
+    async def blocked_post(*args: object, **kwargs: object) -> None:
+        entered.set()
+        await release.wait()
+        await cast("Any", original)(*args, **kwargs)
+
+    poster.post = blocked_post  # type: ignore[method-assign]
+    failure = asyncio.create_task(
+        reporter.attribute_failed(
+            EVENT,
+            BUILD,
+            attr_result("a", AttributeStatus.failed, error="boom"),
+            attempt="old",
+            generation=0,
+        )
+    )
+    await entered.wait()
+    restarted = asyncio.create_task(
+        reporter.build_restarted(EVENT, replace(BUILD, status_generation=1), "a")
+    )
+    release.set()
+    await failure
+    await restarted
+    await reporter.attribute_failed(
+        EVENT,
+        BUILD,
+        attr_result("a", AttributeStatus.failed, error="late old attempt"),
+        attempt="old-late",
+        generation=0,
+    )
+    assert [post.state for post in poster.posts] == [
+        StatusState.failure,
+        StatusState.pending,
+        StatusState.pending,
+    ]
 
 
 async def test_summary_counts_use_all_attribute_statuses() -> None:

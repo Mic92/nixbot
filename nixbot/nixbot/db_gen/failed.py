@@ -9,17 +9,24 @@ __all__: collections.abc.Sequence[str] = (
     "CheckRunAttrRow",
     "FailedBuildByDrvRow",
     "QueryResults",
+    "acknowledge_failure_report_attempt",
     "check_run_attr",
     "clear_failed_status",
     "failed_build_by_drv",
     "failed_status_names",
+    "failure_report_delivered_attempt",
+    "failure_report_reservation_count",
+    "failure_report_reserved",
     "get_check_run_id",
     "latest_build_for_sha",
+    "lock_failure_report_revision",
     "prune_old_failed_builds",
     "prune_old_failed_statuses",
+    "prune_old_failure_report_reservations",
     "upsert_check_run",
     "upsert_failed_build",
     "upsert_failed_status",
+    "upsert_failure_report_reservation",
 )
 
 import dataclasses
@@ -77,8 +84,44 @@ CLEAR_FAILED_STATUS: typing.Final[str] = """-- name: ClearFailedStatus :exec
 DELETE FROM failed_statuses WHERE revision = $1 AND status_name = $2
 """
 
+LOCK_FAILURE_REPORT_REVISION: typing.Final[str] = """-- name: LockFailureReportRevision :exec
+SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))
+"""
+
+FAILURE_REPORT_RESERVED: typing.Final[str] = """-- name: FailureReportReserved :one
+SELECT 1 AS one FROM failure_report_reservations
+WHERE revision = $1 AND status_name = $2
+"""
+
+FAILURE_REPORT_RESERVATION_COUNT: typing.Final[str] = """-- name: FailureReportReservationCount :one
+SELECT count(*) AS count FROM failure_report_reservations WHERE revision = $1
+"""
+
+UPSERT_FAILURE_REPORT_RESERVATION: typing.Final[str] = """-- name: UpsertFailureReportReservation :exec
+INSERT INTO failure_report_reservations (revision, status_name, timestamp)
+VALUES ($1, $2, $3)
+ON CONFLICT (revision, status_name) DO UPDATE
+SET timestamp = EXCLUDED.timestamp
+"""
+
+FAILURE_REPORT_DELIVERED_ATTEMPT: typing.Final[str] = """-- name: FailureReportDeliveredAttempt :one
+SELECT delivered_attempt FROM failure_report_reservations
+WHERE revision = $1 AND status_name = $2
+"""
+
+ACKNOWLEDGE_FAILURE_REPORT_ATTEMPT: typing.Final[str] = """-- name: AcknowledgeFailureReportAttempt :exec
+UPDATE failure_report_reservations
+SET delivered_attempt = $3, timestamp = $4
+WHERE revision = $1 AND status_name = $2
+"""
+
 PRUNE_OLD_FAILED_STATUSES: typing.Final[str] = """-- name: PruneOldFailedStatuses :exec
 DELETE FROM failed_statuses
+WHERE to_timestamp(timestamp) < now() - make_interval(days => $1::int)
+"""
+
+PRUNE_OLD_FAILURE_REPORT_RESERVATIONS: typing.Final[str] = """-- name: PruneOldFailureReportReservations :exec
+DELETE FROM failure_report_reservations
 WHERE to_timestamp(timestamp) < now() - make_interval(days => $1::int)
 """
 
@@ -176,8 +219,45 @@ async def clear_failed_status(conn: ConnectionLike, *, revision: str, status_nam
     await conn.execute(CLEAR_FAILED_STATUS, revision, status_name)
 
 
+async def lock_failure_report_revision(conn: ConnectionLike, *, revision: str) -> None:
+    await conn.execute(LOCK_FAILURE_REPORT_REVISION, revision)
+
+
+async def failure_report_reserved(conn: ConnectionLike, *, revision: str, status_name: str) -> int | None:
+    row = await conn.fetchrow(FAILURE_REPORT_RESERVED, revision, status_name)
+    if row is None:
+        return None
+    return row[0]
+
+
+async def failure_report_reservation_count(conn: ConnectionLike, *, revision: str) -> int | None:
+    row = await conn.fetchrow(FAILURE_REPORT_RESERVATION_COUNT, revision)
+    if row is None:
+        return None
+    return row[0]
+
+
+async def upsert_failure_report_reservation(conn: ConnectionLike, *, revision: str, status_name: str, timestamp: float) -> None:
+    await conn.execute(UPSERT_FAILURE_REPORT_RESERVATION, revision, status_name, timestamp)
+
+
+async def failure_report_delivered_attempt(conn: ConnectionLike, *, revision: str, status_name: str) -> str | None:
+    row = await conn.fetchrow(FAILURE_REPORT_DELIVERED_ATTEMPT, revision, status_name)
+    if row is None:
+        return None
+    return row[0]
+
+
+async def acknowledge_failure_report_attempt(conn: ConnectionLike, *, revision: str, status_name: str, delivered_attempt: str | None, timestamp: float) -> None:
+    await conn.execute(ACKNOWLEDGE_FAILURE_REPORT_ATTEMPT, revision, status_name, delivered_attempt, timestamp)
+
+
 async def prune_old_failed_statuses(conn: ConnectionLike, *, retention_days: int) -> None:
     await conn.execute(PRUNE_OLD_FAILED_STATUSES, retention_days)
+
+
+async def prune_old_failure_report_reservations(conn: ConnectionLike, *, retention_days: int) -> None:
+    await conn.execute(PRUNE_OLD_FAILURE_REPORT_RESERVATIONS, retention_days)
 
 
 async def prune_old_failed_builds(conn: ConnectionLike, *, retention_days: int) -> None:

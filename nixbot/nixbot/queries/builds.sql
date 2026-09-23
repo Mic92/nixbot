@@ -128,6 +128,50 @@ WHERE build_id = $1;
 -- name: GetBuild :one
 SELECT * FROM builds WHERE id = $1;
 
+-- name: SetBuildAttributePrefix :exec
+INSERT INTO build_reporting (build_id, attribute_prefix)
+VALUES ($1, $2)
+ON CONFLICT (build_id) DO UPDATE
+SET attribute_prefix = EXCLUDED.attribute_prefix;
+
+-- name: BuildAttributePrefix :one
+SELECT attribute_prefix FROM build_reporting WHERE build_id = $1;
+
+-- name: RecordBuildReportTarget :exec
+INSERT INTO build_report_targets (build_id, commit_sha, branch, pr_number)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (build_id, commit_sha) DO UPDATE
+SET branch = EXCLUDED.branch, pr_number = EXCLUDED.pr_number;
+
+-- name: BuildReportTargets :many
+SELECT commit_sha, branch, pr_number FROM build_report_targets
+WHERE build_id = $1 ORDER BY commit_sha;
+
+-- name: AttributeForReport :one
+SELECT a.attr, a.status, a.error, a.system, a.drv_path, a.finished_at,
+       b.status AS build_status, b.status_generation,
+       COALESCE(r.attribute_prefix, 'checks') AS attribute_prefix
+FROM build_attributes a
+JOIN builds b ON b.id = a.build_id
+LEFT JOIN build_reporting r ON r.build_id = b.id
+WHERE a.build_id = $1 AND a.attr = $2;
+
+-- name: AttributeReportRows :many
+SELECT attr, status, error, system, drv_path FROM build_attributes
+WHERE build_id = $1 ORDER BY attr;
+
+-- name: ReportableAttributeFailures :many
+WITH ranked AS (
+    SELECT a.build_id, a.attr,
+           row_number() OVER (PARTITION BY a.build_id ORDER BY a.attr) AS ordinal
+    FROM build_attributes a
+    JOIN build_reporting r ON r.build_id = a.build_id
+    WHERE a.status IN ('failed', 'failed_eval', 'dependency_failed', 'cached_failure')
+)
+SELECT build_id, attr FROM ranked
+WHERE ordinal <= sqlc.arg(report_limit)::bigint
+ORDER BY build_id, attr;
+
 -- name: RecordEffectsRef :exec
 -- The ref maybe_run_effects last decided for. Effect items (which only
 -- carry build_id) report on it, and restarts gate on it instead of the

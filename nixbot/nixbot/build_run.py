@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 from . import db
 from .after_build import after_build
 from .build_scheduler import (
+    TERMINAL_FAILURES,
     AttributeResult,
     AttributeStatus,
     BuildOutcome,
@@ -512,11 +513,27 @@ async def build_attributes(  # noqa: PLR0913
     Accepts either a complete job list or a queue fed during an
     ongoing evaluation. Returns the aggregated build status."""
     cancel_event = o.cancel_events.setdefault(build.id_, asyncio.Event())
+    attr_prefix = BranchConfig.load(worktree_path).attribute
+    await q.set_build_attribute_prefix(
+        o.pool, build_id=build.id_, attribute_prefix=attr_prefix
+    )
+    # Recovery may enter with failures that were persisted before the crash;
+    # repair a lost hint now that the exact context prefix is durable.
+    failure_states = {status.value for status in TERMINAL_FAILURES}
+    existing_failures = sorted(
+        row.attr
+        for row in await q.attribute_statuses(o.pool, build_id=build.id_)
+        if row.status in failure_states
+    )[: o.config.failed_build_report_limit]
+    for attr in existing_failures:
+        await o.request_attribute_report(build.id_, attr)
 
     async def record_early(result: AttributeResult) -> None:
         """Persist skips and dependency failures as they happen;
         otherwise they stay pending until the whole build ends."""
         await db.complete_attribute(o.pool, build.id_, result, if_unfinished=True)
+        if result.status in TERMINAL_FAILURES:
+            await o.request_attribute_report(build.id_, result.attr)
 
     failed_build_cache: FailedBuildCache | None = (
         o.failed_build_cache(build.project_id)
@@ -572,7 +589,7 @@ async def build_attributes(  # noqa: PLR0913
                 r.attr: r.status
                 for r in await q.attribute_statuses(o.pool, build_id=build.id_)
             },
-            attr_prefix=BranchConfig.load(worktree_path).attribute,
+            attr_prefix=attr_prefix,
         ),
     )
     await o.finish_linked(

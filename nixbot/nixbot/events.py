@@ -110,12 +110,27 @@ class StatusReporter(Protocol):
 
     async def eval_cancelled(self, event: ChangeEvent, build: BuildRecord) -> None: ...
 
+    async def attribute_failed(  # noqa: PLR0913
+        self,
+        event: ChangeEvent,
+        build: BuildRecord,
+        result: AttributeResult,
+        *,
+        attempt: str,
+        generation: int,
+        attr_prefix: str = "checks",
+    ) -> None: ...
+
     async def build_finished(
         self, event: ChangeEvent, build: BuildRecord, result: BuildResult
     ) -> None: ...
 
     async def build_restarted(
-        self, event: ChangeEvent, build: BuildRecord, attr: str | None
+        self,
+        event: ChangeEvent,
+        build: BuildRecord,
+        attr: str | None,
+        attr_prefix: str = "checks",
     ) -> None: ...
 
     async def effect_started(
@@ -158,13 +173,29 @@ class NullStatusReporter:
     async def eval_cancelled(self, event: ChangeEvent, build: BuildRecord) -> None:
         pass
 
+    async def attribute_failed(  # noqa: PLR0913
+        self,
+        event: ChangeEvent,
+        build: BuildRecord,
+        result: AttributeResult,
+        *,
+        attempt: str,
+        generation: int,
+        attr_prefix: str = "checks",
+    ) -> None:
+        pass
+
     async def build_finished(
         self, event: ChangeEvent, build: BuildRecord, result: BuildResult
     ) -> None:
         pass
 
     async def build_restarted(
-        self, event: ChangeEvent, build: BuildRecord, attr: str | None
+        self,
+        event: ChangeEvent,
+        build: BuildRecord,
+        attr: str | None,
+        attr_prefix: str = "checks",
     ) -> None:
         pass
 

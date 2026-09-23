@@ -151,13 +151,31 @@ class RecordingReporter:
     async def eval_cancelled(self, event: ChangeEvent, build: BuildRecord) -> None:
         self.events.append(("eval-cancelled", build.id_))
 
+    async def attribute_failed(  # noqa: PLR0913
+        self,
+        event: ChangeEvent,
+        build: BuildRecord,
+        result: AttributeResult,
+        *,
+        attempt: str,
+        generation: int,
+        attr_prefix: str = "checks",
+    ) -> None:
+        self.events.append(
+            ("attribute-failed", build.id_, result.attr, attempt, generation)
+        )
+
     async def build_finished(
         self, event: ChangeEvent, build: BuildRecord, result: BuildResult
     ) -> None:
         self.events.append(("finished", build.id_, result.status, result.generation))
 
     async def build_restarted(
-        self, event: ChangeEvent, build: BuildRecord, attr: str | None
+        self,
+        event: ChangeEvent,
+        build: BuildRecord,
+        attr: str | None,
+        attr_prefix: str = "checks",
     ) -> None:
         self.events.append(("restarted", build.id_, attr))
 

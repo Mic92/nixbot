@@ -93,7 +93,10 @@ async def rerun(
         build = await builds_q.get_build(o.pool, id_=build_id)
         if build is None:
             return
-        await o.reporter.build_restarted(event_for_build(info, build), build, attr)
+        attr_prefix = await builds_q.build_attribute_prefix(o.pool, build_id=build_id)
+        await o.reporter.build_restarted(
+            event_for_build(info, build), build, attr, attr_prefix or "checks"
+        )
     credentials = await s.credentials_provider(info.forge).get(info.clone_url)
     results = await find_unfinished_builds(s.pool, build_id=build_id)
     resumable = results[0] if results else None

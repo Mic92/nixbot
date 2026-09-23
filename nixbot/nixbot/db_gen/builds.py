@@ -6,16 +6,24 @@
 from __future__ import annotations
 
 __all__: collections.abc.Sequence[str] = (
+    "AttributeForReportRow",
+    "AttributeReportRowsRow",
     "AttributeStatusesRow",
+    "BuildReportTargetsRow",
     "EffectDepStatusesRow",
     "EffectsSummaryRow",
     "EvalJobRowsRow",
     "LockBuildRowRow",
     "QueryResults",
+    "ReportableAttributeFailuresRow",
     "attach_build_to_pr",
+    "attribute_for_report",
+    "attribute_report_rows",
     "attribute_status_list",
     "attribute_statuses",
     "backfill_pr_author",
+    "build_attribute_prefix",
+    "build_report_targets",
     "bump_build_status",
     "claim_effect",
     "clear_effect_eval_error",
@@ -39,8 +47,11 @@ __all__: collections.abc.Sequence[str] = (
     "mark_attribute_building",
     "mark_effects_started",
     "record_attributes",
+    "record_build_report_target",
     "record_effect_eval_error",
     "record_effects_ref",
+    "reportable_attribute_failures",
+    "set_build_attribute_prefix",
     "set_build_status",
     "set_eval_warnings",
     "settle_unfinished_attributes",
@@ -69,6 +80,41 @@ class EvalJobRowsRow:
     system: str | None
     drv_path: str | None
     outputs: str | None
+
+
+@dataclasses.dataclass()
+class BuildReportTargetsRow:
+    commit_sha: str
+    branch: str
+    pr_number: int | None
+
+
+@dataclasses.dataclass()
+class AttributeForReportRow:
+    attr: str
+    status: str
+    error: str | None
+    system: str | None
+    drv_path: str | None
+    finished_at: datetime.datetime | None
+    build_status: str
+    status_generation: int
+    attribute_prefix: str
+
+
+@dataclasses.dataclass()
+class AttributeReportRowsRow:
+    attr: str
+    status: str
+    error: str | None
+    system: str | None
+    drv_path: str | None
+
+
+@dataclasses.dataclass()
+class ReportableAttributeFailuresRow:
+    build_id: int
+    attr: str
 
 
 @dataclasses.dataclass()
@@ -227,6 +273,57 @@ WHERE build_id = $1
 
 GET_BUILD: typing.Final[str] = """-- name: GetBuild :one
 SELECT id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms, actor, merged_pr_number FROM builds WHERE id = $1
+"""
+
+SET_BUILD_ATTRIBUTE_PREFIX: typing.Final[str] = """-- name: SetBuildAttributePrefix :exec
+INSERT INTO build_reporting (build_id, attribute_prefix)
+VALUES ($1, $2)
+ON CONFLICT (build_id) DO UPDATE
+SET attribute_prefix = EXCLUDED.attribute_prefix
+"""
+
+BUILD_ATTRIBUTE_PREFIX: typing.Final[str] = """-- name: BuildAttributePrefix :one
+SELECT attribute_prefix FROM build_reporting WHERE build_id = $1
+"""
+
+RECORD_BUILD_REPORT_TARGET: typing.Final[str] = """-- name: RecordBuildReportTarget :exec
+INSERT INTO build_report_targets (build_id, commit_sha, branch, pr_number)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (build_id, commit_sha) DO UPDATE
+SET branch = EXCLUDED.branch, pr_number = EXCLUDED.pr_number
+"""
+
+BUILD_REPORT_TARGETS: typing.Final[str] = """-- name: BuildReportTargets :many
+SELECT commit_sha, branch, pr_number FROM build_report_targets
+WHERE build_id = $1 ORDER BY commit_sha
+"""
+
+ATTRIBUTE_FOR_REPORT: typing.Final[str] = """-- name: AttributeForReport :one
+SELECT a.attr, a.status, a.error, a.system, a.drv_path, a.finished_at,
+       b.status AS build_status, b.status_generation,
+       COALESCE(r.attribute_prefix, 'checks') AS attribute_prefix
+FROM build_attributes a
+JOIN builds b ON b.id = a.build_id
+LEFT JOIN build_reporting r ON r.build_id = b.id
+WHERE a.build_id = $1 AND a.attr = $2
+"""
+
+ATTRIBUTE_REPORT_ROWS: typing.Final[str] = """-- name: AttributeReportRows :many
+SELECT attr, status, error, system, drv_path FROM build_attributes
+WHERE build_id = $1 ORDER BY attr
+"""
+
+REPORTABLE_ATTRIBUTE_FAILURES: typing.Final[str] = """-- name: ReportableAttributeFailures :many
+WITH ranked AS (
+    SELECT a.build_id, a.attr,
+           row_number() OVER (PARTITION BY a.build_id ORDER BY a.attr) AS ordinal
+    FROM build_attributes a
+    JOIN build_reporting r ON r.build_id = a.build_id
+    WHERE a.status IN ('failed', 'failed_eval', 'dependency_failed', 'cached_failure')
+)
+SELECT build_id, attr FROM ranked
+WHERE ordinal <= $1::bigint
+ORDER BY build_id, attr
 """
 
 RECORD_EFFECTS_REF: typing.Final[str] = """-- name: RecordEffectsRef :exec
@@ -700,6 +797,49 @@ async def get_build(conn: ConnectionLike, *, id_: int) -> models.Build | None:
         actor=row[21],
         merged_pr_number=row[22],
     )
+
+
+async def set_build_attribute_prefix(conn: ConnectionLike, *, build_id: int, attribute_prefix: str) -> None:
+    await conn.execute(SET_BUILD_ATTRIBUTE_PREFIX, build_id, attribute_prefix)
+
+
+async def build_attribute_prefix(conn: ConnectionLike, *, build_id: int) -> str | None:
+    row = await conn.fetchrow(BUILD_ATTRIBUTE_PREFIX, build_id)
+    if row is None:
+        return None
+    return row[0]
+
+
+async def record_build_report_target(conn: ConnectionLike, *, build_id: int, commit_sha: str, branch: str, pr_number: int | None) -> None:
+    await conn.execute(RECORD_BUILD_REPORT_TARGET, build_id, commit_sha, branch, pr_number)
+
+
+def build_report_targets(conn: ConnectionLike, *, build_id: int) -> QueryResults[BuildReportTargetsRow]:
+    def _decode_hook(row: asyncpg.Record) -> BuildReportTargetsRow:
+        return BuildReportTargetsRow(commit_sha=row[0], branch=row[1], pr_number=row[2])
+
+    return QueryResults(conn, BUILD_REPORT_TARGETS, _decode_hook, build_id)
+
+
+async def attribute_for_report(conn: ConnectionLike, *, build_id: int, attr: str) -> AttributeForReportRow | None:
+    row = await conn.fetchrow(ATTRIBUTE_FOR_REPORT, build_id, attr)
+    if row is None:
+        return None
+    return AttributeForReportRow(attr=row[0], status=row[1], error=row[2], system=row[3], drv_path=row[4], finished_at=row[5], build_status=row[6], status_generation=row[7], attribute_prefix=row[8])
+
+
+def attribute_report_rows(conn: ConnectionLike, *, build_id: int) -> QueryResults[AttributeReportRowsRow]:
+    def _decode_hook(row: asyncpg.Record) -> AttributeReportRowsRow:
+        return AttributeReportRowsRow(attr=row[0], status=row[1], error=row[2], system=row[3], drv_path=row[4])
+
+    return QueryResults(conn, ATTRIBUTE_REPORT_ROWS, _decode_hook, build_id)
+
+
+def reportable_attribute_failures(conn: ConnectionLike, *, report_limit: int) -> QueryResults[ReportableAttributeFailuresRow]:
+    def _decode_hook(row: asyncpg.Record) -> ReportableAttributeFailuresRow:
+        return ReportableAttributeFailuresRow(build_id=row[0], attr=row[1])
+
+    return QueryResults(conn, REPORTABLE_ATTRIBUTE_FAILURES, _decode_hook, report_limit)
 
 
 async def record_effects_ref(conn: ConnectionLike, *, commit_sha: str, branch: str, pr_number: int | None, id_: int, allowed: bool) -> None:

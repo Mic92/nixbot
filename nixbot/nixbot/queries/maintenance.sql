@@ -41,6 +41,7 @@ WITH cleared_failures AS (
     WHERE build_id = sqlc.arg(build_id)::bigint AND sqlc.narg(attr)::text IS NULL
 )
 UPDATE builds SET status = 'pending', error = NULL,
+    status_generation = status_generation + 1,
     eval_warnings = NULL, started_at = NULL, finished_at = NULL
 WHERE builds.id = sqlc.arg(build_id)::bigint;
 
@@ -160,6 +161,10 @@ WITH del_builds AS (
     RETURNING effect_runs.id
 ), pruned_statuses AS (
     DELETE FROM failed_statuses
+    WHERE to_timestamp(timestamp)
+        < now() - make_interval(days => sqlc.arg(retention_days)::int)
+), pruned_report_reservations AS (
+    DELETE FROM failure_report_reservations
     WHERE to_timestamp(timestamp)
         < now() - make_interval(days => sqlc.arg(retention_days)::int)
 ), pruned_failures AS (

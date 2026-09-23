@@ -23,8 +23,37 @@ SELECT status_name FROM failed_statuses WHERE revision = $1;
 -- name: ClearFailedStatus :exec
 DELETE FROM failed_statuses WHERE revision = $1 AND status_name = $2;
 
+-- name: LockFailureReportRevision :exec
+SELECT pg_advisory_xact_lock(hashtextextended(sqlc.arg(revision)::text, 0));
+
+-- name: FailureReportReserved :one
+SELECT 1 AS one FROM failure_report_reservations
+WHERE revision = $1 AND status_name = $2;
+
+-- name: FailureReportReservationCount :one
+SELECT count(*) AS count FROM failure_report_reservations WHERE revision = $1;
+
+-- name: UpsertFailureReportReservation :exec
+INSERT INTO failure_report_reservations (revision, status_name, timestamp)
+VALUES ($1, $2, $3)
+ON CONFLICT (revision, status_name) DO UPDATE
+SET timestamp = EXCLUDED.timestamp;
+
+-- name: FailureReportDeliveredAttempt :one
+SELECT delivered_attempt FROM failure_report_reservations
+WHERE revision = $1 AND status_name = $2;
+
+-- name: AcknowledgeFailureReportAttempt :exec
+UPDATE failure_report_reservations
+SET delivered_attempt = $3, timestamp = $4
+WHERE revision = $1 AND status_name = $2;
+
 -- name: PruneOldFailedStatuses :exec
 DELETE FROM failed_statuses
+WHERE to_timestamp(timestamp) < now() - make_interval(days => sqlc.arg(retention_days)::int);
+
+-- name: PruneOldFailureReportReservations :exec
+DELETE FROM failure_report_reservations
 WHERE to_timestamp(timestamp) < now() - make_interval(days => sqlc.arg(retention_days)::int);
 
 -- name: PruneOldFailedBuilds :exec

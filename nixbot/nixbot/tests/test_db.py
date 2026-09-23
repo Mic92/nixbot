@@ -235,6 +235,19 @@ async def test_failed_status_store_component(pool: asyncpg.Pool) -> None:
     assert await store.get_failed("abc") == {"nix-eval"}
     await store.clear("abc", "nix-eval")
 
+    # Reservations are atomic and persist independently of delivery acks.
+    reserved = await asyncio.gather(
+        *(store.reserve("budget-rev", f"ctx-{i}", 2) for i in range(5))
+    )
+    assert sum(reserved) == 2
+    accepted = [i for i, value in enumerate(reserved) if value]
+    assert await store.reserve("budget-rev", f"ctx-{accepted[0]}", 2)
+    assert not await store.reserve("budget-rev", "ctx-over-limit", 2)
+    accepted_context = f"ctx-{accepted[0]}"
+    assert await store.delivered_attempt("budget-rev", accepted_context) is None
+    await store.acknowledge_attempt("budget-rev", accepted_context, "attempt-1")
+    assert await store.delivered_attempt("budget-rev", accepted_context) == "attempt-1"
+
 
 async def test_failed_build_cache_component(pool: asyncpg.Pool) -> None:
     project_id = await insert_project(pool, "cache", forge_repo_id="fb-0")
@@ -808,7 +821,16 @@ async def test_eval_stats_lifecycle(pool: asyncpg.Pool) -> None:
         return row["eval_completed"], row["eval_duration_ms"]
 
     assert await duration() == (True, 38_000)
+    generation = await pool.fetchval(
+        "SELECT status_generation FROM builds WHERE id = $1", build.id_
+    )
     await maintenance_q.reset_build_for_restart(pool, build_id=build.id_, attr=None)
     assert await duration() == (True, 38_000)
+    assert (
+        await pool.fetchval(
+            "SELECT status_generation FROM builds WHERE id = $1", build.id_
+        )
+        == generation + 1
+    )
     await db.set_build_status(pool, build.id_, db.BuildStatus.PENDING)
     assert await duration() == (False, None)

@@ -17,6 +17,7 @@ from fnmatch import fnmatch
 from typing import TYPE_CHECKING, Any
 
 from . import approval, db, discovery, restart_dispatch, schedule_runner
+from .build_scheduler import AttributeResult, AttributeStatus
 from .config import ScheduleWhen
 from .db import BuildStatus
 from .db_gen import approvals as approvals_q
@@ -41,6 +42,7 @@ from .gitrepo import (
     FetchCredentials,
     StaticCredentialsProvider,
 )
+from .models import NixEvalJobError
 from .recovery import (
     cleanup_old_builds,
     cleanup_orphan_log_dirs,
@@ -128,10 +130,33 @@ class RetryingReporter:
     async def eval_cancelled(self, event: ChangeEvent, build: BuildRecord) -> None:
         await self.inner.eval_cancelled(event, build)
 
-    async def build_restarted(
-        self, event: ChangeEvent, build: BuildRecord, attr: str | None
+    async def attribute_failed(  # noqa: PLR0913
+        self,
+        event: ChangeEvent,
+        build: BuildRecord,
+        result: AttributeResult,
+        *,
+        attempt: str,
+        generation: int,
+        attr_prefix: str = "checks",
     ) -> None:
-        await self.inner.build_restarted(event, build, attr)
+        await self.inner.attribute_failed(
+            event,
+            build,
+            result,
+            attempt=attempt,
+            generation=generation,
+            attr_prefix=attr_prefix,
+        )
+
+    async def build_restarted(
+        self,
+        event: ChangeEvent,
+        build: BuildRecord,
+        attr: str | None,
+        attr_prefix: str = "checks",
+    ) -> None:
+        await self.inner.build_restarted(event, build, attr, attr_prefix)
 
     async def effect_started(
         self, event: ChangeEvent, build: BuildRecord, name: str
@@ -553,6 +578,24 @@ class CIService:
         await WorkQueue(self.pool).enqueue(kind, dedup_key, payload, delay=delay)
         self._work_event.set()
 
+    async def request_attribute_report(self, build_id: int, attr: str) -> None:
+        """Queue only stable identity; the worker reloads persisted detail."""
+        try:
+            await self.enqueue_work(
+                "attribute-report",
+                f"attribute-report-{build_id}-{attr}",
+                {"build_id": build_id, "attr": attr},
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # Persistence is already authoritative. Final reconciliation and
+            # startup recovery repair a lost best-effort hint.
+            logger.exception(
+                "failed to queue attribute report",
+                extra={"build_id": build_id, "attr": attr},
+            )
+
     def wake_work(self) -> None:
         self._work_event.set()
 
@@ -612,7 +655,7 @@ class CIService:
             # A deferred same-key item may be claimable now.
             self._work_event.set()
 
-    async def _dispatch_work(self, item: WorkItem) -> None:
+    async def _dispatch_work(self, item: WorkItem) -> None:  # noqa: C901
         payload = item.payload
         if item.kind == "change":
             await self._process_change(ChangeRequest(**payload))
@@ -641,6 +684,8 @@ class CIService:
             )
         elif item.kind == "report":
             await self._re_report(payload["build_id"])
+        elif item.kind == "attribute-report":
+            await self._report_attribute_failure(payload["build_id"], payload["attr"])
         elif item.kind == "refresh-schedules":
             await schedule_runner.refresh_schedules(
                 self, payload["project_id"], payload["rev"]
@@ -668,24 +713,106 @@ class CIService:
         project = await self.repo_store.by_id(build.project_id)
         if project is None:
             return
-        event = event_for_build(repo_info(project), build)
-        rows = await builds_q.attribute_statuses(self.pool, build_id=build_id)
+        rows = await builds_q.attribute_report_rows(self.pool, build_id=build_id)
+        results = [
+            AttributeResult(
+                attr=row.attr,
+                status=AttributeStatus(row.status),
+                job=NixEvalJobError(
+                    error=row.error or "",
+                    attr=row.attr,
+                    attr_path=row.attr.split("."),
+                ),
+                error=row.error,
+                drv_path=row.drv_path,
+                system=row.system,
+            )
+            for row in rows
+        ]
+        prefix = await builds_q.build_attribute_prefix(self.pool, build_id=build_id)
         reporter = self.orchestrator.reporter
         if isinstance(reporter, RetryingReporter):
             # The wrapper would enqueue a competing item on failure.
             reporter = reporter.inner
         try:
-            # Per-attribute statuses were already posted (or cached) inline.
-            await reporter.build_finished(
-                event,
-                build,
-                BuildResult(
-                    build.status,
-                    build.status_generation,
-                    [],
-                    attr_statuses={row.attr: row.status for row in rows},
-                ),
+            targets = await builds_q.build_report_targets(self.pool, build_id=build_id)
+            events = [
+                ChangeEvent(
+                    repo=repo_info(project),
+                    branch=target.branch,
+                    commit_sha=target.commit_sha,
+                    pr_number=target.pr_number,
+                )
+                for target in targets
+            ] or [event_for_build(repo_info(project), build)]
+            for event in events:
+                await reporter.build_finished(
+                    event,
+                    build,
+                    BuildResult(
+                        build.status,
+                        build.status_generation,
+                        results,
+                        attr_statuses={row.attr: row.status for row in rows},
+                        attr_prefix=prefix or "checks",
+                    ),
+                )
+        except Exception as e:
+            raise TransientError(
+                str(e), retry_after=getattr(e, "retry_after", None)
+            ) from e
+
+    async def _report_attribute_failure(self, build_id: int, attr: str) -> None:
+        """Reload and report a current persisted failure to every target."""
+        build = await builds_q.get_build(self.pool, id_=build_id)
+        row = await builds_q.attribute_for_report(
+            self.pool, build_id=build_id, attr=attr
+        )
+        if (
+            build is None
+            or row is None
+            or row.finished_at is None
+            or row.status
+            not in ("failed", "failed_eval", "dependency_failed", "cached_failure")
+            or row.build_status == BuildStatus.CANCELLED
+        ):
+            return
+        cancel_event = self.orchestrator.cancel_events.get(build_id)
+        if cancel_event is not None and cancel_event.is_set():
+            return  # superseded in memory; DB settlement is still catching up
+        project = await self.repo_store.by_id(build.project_id)
+        if project is None:
+            return
+        result = AttributeResult(
+            attr=row.attr,
+            status=AttributeStatus(row.status),
+            job=NixEvalJobError(
+                error=row.error or "", attr=row.attr, attr_path=row.attr.split(".")
+            ),
+            error=row.error,
+            drv_path=row.drv_path,
+            system=row.system,
+        )
+        targets = await builds_q.build_report_targets(self.pool, build_id=build_id)
+        events = [
+            ChangeEvent(
+                repo=repo_info(project),
+                branch=target.branch,
+                commit_sha=target.commit_sha,
+                pr_number=target.pr_number,
             )
+            for target in targets
+        ] or [event_for_build(repo_info(project), build)]
+        try:
+            for event in events:
+                await self.orchestrator.reporter.attribute_failed(
+                    event,
+                    build,
+                    result,
+                    attempt=row.finished_at.isoformat(),
+                    generation=row.status_generation,
+                    attr_prefix=row.attribute_prefix,
+                )
         except Exception as e:
             raise TransientError(
                 str(e), retry_after=getattr(e, "retry_after", None)
@@ -732,6 +859,12 @@ class CIService:
         """Crash recovery: settle already-built attributes, then queue
         reruns for the rest. Builds interrupted mid-eval (no attribute
         rows) re-evaluate via the rerun path."""
+        # Repair a crash between atomic attribute persistence and its queue
+        # hint, including terminal builds whose summary happened to post.
+        for row in await builds_q.reportable_attribute_failures(
+            self.pool, report_limit=self.config.failed_build_report_limit
+        ):
+            await self.request_attribute_report(row.build_id, row.attr)
         settled_effects = await fail_interrupted_effects(self.pool, self._started_at)
         await self._report_interrupted_effects(settled_effects)
         for resumable in await find_unfinished_builds(self.pool):

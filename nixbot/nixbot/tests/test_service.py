@@ -808,6 +808,61 @@ async def test_restart_attribute_while_build_running(
     assert sorted(executor.built) == ["a", "a", "b"]
 
 
+async def test_build_persistence_queues_only_terminal_actionable_failures(
+    service: CIService, git_repo: tuple[Path, str]
+) -> None:
+    """The scheduler callback queues after persistence, while cancelled and
+    explicitly ignored failures stay out of early reporting."""
+    from nixbot.build_scheduler import BuildOutcome  # noqa: PLC0415
+    from nixbot.repos import repo_info  # noqa: PLC0415
+
+    from .test_orchestrator import FakeExecutor  # noqa: PLC0415
+
+    repo, sha = git_repo
+    pool = service.pool
+    project_id = await seed_project(pool, str(repo))
+    build_id = await insert_build(
+        pool, project_id, commit_sha=sha, status="pending", eval_completed=True
+    )
+    jobs = [
+        mk_job("broken"),
+        mk_job("cancelled"),
+        mk_job("ignored").model_copy(update={"extra_value": {"ignoreFailure": True}}),
+    ]
+    await pool.executemany(
+        "INSERT INTO build_attributes "
+        "(build_id, attr, system, status, drv_path) "
+        "VALUES ($1, $2, 'x86_64-linux', 'pending', $3)",
+        [(build_id, job.attr, job.drv_path) for job in jobs],
+    )
+    service.orchestrator.executor = FakeExecutor(
+        outcomes={
+            "broken": BuildOutcome.failure,
+            "cancelled": BuildOutcome.cancelled,
+            "ignored": BuildOutcome.failure,
+        }
+    )
+    service.orchestrator.request_attribute_report = service.request_attribute_report
+    project = await service.repo_store.by_id(project_id)
+    build = await builds_q.get_build(pool, id_=build_id)
+    assert project is not None
+    assert build is not None
+
+    await service.orchestrator.rerun_pending_attributes(repo_info(project), build, jobs)
+
+    items = await pool.fetch(
+        "SELECT payload->>'attr' AS attr FROM work_queue "
+        "WHERE kind = 'attribute-report'"
+    )
+    assert [row["attr"] for row in items] == ["broken"]
+    assert "fake build output" in (
+        await pool.fetchval(
+            "SELECT error FROM build_attributes WHERE build_id = $1 AND attr = 'broken'",
+            build_id,
+        )
+    )
+
+
 # --- cancel of a non-running build ---------------------------------------
 
 
@@ -817,6 +872,149 @@ class RecordingReporter(NullStatusReporter):
 
     async def build_finished(self, event: Any, build: Any, result: BuildResult) -> None:
         self.finished.append((build.id_, result.status, result.generation))
+
+
+class AttributeRecordingReporter(NullStatusReporter):
+    def __init__(self, *, fail_once: bool = False) -> None:
+        self.fail_once = fail_once
+        self.calls = 0
+        self.failures: list[tuple[str, str, str | None, str, int, str]] = []
+        self.finished: list[tuple[str, str | None]] = []
+
+    async def attribute_failed(  # noqa: PLR0913
+        self,
+        event: Any,
+        build: Any,
+        result: Any,
+        *,
+        attempt: str,
+        generation: int,
+        attr_prefix: str = "checks",
+    ) -> None:
+        self.calls += 1
+        if self.fail_once:
+            self.fail_once = False
+            msg = "forge unavailable"
+            raise httpx.ConnectError(msg)
+        self.failures.append(
+            (
+                event.commit_sha,
+                result.attr,
+                result.error,
+                attempt,
+                generation,
+                attr_prefix,
+            )
+        )
+
+    async def build_finished(self, event: Any, build: Any, result: BuildResult) -> None:
+        self.finished.extend((event.commit_sha, item.error) for item in result.results)
+
+
+async def test_attribute_report_hint_is_best_effort_but_preserves_cancellation(
+    service: CIService,
+) -> None:
+    async def broken_enqueue(*args: Any, **kwargs: Any) -> None:
+        msg = "database unavailable"
+        raise RuntimeError(msg)
+
+    service.enqueue_work = broken_enqueue  # type: ignore[method-assign]
+    await service.request_attribute_report(1, "a")
+
+    async def cancelled_enqueue(*args: Any, **kwargs: Any) -> None:
+        raise asyncio.CancelledError
+
+    service.enqueue_work = cancelled_enqueue  # type: ignore[method-assign]
+    with pytest.raises(asyncio.CancelledError):
+        await service.request_attribute_report(1, "a")
+
+
+async def test_attribute_report_reloads_persisted_failure_retries_and_fans_out(
+    service: CIService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pool = service.pool
+    project_id = await seed_project(pool, "http://example/repo")
+    build_id = await insert_build(
+        pool, project_id, commit_sha="pr-sha", status="failed"
+    )
+    await builds_q.record_build_report_target(
+        pool,
+        build_id=build_id,
+        commit_sha="pr-sha",
+        branch="feature",
+        pr_number=7,
+    )
+    await builds_q.record_build_report_target(
+        pool,
+        build_id=build_id,
+        commit_sha="main-sha",
+        branch="main",
+        pr_number=None,
+    )
+    await builds_q.set_build_attribute_prefix(
+        pool, build_id=build_id, attribute_prefix="hydraJobs"
+    )
+    await pool.execute(
+        "INSERT INTO build_attributes "
+        "(build_id, attr, system, drv_path, status, error, finished_at) "
+        "VALUES ($1, 'x86_64-linux.broken', 'x86_64-linux', "
+        "'/nix/store/broken.drv', 'failed', $2, now())",
+        build_id,
+        "error: rich executor diagnostic\nlast line",
+    )
+    reporter = AttributeRecordingReporter(fail_once=True)
+    service.orchestrator.reporter = reporter
+
+    # Startup recovery is intentionally database-wide. Keep this assertion
+    # isolated from reportable rows created concurrently by other xdist workers.
+    reportable_attribute_failures = builds_q.reportable_attribute_failures
+
+    async def reportable_for_this_build(*args: Any, **kwargs: Any) -> list[Any]:
+        return [
+            row
+            for row in await reportable_attribute_failures(*args, **kwargs)
+            if row.build_id == build_id
+        ]
+
+    monkeypatch.setattr(
+        builds_q, "reportable_attribute_failures", reportable_for_this_build
+    )
+
+    await service.recover_unfinished_builds()
+    await service.drain_work()
+
+    assert reporter.calls == 3  # failed delivery, then both durable targets
+    assert {failure[0] for failure in reporter.failures} == {"pr-sha", "main-sha"}
+    assert all(
+        "rich executor diagnostic" in (failure[2] or "")
+        for failure in reporter.failures
+    )
+    assert all(failure[5] == "hydraJobs" for failure in reporter.failures)
+    attempts = await pool.fetchval(
+        "SELECT max(attempts) FROM work_queue WHERE kind = 'attribute-report'"
+    )
+    assert attempts == 1
+
+    # Final/recovery reconciliation also uses persisted rich rows and durable
+    # targets; it does not depend on the live linked-events list.
+    await pool.execute(
+        "UPDATE builds SET status = 'failed', status_generation = 1 WHERE id = $1",
+        build_id,
+    )
+    await service._re_report(build_id)  # noqa: SLF001
+    assert set(reporter.finished) == {
+        ("pr-sha", "error: rich executor diagnostic\nlast line"),
+        ("main-sha", "error: rich executor diagnostic\nlast line"),
+    }
+
+    # Supersession may be visible in memory just before DB cancellation
+    # settlement; do not publish a stale red in that window.
+    cancel_event = asyncio.Event()
+    cancel_event.set()
+    service.orchestrator.cancel_events[build_id] = cancel_event
+    await service.request_attribute_report(build_id, "x86_64-linux.broken")
+    await service.drain_work()
+    assert reporter.calls == 3
 
 
 async def test_cancel_not_running_posts_forge_status(service: CIService) -> None:

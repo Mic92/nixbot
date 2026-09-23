@@ -42,6 +42,16 @@ async def attach_linked_event(
     attach for the final status fan-out."""
     o.linked_events.setdefault(build.id_, []).append(event)
     await o.reporter.build_started(event, build)
+    # A late attachment should see failures that already completed, without
+    # waiting for the rest of the shared build.
+    for row in await builds_q.attribute_statuses(o.pool, build_id=build.id_):
+        if row.status in (
+            "failed",
+            "failed_eval",
+            "dependency_failed",
+            "cached_failure",
+        ):
+            await o.request_attribute_report(build.id_, row.attr)
     # The build may have turned terminal between the record fetch
     # and the attach: the final fan-out already happened and would
     # never cover this event. Replay the final status instead.
@@ -156,6 +166,7 @@ async def reuse_terminal_build(  # noqa: PLR0913
         # Redelivered out-of-order event: superseding the in-flight
         # newer build with this old result would cancel it.
         return
+    await o.record_report_target(event, build)
     o.canceller.complete(build.id_)
     if build.status == BuildStatus.SUCCEEDED:
         try:

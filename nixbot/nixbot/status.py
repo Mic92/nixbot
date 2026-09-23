@@ -27,8 +27,10 @@ Target URLs point at the service's own URL scheme
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
+import weakref
 from collections import OrderedDict
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -65,6 +67,7 @@ POSTED_GENERATIONS_MAX = 1024
 FAILED_STATUS_STATES = frozenset(
     {"failed", "failed_eval", "dependency_failed", "cached_failure", "cancelled"}
 )
+EARLY_FAILURE_STATES = FAILED_STATUS_STATES - {"cancelled"}
 
 # Statuses for which no per-attribute build log is ever written: eval
 # failed before a build started, or the build was skipped because the
@@ -320,6 +323,23 @@ class FailedStatusStorage(Protocol):
 
     async def clear(self, revision: str, status_name: str) -> None: ...
 
+    async def reserve(
+        self,
+        revision: str,
+        status_name: str,
+        report_limit: int,
+        *,
+        always_allow: bool = False,
+    ) -> bool: ...
+
+    async def delivered_attempt(
+        self, revision: str, status_name: str
+    ) -> str | None: ...
+
+    async def acknowledge_attempt(
+        self, revision: str, status_name: str, attempt: str
+    ) -> None: ...
+
 
 class FailedStatusStore:
     """Port of db/failed_status.py onto the service schema."""
@@ -341,6 +361,53 @@ class FailedStatusStore:
     async def clear(self, revision: str, status_name: str) -> None:
         await q.clear_failed_status(
             self.pool, revision=revision, status_name=status_name
+        )
+
+    async def reserve(
+        self,
+        revision: str,
+        status_name: str,
+        report_limit: int,
+        *,
+        always_allow: bool = False,
+    ) -> bool:
+        # Separate statements inside the lock are intentional: under READ
+        # COMMITTED each gets a fresh snapshot after a concurrent contender
+        # releases the advisory lock.
+        async with self.pool.acquire() as conn, conn.transaction():
+            await q.lock_failure_report_revision(conn, revision=revision)
+            if (
+                await q.failure_report_reserved(
+                    conn, revision=revision, status_name=status_name
+                )
+                is not None
+            ):
+                return True
+            count = await q.failure_report_reservation_count(conn, revision=revision)
+            if not always_allow and (count or 0) >= report_limit:
+                return False
+            await q.upsert_failure_report_reservation(
+                conn,
+                revision=revision,
+                status_name=status_name,
+                timestamp=datetime.now(tz=UTC).timestamp(),
+            )
+            return True
+
+    async def delivered_attempt(self, revision: str, status_name: str) -> str | None:
+        return await q.failure_report_delivered_attempt(
+            self.pool, revision=revision, status_name=status_name
+        )
+
+    async def acknowledge_attempt(
+        self, revision: str, status_name: str, attempt: str
+    ) -> None:
+        await q.acknowledge_failure_report_attempt(
+            self.pool,
+            revision=revision,
+            status_name=status_name,
+            delivered_attempt=attempt,
+            timestamp=datetime.now(tz=UTC).timestamp(),
         )
 
 
@@ -420,6 +487,18 @@ class ForgeStatusReporter:
         # Bounded LRU: stale-post races only matter around a build's
         # final re-aggregation, so old entries are safe to evict.
         self._posted_generations: OrderedDict[int, int] = OrderedDict()
+        # Early failures, restart-pending posts, and final reconciliation for a
+        # build must reach the forge in database-generation order.
+        self._report_locks: weakref.WeakValueDictionary[int, asyncio.Lock] = (
+            weakref.WeakValueDictionary()
+        )
+
+    def _report_lock(self, build_id: int) -> asyncio.Lock:
+        lock = self._report_locks.get(build_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._report_locks[build_id] = lock
+        return lock
 
     def build_url(self, event: ChangeEvent, build: BuildRecord) -> str:
         return f"{self.base_url}/repos/{event.repo.forge}/{event.repo.name}/builds/{build.number}"
@@ -436,10 +515,10 @@ class ForgeStatusReporter:
         text: str | None = None,
         propagate: bool = False,
         force_new: bool = False,
-    ) -> None:
+    ) -> bool:
         poster = self.posters.get(event.repo.forge)
         if poster is None:
-            return
+            return False
         try:
             await poster.post(
                 event.repo.owner,
@@ -464,6 +543,7 @@ class ForgeStatusReporter:
                 "failed to post commit status",
                 extra={"forge": event.repo.forge},
             )
+            return False
         except (httpx.HTTPError, ForgeError, StatusPostError):
             # Transient failures must not propagate into the
             # orchestrator task and leave builds stuck — except the
@@ -474,6 +554,9 @@ class ForgeStatusReporter:
                 "failed to post commit status",
                 extra={"build_id": build.id_, "context": context},
             )
+            return False
+        else:
+            return True
 
     async def build_started(self, event: ChangeEvent, build: BuildRecord) -> None:
         await self._post(
@@ -596,6 +679,12 @@ class ForgeStatusReporter:
     async def build_finished(
         self, event: ChangeEvent, build: BuildRecord, result: BuildResult
     ) -> None:
+        async with self._report_lock(build.id_):
+            await self._build_finished_locked(event, build, result)
+
+    async def _build_finished_locked(
+        self, event: ChangeEvent, build: BuildRecord, result: BuildResult
+    ) -> None:
         generation = result.generation
         results = result.results
         attr_statuses = result.attr_statuses
@@ -606,10 +695,7 @@ class ForgeStatusReporter:
                 extra={"build_id": build.id_, "generation": generation},
             )
             return
-        self._posted_generations[build.id_] = generation
-        self._posted_generations.move_to_end(build.id_)
-        while len(self._posted_generations) > POSTED_GENERATIONS_MAX:
-            self._posted_generations.popitem(last=False)
+        self._remember_generation(build.id_, generation)
 
         # results may be a rerun subset. attr_statuses is the whole build.
         detail = {r.attr: r for r in results}
@@ -624,10 +710,27 @@ class ForgeStatusReporter:
         await self._post_summary(event, build, result.status, counts, statuses)
 
     async def build_restarted(
-        self, event: ChangeEvent, build: BuildRecord, attr: str | None
+        self,
+        event: ChangeEvent,
+        build: BuildRecord,
+        attr: str | None,
+        attr_prefix: str = "checks",
     ) -> None:
         """Flip the restarted checks to pending before the async rebuild
         starts. force_new so GitHub renders them as re-running."""
+        async with self._report_lock(build.id_):
+            if build.status_generation < self._posted_generations.get(build.id_, 0):
+                return
+            self._remember_generation(build.id_, build.status_generation)
+            await self._build_restarted_locked(event, build, attr, attr_prefix)
+
+    async def _build_restarted_locked(
+        self,
+        event: ChangeEvent,
+        build: BuildRecord,
+        attr: str | None,
+        attr_prefix: str,
+    ) -> None:
         if attr is None:
             await self._post(
                 event,
@@ -642,6 +745,7 @@ class ForgeStatusReporter:
                 event.repo.forge,
                 event.repo.name,
                 attr,
+                attr_prefix,
                 context_prefix=self.context_prefix,
             )
             await self._post(
@@ -662,6 +766,55 @@ class ForgeStatusReporter:
             force_new=True,
         )
 
+    async def attribute_failed(  # noqa: PLR0913
+        self,
+        event: ChangeEvent,
+        build: BuildRecord,
+        result: AttributeResult,
+        *,
+        attempt: str,
+        generation: int,
+        attr_prefix: str = "checks",
+    ) -> None:
+        """Promptly publish one persisted terminal failure.
+
+        ``attempt`` identifies the persisted completion for diagnostics and
+        logging; generation plus the per-build lock fences restart races.
+        """
+        if result.status.value not in EARLY_FAILURE_STATES:
+            return
+        async with self._report_lock(build.id_):
+            if generation < self._posted_generations.get(build.id_, 0):
+                logger.info(
+                    "dropping stale attribute status post",
+                    extra={
+                        "build_id": build.id_,
+                        "attr": result.attr,
+                        "attempt": attempt,
+                        "generation": generation,
+                    },
+                )
+                return
+            self._remember_generation(build.id_, generation)
+            await self._report_attribute_failure(
+                event,
+                build,
+                result.attr,
+                result.status.value,
+                result,
+                attr_prefix,
+                repost_existing=False,
+                attempt=attempt,
+            )
+
+    def _remember_generation(self, build_id: int, generation: int) -> None:
+        self._posted_generations[build_id] = max(
+            generation, self._posted_generations.get(build_id, 0)
+        )
+        self._posted_generations.move_to_end(build_id)
+        while len(self._posted_generations) > POSTED_GENERATIONS_MAX:
+            self._posted_generations.popitem(last=False)
+
     async def _post_attribute_statuses(
         self,
         event: ChangeEvent,
@@ -676,7 +829,6 @@ class ForgeStatusReporter:
         previously_failed = await self.failed_statuses.get_failed(revision)
 
         counts = {"failed": 0, "succeeded": 0, "cancelled": 0}
-        reported = 0
         for attr, status in statuses.items():
             counts[_count_key(status)] += 1
             context = attr_status_context(
@@ -691,36 +843,89 @@ class ForgeStatusReporter:
                 if context in previously_failed and result is None:
                     # Already posted with error detail.
                     continue
-                if context not in previously_failed:
-                    # Only new failures consume the report budget;
-                    # previously-failed contexts always re-post so they
-                    # can later flip to success.
-                    if reported >= self.failed_build_report_limit:
-                        continue
-                    reported += 1
-                await self.failed_statuses.mark_failed(revision, context)
-                error = result.error if result else None
-                headline = (
-                    result.failure.headline()
-                    if result and result.failure
-                    else _error_headline(error or "")
-                )
-                await self._post(
+                await self._report_attribute_failure(
                     event,
                     build,
-                    context,
-                    StatusState.failure,
-                    headline or status,
-                    attr=attr,
-                    text=_fence(error) if error else None,
+                    attr,
+                    status,
+                    result,
+                    attr_prefix,
+                    repost_existing=True,
+                    attempt=None,
                 )
             elif context in previously_failed:
                 # Success-flip for a previously failed status.
-                await self.failed_statuses.clear(revision, context)
-                await self._post(
-                    event, build, context, StatusState.success, "succeeded", attr=attr
+                posted = await self._post(
+                    event,
+                    build,
+                    context,
+                    StatusState.success,
+                    "succeeded",
+                    attr=attr,
+                    propagate=True,
                 )
+                if posted:
+                    await self.failed_statuses.clear(revision, context)
         return counts
+
+    async def _report_attribute_failure(  # noqa: PLR0913
+        self,
+        event: ChangeEvent,
+        build: BuildRecord,
+        attr: str,
+        status: str,
+        result: AttributeResult | None,
+        attr_prefix: str,
+        *,
+        repost_existing: bool,
+        attempt: str | None,
+    ) -> None:
+        """Shared early/final failure delivery with durable budget and ack."""
+        revision = event.commit_sha
+        context = attr_status_context(
+            event.repo.forge,
+            event.repo.name,
+            attr,
+            attr_prefix,
+            context_prefix=self.context_prefix,
+        )
+        previously_failed = await self.failed_statuses.get_failed(revision)
+        if (
+            not repost_existing
+            and attempt is not None
+            and await self.failed_statuses.delivered_attempt(revision, context)
+            == attempt
+        ):
+            return
+        if not await self.failed_statuses.reserve(
+            revision,
+            context,
+            self.failed_build_report_limit,
+            always_allow=context in previously_failed,
+        ):
+            return
+        error = result.error if result else None
+        headline = (
+            result.failure.headline()
+            if result and result.failure
+            else _error_headline(error or "")
+        )
+        posted = await self._post(
+            event,
+            build,
+            context,
+            StatusState.failure,
+            headline or status,
+            attr=attr,
+            text=_fence(error) if error else None,
+            propagate=True,
+        )
+        if posted:
+            await self.failed_statuses.mark_failed(revision, context)
+            if attempt is not None:
+                await self.failed_statuses.acknowledge_attempt(
+                    revision, context, attempt
+                )
 
     async def _post_summary(
         self,
