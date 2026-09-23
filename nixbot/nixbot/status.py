@@ -579,7 +579,11 @@ class ForgeStatusReporter:
     async def terminal_eval_finished(
         self, event: ChangeEvent, build: BuildRecord, report: EvalReport
     ) -> None:
-        await self._eval_finished(event, build, report, terminal=True)
+        async with self._report_lock(build.id_):
+            if build.status_generation < self._posted_generations.get(build.id_, 0):
+                return
+            self._remember_generation(build.id_, build.status_generation)
+            await self._eval_finished(event, build, report, terminal=True)
 
     async def _eval_finished(
         self,
@@ -633,14 +637,18 @@ class ForgeStatusReporter:
     async def terminal_eval_cancelled(
         self, event: ChangeEvent, build: BuildRecord
     ) -> None:
-        await self._post(
-            event,
-            build,
-            f"{self.context_prefix}/nix-eval",
-            StatusState.error,
-            "build cancelled",
-            propagate=True,
-        )
+        async with self._report_lock(build.id_):
+            if build.status_generation < self._posted_generations.get(build.id_, 0):
+                return
+            self._remember_generation(build.id_, build.status_generation)
+            await self._post(
+                event,
+                build,
+                f"{self.context_prefix}/nix-eval",
+                StatusState.error,
+                "build cancelled",
+                propagate=True,
+            )
 
     async def effect_started(
         self, event: ChangeEvent, build: BuildRecord, name: str

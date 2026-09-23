@@ -919,6 +919,7 @@ class TargetRecordingReporter(AttributeRecordingReporter):
         self.restarted: list[tuple[str, str]] = []
         self.final_results: list[tuple[str, BuildResult]] = []
         self.eval_results: list[tuple[str, bool]] = []
+        self.eval_reports: list[tuple[str, EvalReport]] = []
         self.eval_cancellations: list[str] = []
 
     async def build_restarted(
@@ -937,6 +938,7 @@ class TargetRecordingReporter(AttributeRecordingReporter):
         self, event: Any, build: Any, report: EvalReport
     ) -> None:
         self.eval_results.append((event.commit_sha, report.success))
+        self.eval_reports.append((event.commit_sha, report))
 
     async def eval_cancelled(self, event: Any, build: Any) -> None:
         self.eval_cancellations.append(event.commit_sha)
@@ -1117,6 +1119,118 @@ async def test_terminal_eval_api_failure_blocks_ack_until_retry(
         "SELECT reported_generation FROM build_reporting WHERE build_id = $1",
         build_id,
     ) == 0
+
+
+async def test_terminal_report_treats_partial_eval_with_attribute_as_failed(
+    service: CIService,
+) -> None:
+    pool = service.pool
+    project_id = await seed_project(pool, "http://example/repo")
+    build_id = await insert_build(
+        pool,
+        project_id,
+        commit_sha="partial-sha",
+        status="failed",
+        error="evaluation crashed",
+        eval_completed=False,
+    )
+    await builds_q.record_build_report_target(
+        pool,
+        build_id=build_id,
+        commit_sha="partial-sha",
+        branch="main",
+        pr_number=None,
+    )
+    await pool.execute(
+        "UPDATE builds SET eval_warnings = '[\"deprecated input\"]'::jsonb, "
+        "eval_duration_ms = 1234 WHERE id = $1",
+        build_id,
+    )
+    await pool.execute(
+        "INSERT INTO build_attributes (build_id, attr, status, finished_at) "
+        "VALUES ($1, 'already-emitted', 'dependency_failed', now())",
+        build_id,
+    )
+    reporter = TargetRecordingReporter()
+    service.orchestrator.reporter = reporter
+
+    await service.request_build_report(build_id)
+
+    assert reporter.eval_cancellations == []
+    assert reporter.eval_reports == [
+        (
+            "partial-sha",
+            EvalReport(
+                success=False,
+                warnings=["deprecated input"],
+                error="evaluation crashed",
+                duration_ms=1234,
+            ),
+        )
+    ]
+
+
+async def test_terminal_report_distinguishes_completed_and_incomplete_cancellation(
+    service: CIService,
+) -> None:
+    pool = service.pool
+    project_id = await seed_project(pool, "http://example/repo")
+    build_id = await insert_build(
+        pool,
+        project_id,
+        commit_sha="cancelled-sha",
+        status="cancelled",
+        eval_completed=True,
+    )
+    await builds_q.record_build_report_target(
+        pool,
+        build_id=build_id,
+        commit_sha="cancelled-sha",
+        branch="main",
+        pr_number=None,
+    )
+    await pool.execute(
+        "UPDATE builds SET eval_warnings = '[\"deprecated input\"]'::jsonb, "
+        "eval_duration_ms = 4321 WHERE id = $1",
+        build_id,
+    )
+    reporter = TargetRecordingReporter()
+    service.orchestrator.reporter = reporter
+
+    await service.request_build_report(build_id)
+
+    assert reporter.eval_cancellations == []
+    assert reporter.eval_reports == [
+        (
+            "cancelled-sha",
+            EvalReport(
+                success=True,
+                warnings=["deprecated input"],
+                duration_ms=4321,
+            ),
+        )
+    ]
+
+    incomplete_id = await insert_build(
+        pool,
+        project_id,
+        number=2,
+        commit_sha="cancelled-during-eval-sha",
+        status="cancelled",
+        eval_completed=False,
+    )
+    await builds_q.record_build_report_target(
+        pool,
+        build_id=incomplete_id,
+        commit_sha="cancelled-during-eval-sha",
+        branch="main",
+        pr_number=None,
+    )
+
+    await service.request_build_report(incomplete_id)
+
+    assert reporter.eval_cancellations == ["cancelled-during-eval-sha"]
+    assert len(reporter.eval_reports) == 1
 
 
 async def test_late_target_crash_recovers_terminal_eval_and_final(

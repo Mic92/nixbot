@@ -797,6 +797,9 @@ class CIService:
             # The wrapper would enqueue a competing item on failure.
             reporter = reporter.inner
         try:
+            eval_warnings = (
+                json.loads(build.eval_warnings) if build.eval_warnings else []
+            )
             targets = await builds_q.build_report_targets(self.pool, build_id=build_id)
             events = [
                 ChangeEvent(
@@ -808,14 +811,25 @@ class CIService:
                 for target in targets
             ] or [event_for_build(repo_info(project), build)]
             for event in events:
-                if build.status == BuildStatus.CANCELLED:
+                if build.eval_completed:
+                    await reporter.terminal_eval_finished(
+                        event,
+                        build,
+                        EvalReport(
+                            success=True,
+                            warnings=eval_warnings,
+                            duration_ms=build.eval_duration_ms,
+                        ),
+                    )
+                elif build.status == BuildStatus.CANCELLED:
                     await reporter.terminal_eval_cancelled(event, build)
                 else:
                     await reporter.terminal_eval_finished(
                         event,
                         build,
                         EvalReport(
-                            success=build.status == BuildStatus.SUCCEEDED or bool(rows),
+                            success=False,
+                            warnings=eval_warnings,
                             error=build.error,
                             duration_ms=build.eval_duration_ms,
                         ),

@@ -748,6 +748,45 @@ async def test_restart_generation_orders_pending_after_in_flight_failure() -> No
     ]
 
 
+async def test_terminal_eval_generation_orders_restart_and_new_completion() -> None:
+    reporter, poster, _ = make_reporter()
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    original = poster.post
+
+    async def blocked_post(*args: object, **kwargs: object) -> None:
+        entered.set()
+        await release.wait()
+        await cast("Any", original)(*args, **kwargs)
+
+    poster.post = blocked_post  # type: ignore[method-assign]
+    old = replace(BUILD, status="failed", status_generation=0)
+    terminal = asyncio.create_task(
+        reporter.terminal_eval_finished(EVENT, old, EvalReport(False))
+    )
+    await entered.wait()
+
+    new = replace(BUILD, status="pending", status_generation=1)
+    restarted = asyncio.create_task(reporter.build_restarted(EVENT, new, None))
+    await asyncio.sleep(0)
+    assert not restarted.done()
+
+    release.set()
+    await terminal
+    await restarted
+    new = replace(new, status="succeeded")
+    await reporter.terminal_eval_finished(EVENT, new, EvalReport(True))
+    await reporter.build_finished(EVENT, new, BuildResult("succeeded", 1, []))
+
+    # The generation-zero report had loaded before the restart but resumed
+    # only after generation one was green. It must not overwrite that result.
+    await reporter.terminal_eval_finished(EVENT, old, EvalReport(False))
+    await reporter.terminal_eval_cancelled(EVENT, old)
+    assert [
+        post.state for post in poster.posts if post.context == "nixbot/nix-eval"
+    ] == [StatusState.failure, StatusState.pending, StatusState.success]
+
+
 async def test_summary_counts_use_all_attribute_statuses() -> None:
     """Reruns pass only the re-run subset as results. The summary
     description must still cover the whole build."""
