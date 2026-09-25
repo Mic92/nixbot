@@ -29,11 +29,9 @@ import json
 import logging
 import os
 import re
-import tempfile
 import time
 from collections import OrderedDict, deque
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
@@ -44,9 +42,11 @@ from .ansi import ANSI_TOKEN_RE, strip_ansi
 from .build_scheduler import BuildFailure, BuildOutcome, DrvFailure
 from .gcroots import safe_attr_filename
 from .logstore import LogContainerWriter
+from .store_token import store_token_file
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
+    from pathlib import Path
 
     from .config import BuildStoreConfig
     from .models import NixEvalJobSuccess
@@ -405,14 +405,6 @@ def build_nix_command(
         ),
         *build_installables(job),
     ]
-
-
-def _write_token(path: Path, token: str) -> None:
-    # The store re-reads the file per call; rename keeps it whole.
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".token.")
-    with os.fdopen(fd, "w") as f:
-        f.write(token)
-    Path(tmp).replace(path)
 
 
 # nix names failures only in prose: "build of" (remote) / "builder for"
@@ -891,23 +883,8 @@ class NixBuildExecutor:
         if issuer is None or identity is None:
             msg = "build_store.oidc_audience needs workload identity"
             raise RuntimeError(msg)
-        audience = store.oidc_audience
-
-        async def refresh(path: Path) -> None:
-            while True:
-                await asyncio.sleep(max(issuer.token_ttl * 2 / 3, 1))
-                _write_token(path, issuer.mint(identity, audience).token)
-
-        with tempfile.TemporaryDirectory(prefix="nixbot-token-") as token_dir:
-            path = Path(token_dir) / "token"
-            _write_token(path, issuer.mint(identity, audience).token)
-            task = asyncio.create_task(refresh(path))
-            try:
-                yield {**os.environ, store.credential_env: str(path)}
-            finally:
-                task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await task
+        async with store_token_file(issuer, identity, store.oidc_audience) as path:
+            yield {**os.environ, store.credential_env: str(path)}
 
     async def _run_once(  # noqa: PLR0913
         self,

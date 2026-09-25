@@ -122,6 +122,10 @@ with the old key.
 example against a nix-grpc-store farm. Outputs stay in that store, so it cannot
 be combined with `uploaders`.
 
+The evaluation uses it too: `nix-eval-jobs` runs with `NIX_REMOTE=<url>` and
+`--eval-store daemon`, so import-from-derivation builds run in the store while
+the evaluated derivations stay in the local daemon.
+
 With `buildStore.oidcAudience` set, nixbot writes an ID token for that audience
 to a private file per build, refreshes it every two thirds of `tokenTtl`, and
 points nix at it through the environment variable `buildStore.credentialEnv`

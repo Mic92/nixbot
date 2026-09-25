@@ -79,7 +79,7 @@ if TYPE_CHECKING:
     from .repo_config import BranchConfig
     from .running_effect import RunningEffect
     from .upload import Uploader
-    from .workload_identity import EffectIdentity
+    from .workload_identity import EffectIdentity, IdentityIssuer
 
     GcrootRegistrar = Callable[[Path, str, str, str], Awaitable[None]]
     OutputWriter = Callable[[Path, str, str, str, str, str, str], Path]
@@ -127,6 +127,8 @@ class Orchestrator:
     repos: RepoManager
     eval_runner: EvalRunnerLike
     executor: AttributeExecutor
+    # Mints the eval's build store tokens.
+    identity_issuer: IdentityIssuer | None = None
     reporter: StatusReporter = field(default_factory=NullStatusReporter)
     uploaders: list[Uploader] = field(default_factory=list)
     # Project id -> cache. Scoped so one project's failures cannot

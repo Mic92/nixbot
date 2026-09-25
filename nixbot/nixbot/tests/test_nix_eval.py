@@ -134,6 +134,40 @@ def test_sandbox_skips_missing_daemon_socket(tmp_path: Path) -> None:
     assert "NIX_REMOTE" not in joined
 
 
+def test_eval_command_build_store(tmp_path: Path) -> None:
+    settings = EvalSettings(
+        gc_roots_dir=tmp_path / "gcroots",
+        build_store_url="grpc://farm.example.com:50051",
+    )
+    cmd = build_eval_command(tmp_path, BranchConfig(), settings)
+    assert cmd[cmd.index("--eval-store") + 1] == "daemon"
+
+    settings = EvalSettings(gc_roots_dir=tmp_path / "gcroots")
+    assert "--eval-store" not in build_eval_command(tmp_path, BranchConfig(), settings)
+
+
+def test_sandbox_command_build_store(tmp_path: Path) -> None:
+    socket = tmp_path / "daemon-socket"
+    socket.touch()
+    token = tmp_path / "token"
+    token.write_text("jwt")
+    settings = EvalSettings(
+        gc_roots_dir=tmp_path / "gcroots",
+        nix_daemon_socket=socket,
+        build_store_url="grpc://farm.example.com:50051",
+        build_store_token_file=token,
+        build_store_credential_env="NIX_GRPC_TOKEN_FILE",
+    )
+    cmd = build_sandbox_command(tmp_path / "wt", settings)
+    joined = " ".join(cmd)
+    assert "--setenv NIX_REMOTE grpc://farm.example.com:50051" in joined
+    assert "--setenv NIX_REMOTE daemon" not in joined
+    assert f"--ro-bind {token} {token}" in joined
+    assert f"--setenv NIX_GRPC_TOKEN_FILE {token}" in joined
+    # --eval-store daemon still needs the socket.
+    assert f"--ro-bind {socket} {socket}" in joined
+
+
 def test_full_command_composition(tmp_path: Path) -> None:
     settings = EvalSettings(gc_roots_dir=tmp_path, sandbox=True, systemd_scope=True)
     cmd = build_full_command(tmp_path / "wt", BranchConfig(), settings)

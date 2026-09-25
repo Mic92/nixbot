@@ -98,6 +98,10 @@ class EvalSettings:
     eval_systems: list[str] = field(default_factory=list)
     # See Config.legacy_attr_prefix.
     legacy_attr_prefix: bool = False
+    # IFD builds run here; evaluation stays in the local daemon.
+    build_store_url: str | None = None
+    build_store_token_file: Path | None = None
+    build_store_credential_env: str = "NIX_GRPC_TOKEN_FILE"
 
     @property
     def memory_limit_mib(self) -> int:
@@ -196,6 +200,7 @@ def build_eval_command(
         str(settings.gc_roots_dir),
         "--force-recurse",
         "--check-cache-status",
+        *(["--eval-store", "daemon"] if settings.build_store_url else []),
         *select_args,
         *settings.extra_args,
         *(["--show-trace"] if settings.show_trace else []),
@@ -251,10 +256,11 @@ def build_sandbox_command(worktree_path: Path, settings: EvalSettings) -> list[s
             "--ro-bind",
             str(settings.nix_daemon_socket),
             str(settings.nix_daemon_socket),
-            # The db bind is read-only. Always go through the daemon.
+            # The db bind is read-only, so use the daemon; with a build
+            # store it only holds the evaluation.
             "--setenv",
             "NIX_REMOTE",
-            "daemon",
+            settings.build_store_url or "daemon",
         ]
     else:
         # Single-user nix (no daemon): the evaluator writes the store
@@ -263,6 +269,16 @@ def build_sandbox_command(worktree_path: Path, settings: EvalSettings) -> list[s
             "--bind",
             "/nix",
             "/nix",
+        ]
+    if settings.build_store_token_file is not None:
+        token = str(settings.build_store_token_file)
+        cmd += [
+            "--ro-bind",
+            token,
+            token,
+            "--setenv",
+            settings.build_store_credential_env,
+            token,
         ]
     cmd += [
         "--bind",

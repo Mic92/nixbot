@@ -37,6 +37,7 @@ from .models import CacheStatus, NixEvalJobSuccess
 from .nix_eval import EvalError, EvalResult, EvalSettings
 from .post_build import build_props, run_post_build_steps
 from .repo_config import BranchConfig
+from .store_token import store_token_file
 from .workload_identity import identity_from_event
 
 if TYPE_CHECKING:
@@ -361,13 +362,45 @@ async def _evaluate(  # noqa: PLR0913
     async with o.eval_slots:
         await db.set_build_status(o.pool, build.id_, BuildStatus.EVALUATING)
         await _prefetch_inputs(o, build, worktree_path, branch_config, credentials)
-        return await o.eval_runner.run(
-            worktree_path,
-            branch_config,
-            _eval_settings(o, event, build, credentials),
-            on_jobs=record_job_batch,
-            on_stderr_line=record_stderr_line,
+        settings = _eval_settings(o, event, build, credentials)
+        async with contextlib.AsyncExitStack() as stack:
+            settings = await _with_build_store(o, event, build, settings, stack)
+            return await o.eval_runner.run(
+                worktree_path,
+                branch_config,
+                settings,
+                on_jobs=record_job_batch,
+                on_stderr_line=record_stderr_line,
+            )
+
+
+async def _with_build_store(
+    o: Orchestrator,
+    event: ChangeEvent,
+    build: BuildRecord,
+    settings: EvalSettings,
+    stack: contextlib.AsyncExitStack,
+) -> EvalSettings:
+    """Send IFD builds to the build store, authenticated like attribute builds."""
+    store = o.config.build_store
+    if store is None:
+        return settings
+    settings = dataclasses.replace(
+        settings,
+        build_store_url=store.url,
+        build_store_credential_env=store.credential_env,
+    )
+    issuer = o.identity_issuer
+    if store.oidc_audience is None or issuer is None:
+        return settings
+    token_file = await stack.enter_async_context(
+        store_token_file(
+            issuer,
+            identity_from_event(event, "build", build.id_),
+            store.oidc_audience,
         )
+    )
+    return dataclasses.replace(settings, build_store_token_file=token_file)
 
 
 async def _run_build_inner(

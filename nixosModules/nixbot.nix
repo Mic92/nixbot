@@ -298,7 +298,8 @@ in
         example = "grpc://nix-store.example.com:50051?system=x86_64-linux";
         description = ''
           Build in this remote store (`nix build --store`) instead of the
-          local one. Outputs stay there, so this cannot be combined with
+          local one, including import-from-derivation builds during
+          evaluation. Outputs stay there, so this cannot be combined with
           {option}`uploaders`.
         '';
       };
