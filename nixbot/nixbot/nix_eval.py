@@ -272,10 +272,13 @@ def build_sandbox_command(worktree_path: Path, settings: EvalSettings) -> list[s
         ]
     if settings.build_store_token_file is not None:
         token = str(settings.build_store_token_file)
+        # Binding the file would pin its first inode, but refreshes rename a
+        # new file into place.
+        token_dir = str(settings.build_store_token_file.parent)
         cmd += [
             "--ro-bind",
-            token,
-            token,
+            token_dir,
+            token_dir,
             "--setenv",
             settings.build_store_credential_env,
             token,

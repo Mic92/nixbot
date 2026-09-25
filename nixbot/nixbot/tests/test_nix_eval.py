@@ -9,6 +9,7 @@ import asyncio
 import json
 import os
 import shutil
+import subprocess
 from typing import TYPE_CHECKING
 
 import pytest
@@ -33,6 +34,7 @@ from nixbot.nix_eval import (
     build_sandbox_command,
 )
 from nixbot.repo_config import BranchConfig
+from nixbot.store_token import write_token
 
 from .support import git, init_upstream
 
@@ -162,7 +164,7 @@ def test_sandbox_command_build_store(tmp_path: Path) -> None:
     joined = " ".join(cmd)
     assert "--setenv NIX_REMOTE grpc://farm.example.com:50051" in joined
     assert "--setenv NIX_REMOTE daemon" not in joined
-    assert f"--ro-bind {token} {token}" in joined
+    assert f"--ro-bind {tmp_path} {tmp_path}" in joined
     assert f"--setenv NIX_GRPC_TOKEN_FILE {token}" in joined
     # --eval-store daemon still needs the socket.
     assert f"--ro-bind {socket} {socket}" in joined
@@ -785,3 +787,35 @@ async def test_eval_fails_cleanly_on_line_over_stream_limit(
     )
     with pytest.raises(EvalError):
         await EvalRunner().run(tmp_path, BranchConfig(), settings)
+
+
+@pytest.mark.skipif(shutil.which("bwrap") is None, reason="needs bwrap")
+def test_sandbox_sees_refreshed_token(tmp_path: Path) -> None:
+    token_dir = tmp_path / "tokens"
+    token_dir.mkdir()
+    token = token_dir / "token"
+    write_token(token, "old")
+    settings = EvalSettings(
+        gc_roots_dir=tmp_path / "gcroots",
+        nix_daemon_socket=tmp_path / "daemon-socket",
+        build_store_url="grpc://farm.example.com:50051",
+        build_store_token_file=token,
+    )
+    settings.nix_daemon_socket.touch()
+    settings.gc_roots_dir.mkdir()
+    (tmp_path / "wt").mkdir()
+    cmd = build_sandbox_command(tmp_path / "wt", settings)
+    sh = shutil.which("sh")
+    assert sh is not None
+    proc = subprocess.Popen(  # noqa: S603
+        [*cmd, sh, "-c", f"cat {token}; echo; read -r _; cat {token}"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    assert proc.stdout is not None
+    assert proc.stdin is not None
+    assert proc.stdout.readline() == "old\n"
+    write_token(token, "new")
+    out, _ = proc.communicate("go\n", timeout=30)
+    assert out == "new"
