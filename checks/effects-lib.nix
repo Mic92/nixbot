@@ -4,9 +4,14 @@
 let
   inherit (pkgs) lib;
   effects = import ../herculesCI/effects-lib.nix { inherit pkgs; };
+  effect = effects.mkEffect {
+    priorCheckScript = "echo prior >>$TMPDIR/log; false";
+    putStateScript = "echo put >>$TMPDIR/log";
+    effectCheckScript = "echo check >>$TMPDIR/log";
+  };
   hook = lib.findFirst (
     p: lib.getName p == "hercules-ci-effect-sh"
-  ) (throw "mkEffect has no setup hook") (effects.mkEffect { }).nativeBuildInputs;
+  ) (throw "mkEffect has no setup hook") effect.nativeBuildInputs;
 in
 pkgs.runCommand "effects-lib-shell-helpers"
   {
@@ -41,5 +46,17 @@ pkgs.runCommand "effects-lib-shell-helpers"
     # getStateFile/putStateFile authenticate with the run's task token.
     initHerculesCIAPI
     [[ $(cat "$herculesCIHeaders") == "Authorization: Bearer task-token" ]]
+
+    # Phases: a failing prior check does not stop the effect, and state is
+    # uploaded once.
+    runHook() { :; }
+    priorCheckScript=${lib.escapeShellArg effect.priorCheckScript}
+    putStateScript=${lib.escapeShellArg effect.putStateScript}
+    effectCheckScript=${lib.escapeShellArg effect.effectCheckScript}
+    eval ${lib.escapeShellArg effect.priorCheckPhase}
+    eval ${lib.escapeShellArg effect.putStatePhase}
+    eval ${lib.escapeShellArg effect.putStatePhase}
+    eval ${lib.escapeShellArg effect.effectCheckPhase}
+    [[ $(cat "$TMPDIR/log") == $'prior\nput\ncheck' ]]
     touch $out
   ''

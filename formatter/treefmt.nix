@@ -58,7 +58,7 @@
     "-s"
     "bash"
   ];
-  # Vendored from hercules-ci-effects, kept byte-identical to upstream.
+  # Vendored from hercules-ci-effects, left as upstream wrote it.
   settings.formatter.shellcheck.excludes = [ "herculesCI/effects-setup-hook.sh" ];
 
   programs.mypy = {
