@@ -18,7 +18,7 @@ from nixbot_cli.term import sanitize_line, strip_ansi
 
 from nixbot.api_tokens import ApiTokenStore
 from nixbot.auth import AuthzConfig, User
-from nixbot.executor import attribute_log_path, container_path
+from nixbot.executor import attribute_log_path, container_path, effect_run_log_path
 from nixbot.logstore import LogContainerWriter
 from nixbot.web.control_routes import create_control_api_router
 
@@ -637,3 +637,73 @@ def test_build_watch_attr_waits_for_selected_attributes(
 def test_print_table_empty(capsys: pytest.CaptureFixture[str]) -> None:
     cli.print_table([], ["id", "status"])
     assert capsys.readouterr().out == ""
+
+
+def _deploy_run_id(harness: WebHarness, tmp_path: Path, text: bytes) -> int:
+    """Write a finished log for build #1's `deploy` effect run; its id."""
+
+    async def seed() -> int:
+        harness.ctx.state_dir = tmp_path
+        run_id = await harness.ctx.pool.fetchval(
+            "SELECT e.id FROM effect_runs e JOIN builds b ON b.id = e.build_id "
+            "WHERE b.number = 1 AND e.name = 'deploy'"
+        )
+        path = effect_run_log_path(tmp_path, run_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(zstandard.ZstdCompressor().compress(text))
+        return int(run_id)
+
+    return harness.run(seed())
+
+
+def test_log_effect_by_name_and_id(
+    harness: WebHarness,
+    api: NixbotClient,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A selector no attribute matches selects an effect run of the build;
+    --effect-run reaches any run by id."""
+    run_id = _deploy_run_id(harness, tmp_path, b"switching\nerror: activation failed\n")
+
+    # Failed effect: its log, and the failure exit code.
+    assert run_cli(api, "log", "1", "deploy", "-R", "acme/widget") == 1
+    assert capsys.readouterr().out == "switching\nerror: activation failed\n"
+
+    assert run_cli(api, "log", "1", "deploy", "--tail", "1", "-R", "acme/widget") == 1
+    assert capsys.readouterr().out == "error: activation failed\n"
+
+    assert run_cli(api, "log", "1", "deploy", "--follow", "-R", "acme/widget") == 1
+    assert capsys.readouterr().out == "switching\nerror: activation failed\n"
+
+    assert run_cli(api, "log", "--effect-run", str(run_id), "-R", "acme/widget") == 0
+    assert capsys.readouterr().out == "switching\nerror: activation failed\n"
+
+
+def test_follow_effect_buffers_partial_lines(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Effect output arrives in arbitrary chunks; lines are printed whole
+    and sanitized, including a final line without a newline."""
+    body = (
+        'event: text\ndata: {"text":"hel"}\n\n'
+        ": keepalive\n\n"
+        'event: text\ndata: {"text":"lo\\nwor\\u001b]0;title\\u0007"}\n\n'
+        'event: text\ndata: {"text":"ld"}\n\n'
+        "event: done\ndata: {}\n\n"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/repos/github/acme/widget/effects/runs/7/stream"
+        assert request.url.params.get("tail") == "5"
+        return httpx.Response(
+            200, content=body, headers={"content-type": "text/event-stream"}
+        )
+
+    client = NixbotClient(
+        http=httpx.Client(
+            base_url="http://test", transport=httpx.MockTransport(handler)
+        )
+    )
+    cli.follow_effect(client, REPO, 7, tail=5)
+    assert capsys.readouterr().out == "hello\nworld\n"

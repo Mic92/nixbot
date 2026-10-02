@@ -8,11 +8,12 @@ from typing import TYPE_CHECKING
 
 import httpx
 import pytest
+import zstandard
 from nixbot_cli.api import ApiError, NixbotClient, RepoRef
 
 from nixbot.api_tokens import ApiTokenStore
 from nixbot.auth import AuthzConfig, User
-from nixbot.executor import attribute_log_path, container_path
+from nixbot.executor import attribute_log_path, container_path, effect_run_log_path
 from nixbot.logstore import LogContainerWriter
 from nixbot.web.control_routes import create_control_api_router
 
@@ -200,4 +201,48 @@ def test_log_toc_and_text(
     assert text == "error: boom\n"
     with pytest.raises(ApiError) as err:
         api.log_text(REPO, 1, "bad1", drv="nope")
+    assert err.value.status == 404
+
+
+def _seed_effect_log(harness: WebHarness, tmp_path: Path, text: bytes) -> int:
+    """Write a finished log for build #1's `deploy` effect run; its id."""
+
+    async def seed() -> int:
+        harness.ctx.state_dir = tmp_path
+        run_id = await harness.ctx.pool.fetchval(
+            "SELECT e.id FROM effect_runs e JOIN builds b ON b.id = e.build_id "
+            "WHERE b.number = 1 AND e.name = 'deploy'"
+        )
+        path = effect_run_log_path(tmp_path, run_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(zstandard.ZstdCompressor().compress(text))
+        return int(run_id)
+
+    return harness.run(seed())
+
+
+def test_effect_run_text_and_stream(
+    harness: WebHarness, api: NixbotClient, tmp_path: Path
+) -> None:
+    run_id = _seed_effect_log(
+        harness, tmp_path, b"copying closure\nswitching\nerror: activation failed\n"
+    )
+    assert api.effect_run_text(REPO, run_id, tail=1) == "error: activation failed\n"
+
+    # A finished run streams its whole log, then ends.
+    events = list(api.effect_run_stream(REPO, run_id))
+    assert events == [
+        ("text", {"text": "copying closure\nswitching\nerror: activation failed\n"}),
+        ("done", {}),
+    ]
+    assert list(api.effect_run_stream(REPO, run_id, tail=1)) == [
+        ("text", {"text": "error: activation failed\n"}),
+        ("done", {}),
+    ]
+
+    with pytest.raises(ApiError) as err:
+        api.effect_run_text(REPO, run_id + 10_000)
+    assert err.value.status == 404
+    with pytest.raises(ApiError) as err:
+        api.effect_run_text(RepoRef("github", "acme", "nope"), run_id)
     assert err.value.status == 404

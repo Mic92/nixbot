@@ -468,7 +468,7 @@ def _match_attr(attrs: list[dict], selector: str) -> dict:
         return exact[0]
     matches = [a for a in attrs if selector in a["attr"]]
     if not matches:
-        msg = f"no attribute matches {selector!r}"
+        msg = f"no attribute or effect matches {selector!r}"
         raise UsageError(msg)
     if len(matches) > 1:
         names = ", ".join(a["attr"] for a in matches)
@@ -477,8 +477,19 @@ def _match_attr(attrs: list[dict], selector: str) -> dict:
     return matches[0]
 
 
+def _attr_matches(attrs: list[dict], selector: str) -> bool:
+    return any(selector in a["attr"] or a.get("drv_path") == selector for a in attrs)
+
+
 def cmd_log(client: NixbotClient, args: argparse.Namespace) -> int:
     repo = resolve_repo(client, args.repo)
+    if args.effect_run is not None:
+        if args.follow:
+            follow_effect(client, repo, args.effect_run, tail=args.tail)
+        else:
+            text = client.effect_run_text(repo, args.effect_run, tail=args.tail)
+            print(text, end="")
+        return EXIT_OK
     number = resolve_build(client, repo, args.number)
     detail = client.build(repo, number)
     build_failed = detail["build"]["status"] in FAILED_STATUSES
@@ -502,6 +513,13 @@ def cmd_log(client: NixbotClient, args: argparse.Namespace) -> int:
                     print(sanitize_block(failure["log_tail"]))
         return EXIT_BUILD_FAILED if build_failed else EXIT_OK
 
+    # Attributes win; a selector no attribute matches may name an effect.
+    effects = detail.get("effects", [])
+    if not _attr_matches(detail["attributes"], args.attr) and any(
+        args.attr in e["name"] for e in effects
+    ):
+        effect = _match_effect(effects, args.attr)
+        return _log_effect(client, repo, number, effect, args)
     attr = _match_attr(detail["attributes"], args.attr)
     drv = args.attr if args.attr.endswith(".drv") else None
     if args.follow:
@@ -544,6 +562,43 @@ def follow_attr(
             break
     if not streamed:
         print(client.log_text(repo, number, attr, tail=tail), end="")
+
+
+def _log_effect(
+    client: NixbotClient,
+    repo: RepoRef,
+    number: int,
+    effect: dict,
+    args: argparse.Namespace,
+) -> int:
+    """`nbo log` for an effect run of build #number."""
+    if args.follow:
+        follow_effect(client, repo, effect["id"], tail=args.tail)
+        effects = client.build(repo, number).get("effects", [])
+        effect = next((e for e in effects if e["id"] == effect["id"]), effect)
+    elif args.json is not None:
+        print_json(effect, args.json)
+    else:
+        print(client.effect_run_text(repo, effect["id"], tail=args.tail), end="")
+    return EXIT_BUILD_FAILED if effect["status"] in FAILED_STATUSES else EXIT_OK
+
+
+def follow_effect(
+    client: NixbotClient, repo: RepoRef, run_id: int, *, tail: int | None
+) -> None:
+    """Print an effect run's log so far, then its live output until the
+    run ends. Output arrives in arbitrary chunks, so lines are buffered
+    and sanitized whole."""
+    pending = ""
+    for event, data in client.effect_run_stream(repo, run_id, tail=tail):
+        if event == "text":
+            *lines, pending = (pending + data["text"]).split("\n")
+            for line in lines:
+                print(sanitize_line(line), flush=True)
+        elif event == "done":
+            break
+    if pending:
+        print(sanitize_line(pending), flush=True)
 
 
 def cmd_auth_status(client: NixbotClient, args: argparse.Namespace) -> int:
@@ -708,19 +763,31 @@ running ones. Piped or in CI it prints one line per finished attribute.""",
   nbo log 412 nixos-eve --tail 100  only the last 100 lines
   nbo log 412 nixos-eve --follow    stream while it is still building
   nbo log 412 /nix/store/…-foo.drv  log of one derivation by store path
+  nbo log 412 deploy-eve            log of the effect matching "deploy-eve"
+  nbo log 412 deploy-eve --follow   stream a running effect
+  nbo log --effect-run 9185 -f      any effect run by id, e.g. a scheduled one
   nbo log 412 -R github/Mic92/dotfiles   without a local checkout""",
     )
     log.add_argument("number", type=int, nargs="?")
     log.add_argument(
         "attr",
         nargs="?",
-        metavar="ATTR|DRV-PATH",
-        help="attribute (substring) or .drv store path",
+        metavar="ATTR|DRV-PATH|EFFECT",
+        help="attribute (substring), .drv store path, or effect name",
+    )
+    log.add_argument(
+        "--effect-run",
+        type=int,
+        metavar="ID",
+        help="log of the effect run with this id (from `nbo build view --json`)",
     )
     _add_repo_arg(log)
     log.add_argument("--tail", type=int, metavar="N", help="last N lines")
     log.add_argument(
-        "-f", "--follow", action="store_true", help="stream a running attribute's log"
+        "-f",
+        "--follow",
+        action="store_true",
+        help="stream a running attribute's or effect's log",
     )
     _add_json_arg(log)
     log.set_defaults(func=cmd_log)
