@@ -1084,7 +1084,7 @@ in
       ++ lib.optional cfg.database.createLocally "postgresql.target";
 
       path = [
-        pkgs.git
+        pkgs.gitMinimal
         pkgs.openssh
         pkgs.openssl
         pkgs.bash

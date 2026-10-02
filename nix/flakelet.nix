@@ -86,7 +86,7 @@
         requires = [ "${name}.socket" ] ++ options.requires;
 
         path = [
-          pkgs.git
+          pkgs.gitMinimal
           pkgs.openssh
           pkgs.openssl
           pkgs.bash
