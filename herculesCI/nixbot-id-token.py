@@ -30,6 +30,9 @@ def main() -> None:
         headers={
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
+            # Cloudflare in front of an instance rejects urllib's
+            # default user agent (403, error 1010).
+            "User-Agent": "nixbot-id-token",
         },
     )
     try:
