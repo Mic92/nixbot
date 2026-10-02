@@ -16,6 +16,7 @@ in
   nixbot-tests = self.packages.${pkgs.stdenv.hostPlatform.system}.nixbot.tests.pytest;
   nixbot-effects-tests = self.packages.${pkgs.stdenv.hostPlatform.system}.nixbot-effects.tests.pytest;
   sqlc-generated = import ./sqlc.nix checkArgs;
+  effects-lib = import ./effects-lib.nix checkArgs;
 }
 // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
   nixbot = import ./nixbot.nix checkArgs;

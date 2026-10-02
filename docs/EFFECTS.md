@@ -191,6 +191,138 @@ Inside the effect, secrets are available at `/run/secrets.json` (via
 `HERCULES_CI_SECRETS_JSON`). This follows the
 [hercules-ci secrets format](https://docs.hercules-ci.com/hercules-ci-agent/secrets-json/).
 
+## Shell helpers
+
+`mkEffect` from [effects-lib](../herculesCI/effects-lib.nix) provides the shell
+functions of
+[hercules-ci-effects](https://docs.hercules-ci.com/hercules-ci-effects/), so
+effects written for it work unchanged. In the functions below, a secret `NAME`
+is a key of the effect's `secretsMap`, or of the secrets JSON if it has none.
+
+### Reading secrets
+
+- `readSecretString NAME PATH` prints a string from the secret's `data`. `PATH`
+  is a `jq` path. It fails if the path doesn't exist.
+- `readSecretJSON NAME PATH` prints any value as compact JSON.
+
+```nix
+mkEffect {
+  # Secret "cloud": { "data": { "token": "...", "regions": ["eu", "us"] } }
+  secretsMap.cloud = "cloud";
+  inputs = [ pkgs.curl ];
+  effectScript = ''
+    token=$(readSecretString cloud .token)
+    regions=$(readSecretJSON cloud .regions)   # ["eu","us"]
+    curl -H "Authorization: Bearer $token" -d "$regions" https://example.org
+  '';
+}
+```
+
+### Writing credentials
+
+| Function                              | Secret fields                                     | Result                                          |
+| ------------------------------------- | ------------------------------------------------- | ----------------------------------------------- |
+| `writeSSHKey [NAME=ssh] [FILE]`       | `privateKey`, optional `publicKey`                | `~/.ssh/id_rsa` (mode 0400) and `.pub`          |
+| `writeAWSSecret [NAME=aws] [PROFILE]` | `aws_access_key_id`, `aws_secret_access_key`      | profile in `~/.aws/credentials`                 |
+| `writeDockerKey [NAME=docker] [DIR]`  | `clientKey`, `clientCertificate`, `CACertificate` | `key.pem`, `cert.pem`, `ca.pem` in `~/.docker`  |
+| `writeGPGKey [NAME=gpg]`              | `privateKey`                                      | key imported into the keyring and fully trusted |
+
+`useDockerHost HOST [PORT=2376]` points Docker at a remote host with TLS.
+
+Add the tools these call to `inputs`: `pkgs.openssh` (`ssh-keygen`, used when
+the secret has no `publicKey`) and `pkgs.gnupg`.
+
+```nix
+mkEffect {
+  inputs = [ pkgs.git pkgs.openssh ];
+  secretsMap.ssh = "deploy-key";
+  effectScript = ''
+    writeSSHKey ssh                   # ~/.ssh/id_rsa
+    git push git@example.org:org/repo.git HEAD:refs/heads/deploy
+  '';
+}
+```
+
+```nix
+mkEffect {
+  inputs = [ pkgs.docker-client ];
+  secretsMap.docker = "docker";
+  effectScript = ''
+    writeDockerKey docker             # ~/.docker/{key,cert,ca}.pem
+    useDockerHost builder.example.org
+    docker ps
+  '';
+}
+```
+
+```nix
+mkEffect {
+  inputs = [ pkgs.awscli2 ];
+  secretsMap.aws = "aws";
+  effectScript = ''
+    writeAWSSecret aws prod           # profile "prod" in ~/.aws/credentials
+    aws --profile prod s3 ls
+  '';
+}
+```
+
+```nix
+mkEffect {
+  inputs = [ pkgs.gnupg ];
+  secretsMap.gpg = "release-key";
+  effectScript = ''
+    writeGPGKey gpg
+    echo hi | gpg --clearsign
+  '';
+}
+```
+
+### State files
+
+An effect can keep small files between runs, per project:
+
+- `getStateFile NAME [FILE]` downloads state `NAME` to `FILE` (default `NAME`).
+  If the state doesn't exist yet, `FILE` is removed.
+- `putStateFile NAME [FILE]` uploads `FILE`.
+
+Call them from `getStateScript` and `putStateScript`. State is also uploaded
+when the effect fails.
+
+```nix
+mkEffect {
+  getStateScript = "getStateFile counter";
+  effectScript = "echo $(( $(cat counter 2>/dev/null || echo 0) + 1 )) > counter";
+  putStateScript = "putStateFile counter";
+}
+```
+
+### Phases
+
+Phases run in this order, each wrapped in `pre<Phase>` and `post<Phase>` hooks:
+
+| Phase              | Script              |
+| ------------------ | ------------------- |
+| `initPhase`        |                     |
+| `getStatePhase`    | `getStateScript`    |
+| `userSetupPhase`   | `userSetupScript`   |
+| `priorCheckPhase`  | `priorCheckScript`  |
+| `effectPhase`      | `effectScript`      |
+| `putStatePhase`    | `putStateScript`    |
+| `effectCheckPhase` | `effectCheckScript` |
+
+A failing `priorCheckScript` only prints a warning, because the effect may
+repair the problem. A failing `effectCheckScript` fails the effect. Add your own
+phases with `preGetStatePhases`, `preEffectPhases` and `postEffectPhases`.
+
+```nix
+mkEffect {
+  inputs = [ pkgs.curl ];
+  priorCheckScript = "curl -sf https://example.org/health";
+  effectScript = "deploy";
+  effectCheckScript = "curl -sf https://example.org/health";
+}
+```
+
 ## Pushable repository checkout
 
 Effects that modify the repository (auto-updates, formatting bots) can ask
