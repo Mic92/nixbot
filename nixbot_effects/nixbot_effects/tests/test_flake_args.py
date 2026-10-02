@@ -64,6 +64,19 @@ async def test_git_tag_propagates_to_secret_context(tmp_path: Path) -> None:
     assert out == {"deploy": {"data": {"token": "s3cret"}}}
 
 
+async def test_tag_push_has_no_branch(tmp_path: Path) -> None:
+    """A tag push names no branch, as on Hercules CI: the detached
+    checkout must not turn into branch "HEAD"."""
+    repo, rev = init_repo(tmp_path, {"file.txt": "v1"})
+    git(repo, "checkout", "--detach")
+
+    opts = EffectsOptions(path=repo, rev=rev, tag="v1.0")
+    result = await effects_args(opts)
+    assert result["branch"] is None
+    assert result["tag"] == "v1.0"
+    assert result["ref"] == "refs/tags/v1.0"
+
+
 class TestFlakeUrl:
     @pytest.mark.parametrize("locked_url", [None, ""], ids=["absent", "empty"])
     def test_local_path_fallback(self, locked_url: str | None) -> None:

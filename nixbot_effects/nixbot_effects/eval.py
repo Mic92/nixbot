@@ -67,7 +67,9 @@ async def effects_args(opts: EffectsOptions) -> dict[str, Any]:
         msg = "No --rev specified and path is not a git repository"
         raise EffectError(msg)
     branch = opts.branch
-    if branch is None and has_git:
+    # A tag push has no branch (Hercules passes null too). A detached
+    # checkout would otherwise report "HEAD".
+    if branch is None and opts.tag is None and has_git:
         branch = await git_command(["rev-parse", "--abbrev-ref", "HEAD"], opts.path)
     repo = opts.repo or opts.path.name
     tag = opts.tag or (await git_get_tag(opts.path, rev) if has_git else None)
