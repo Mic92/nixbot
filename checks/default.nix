@@ -15,6 +15,7 @@ in
   treefmt = (inputs.treefmt-nix.lib.evalModule pkgs ../formatter/treefmt.nix).config.build.check self;
   nixbot-tests = self.packages.${pkgs.stdenv.hostPlatform.system}.nixbot.tests.pytest;
   nixbot-effects-tests = self.packages.${pkgs.stdenv.hostPlatform.system}.nixbot-effects.tests.pytest;
+  effects-lib-ssh = import ./effects-lib-ssh.nix checkArgs;
   sqlc-generated = import ./sqlc.nix checkArgs;
   effects-lib = import ./effects-lib.nix checkArgs;
 }
