@@ -141,7 +141,8 @@ ORDER BY a.finished_at, a.id;
 -- name: EffectRunDetail :one
 -- Any kind. The build number is joined for the log page header.
 SELECT r.id, r.kind, r.build_id, r.schedule_name, r.name AS effect, r.status,
-       r.error, r.started_at, r.finished_at, b.number AS build_number
+       r.error, r.skip_reason, r.started_at, r.finished_at,
+       b.number AS build_number
 FROM effect_runs r LEFT JOIN builds b ON b.id = r.build_id
 WHERE r.id = $1 AND r.project_id = $2;
 

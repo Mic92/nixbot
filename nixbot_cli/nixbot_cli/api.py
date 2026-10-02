@@ -227,6 +227,18 @@ class NixbotClient:
             "GET", f"/api/repos/{repo}/builds/{number}/logs/{attr}/text", params
         ).text
 
+    def effect_run(self, repo: RepoRef, run_id: int) -> dict[str, Any]:
+        """Status of one effect run, with or without a build."""
+        return self._request("GET", f"/api/repos/{repo}/effects/runs/{run_id}").json()
+
+    def effect_run_text(
+        self, repo: RepoRef, run_id: int, *, tail: int | None = None
+    ) -> str:
+        """Plain-text log of one effect run."""
+        return self._request(
+            "GET", f"/api/repos/{repo}/effects/runs/{run_id}/text", {"tail": tail}
+        ).text
+
     # --- streams -------------------------------------------------------
 
     def log_stream(
@@ -235,7 +247,20 @@ class NixbotClient:
         """SSE events of a running attribute's structured log as
         (event, payload) pairs. The stream ends with ("done", {})."""
         url = f"/api/repos/{repo}/builds/{number}/logs/{attr}/stream"
-        with self.http.stream("GET", url, timeout=None) as response:
+        return self._sse(url)
+
+    def effect_run_stream(
+        self, repo: RepoRef, run_id: int, *, tail: int | None = None
+    ) -> Iterator[tuple[str, Any]]:
+        """SSE events of an effect run's output: ("text", {"text": ...})
+        for the log so far and then live chunks, ending with ("done", {})."""
+        url = f"/api/repos/{repo}/effects/runs/{run_id}/stream"
+        return self._sse(url, {"tail": tail} if tail is not None else {})
+
+    def _sse(
+        self, url: str, params: dict[str, Any] | None = None
+    ) -> Iterator[tuple[str, Any]]:
+        with self.http.stream("GET", url, params=params, timeout=None) as response:
             if response.is_error:
                 response.read()
                 raise ApiError(response.status_code, response.text)

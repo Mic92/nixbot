@@ -852,6 +852,15 @@ the instance restricts project visibility.
 - GET /api/repos/{forge}/{owner}/{name}/builds/{number}/logs/{attr}/stream
   -> SSE while the attribute runs: `state` snapshot (no history), then
      drv/line/phase/drv-done deltas with raw text, `done` at the end
+- GET /api/repos/{forge}/{owner}/{name}/effects/runs/{id}
+  -> one effect run: kind, name, status, error, skip_reason, build_number
+     (ids are in `effects` of the build; scheduled runs have no build)
+- GET /api/repos/{forge}/{owner}/{name}/effects/runs/{id}/text?tail=N&ansi=1
+  -> plain-text effect log; 404 if the run has no log (skipped, not started)
+- GET /api/repos/{forge}/{owner}/{name}/effects/runs/{id}/stream?tail=N
+  -> SSE while the effect runs: `text` events with the log so far, then raw
+     output, `done` at the end. The run's status is written just after
+     `done`, so read it again if it still says running.
 - GET /api/events?build=N -> SSE build/attribute status-change cues
 - GET /repos/{forge}/{owner}/{name}/badge.svg?branch=B
   -> SVG build-status badge for a branch, subject to repository visibility
