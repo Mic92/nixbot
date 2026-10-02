@@ -85,6 +85,10 @@ in
       effectPhase = ''eval "$effectScript"'';
     };
 
+  # hercules-ci-effects' `ssh`: copy the closure of a script to a host and
+  # run it there. `''${effects.ssh { destination = "root@host"; } "cmd"}`.
+  ssh = pkgs.callPackage ./call-ssh.nix { };
+
   # When the condition is false we still want eval/build of the effect's
   # closure to succeed, so return a no-op effect instead.
   runIf =
