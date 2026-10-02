@@ -45,7 +45,7 @@ class EffectIdentity:
     forge: str
     owner: str
     repo: str
-    # "push" | "pull_request" | "schedule"
+    # "push" | "pull_request" | "schedule" | "tag" | an onEvent kind
     event: str
     # Dotted effect name, e.g. "default.deploy".
     effect: str
@@ -55,6 +55,7 @@ class EffectIdentity:
     pr_number: int | None = None
     base_ref: str | None = None
     schedule: str | None = None
+    tag: str | None = None
     # Audiences the effect declared via idTokenAudiences. Enforced by
     # the token endpoint, not by mint().
     allowed_audiences: tuple[str, ...] = ()
@@ -74,6 +75,8 @@ class EffectIdentity:
                 return f"{prefix}:schedule:{self.schedule}"
             case "push":
                 return f"{prefix}:ref:refs/heads/{self.branch}"
+            case "tag":
+                return f"{prefix}:ref:refs/tags/{self.tag}"
             case _:
                 # onEvent kinds. Code is the default branch, but the
                 # trigger is untrusted, so never look like a push.
@@ -95,6 +98,8 @@ class EffectIdentity:
         match self.event:
             case "push":
                 claims["ref"] = f"refs/heads/{self.branch}"
+            case "tag":
+                claims["ref"] = f"refs/tags/{self.tag}"
             case "pull_request":
                 # No "ref": nixbot stores the PR's *base* branch, which
                 # must not satisfy branch-based relying-party conditions.

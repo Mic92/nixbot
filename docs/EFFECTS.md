@@ -350,6 +350,50 @@ derivation attribute; effects built without `mkEffect` can set the attribute
 directly. Effects that do not set it get no checkout. If the repository has no
 forge token to push with, the effect fails with an error.
 
+## Tag pushes
+
+Pushing a tag runs the tagged commit's `onPush` effects with `primaryRepo.tag`
+set and `primaryRepo.branch` null, as on Hercules CI. Effects that only exist on
+a tag, like the
+[`github-releases`](https://flake.parts/options/hercules-ci-effects.html#opt-hercules-ci.github-releases.files)
+module of hercules-ci-effects, work unchanged.
+
+Every `onPush` effect runs on every tag, so choose in the flake which effects
+belong to branches and which to tags:
+
+```nix
+herculesCI = { primaryRepo, ... }: {
+  onPush.default.outputs.effects =
+    if primaryRepo.tag == null then
+      { deploy = mkEffect { /* ... */ }; }
+    else
+      lib.optionalAttrs (lib.hasPrefix "v" primaryRepo.tag) {
+        release = mkEffect { /* ... */ };
+      };
+};
+```
+
+How tag runs behave:
+
+- A tag waits for a branch build of the tagged tree, so
+  `git push origin main v1.0` cannot leave `main` without its `onPush` run.
+  Retries back off for about 15 minutes. If no branch has built the tree by
+  then, the tag builds the commit itself.
+- The effects run once per tag push, apart from the build's own `onPush` run.
+  Tagging a commit that the default branch already deployed still releases, and
+  a second tag on the same commit runs them again and keeps its own result and
+  log.
+- `isTag` secret conditions match, and ID tokens carry `ref: refs/tags/<tag>`.
+- They show up on the build page with the event effects and are restarted the
+  same way (kind `tag:<tag>`).
+
+Limitations:
+
+- Tag runs post no commit statuses.
+- Tags are only seen through webhooks, not polled.
+- An effect with `after` is skipped. Use a shared `lock` to order tag effects.
+- Pushing a tag again while its run is going retries for a while, then fails.
+
 ## Event effects (`onEvent`)
 
 `onPush` effects run when a branch is built. `onEvent` effects react to what

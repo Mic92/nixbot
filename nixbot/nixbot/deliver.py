@@ -9,6 +9,7 @@ permissions). The orchestrator only enqueues `deliver` work items.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 from dataclasses import asdict, dataclass
@@ -19,6 +20,7 @@ from nixbot_effects.match import expand_lock, skip_reason
 
 from .db_gen import builds as builds_q
 from .db_gen import events as ev_q
+from .db_gen import maintenance as q
 from .db_gen import work_queue as wq
 from .effects import effects_context
 from .forge import ForgeError
@@ -27,6 +29,8 @@ from .repos import repo_info
 from .work_queue import TransientError
 
 if TYPE_CHECKING:
+    from nixbot_effects import EffectMeta
+
     from .db import BuildRecord
     from .db_gen.models import Project
     from .events import RepoInfo
@@ -34,6 +38,20 @@ if TYPE_CHECKING:
     from .service import CIService
 
 logger = logging.getLogger(__name__)
+
+# A tag push's onPush effects, delivered like an event: their own rows
+# on the build, apart from its once-only onPush run.
+TAG_KIND = "tag"
+
+
+def tag_run_kind(tag: str) -> str:
+    """effect_runs.kind of a tag's runs. One row per tag, so a second tag
+    on the same build keeps the first one's result and log."""
+    return f"{TAG_KIND}:{tag}"
+
+
+def is_tag_run(kind: str) -> bool:
+    return kind.startswith(f"{TAG_KIND}:")
 
 
 @dataclass
@@ -50,6 +68,9 @@ class Delivery:
     args: str | None = None
     previous_status: str | None = None
     failed_attrs: list[str] | None = None
+    # Tag pushes: the tag and the commit it points at.
+    tag: str | None = None
+    rev: str | None = None
 
     def as_payload(self) -> dict[str, Any]:
         return {k: v for k, v in asdict(self).items() if v is not None}
@@ -155,6 +176,9 @@ async def deliver(s: CIService, d: Delivery, *, last_attempt: bool = False) -> N
         return
     info = repo_info(project)
     credentials = await s.credentials_provider(info.forge).get(info.clone_url)
+    if d.kind == TAG_KIND:
+        await _deliver_tag(s, d, info, build, credentials)
+        return
     repos = s.orchestrator.repos
     try:
         await repos.fetch(
@@ -196,6 +220,131 @@ async def deliver(s: CIService, d: Delivery, *, last_attempt: bool = False) -> N
         command=d.command,
     )
     await _match_and_enqueue(s, d, info, build, listing, payload, code_rev)
+
+
+async def _deliver_tag(
+    s: CIService,
+    d: Delivery,
+    info: RepoInfo,
+    build: BuildRecord,
+    credentials: FetchCredentials | None,
+) -> None:
+    """Queue the tagged commit's onPush effects, listed with `tag` set as
+    on Hercules CI: effects conditional on it, such as
+    hercules-ci-effects' github-releases, only exist then."""
+    if d.tag is None or d.rev is None:
+        return
+    ref = f"refs/tags/{d.tag}"
+    try:
+        await s.orchestrator.repos.fetch(
+            info.key, info.clone_url, [f"+{ref}:{ref}"], credentials
+        )
+    except GitError as e:
+        raise TransientError(str(e)) from e
+    listing = await _list_tag_effects(s, info, build, d.tag, d.rev, credentials)
+    if not listing:
+        return
+    kind = tag_run_kind(d.tag)
+    # Delivering again would reset a row under its running effect.
+    for name in listing:
+        row = await q.effect_run(s.pool, build_id=build.id_, kind=kind, name=name)
+        if row is not None and row.status == "running":
+            msg = "release still running for this tag"
+            raise TransientError(msg)
+    payload = json.dumps(
+        {
+            "tag": d.tag,
+            "rev": d.rev,
+            "build": build_payload(s.config.url, info, build),
+        }
+    )
+    names: list[str] = []
+    keys: list[str] = []
+    for name, meta in listing.items():
+        # The work queue orders `after` for onPush runs only. Running
+        # these unordered could deploy before what they depend on.
+        reason = (
+            "`after` is not supported on tag pushes, order with a shared `lock`"
+            if meta.after
+            else None
+        )
+        run_id = await ev_q.upsert_event_effect(
+            s.pool,
+            build_id=build.id_,
+            kind=kind,
+            name=name,
+            status="skipped" if reason else "pending",
+            skip_reason=reason,
+            payload=payload,
+            code_rev=d.rev,
+            actor=d.actor,
+            lock=meta.lock,
+        )
+        if run_id is None or reason:
+            continue
+        names.append(name)
+        keys.append(event_dedup_key(build.project_id, build.id_, kind, name, meta.lock))
+    if names:
+        await wq.enqueue_effect_items(
+            s.pool, build_id=build.id_, kind=kind, names=names, dedup_keys=keys
+        )
+        s.wake_work()
+    logger.info(
+        "tag delivered",
+        extra={"tag": d.tag, "build_id": build.id_, "queued": names},
+    )
+
+
+async def _list_tag_effects(  # noqa: PLR0913
+    s: CIService,
+    info: RepoInfo,
+    build: BuildRecord,
+    tag: str,
+    rev: str,
+    credentials: FetchCredentials | None,
+) -> dict[str, EffectMeta] | None:
+    """The onPush effects at `rev` as a push of `tag` sees them. None
+    when evaluation failed, which shows on the build page."""
+    repos = s.orchestrator.repos
+    digest = hashlib.sha256(tag.encode()).hexdigest()[:12]
+    worktree = await repos.checkout_for_build(
+        info.key,
+        f"tag-listing-{build.id_}-{digest}",
+        base_commit=rev,
+        credentials=credentials,
+    )
+    try:
+        ctx = effects_context(
+            s.config,
+            info,
+            worktree_path=worktree.path,
+            rev=rev,
+            branch=None,
+            tag=tag,
+            git_token=None,
+            task_token=None,
+        )
+        try:
+            listing = await s.orchestrator.effects.list_effects(ctx)
+        except (EffectError, OSError) as e:
+            logger.info(
+                "tag effects listing failed", extra={"project": info.name, "tag": tag}
+            )
+            # Its own source: neither onEvent nor the build's own onPush.
+            await builds_q.record_effect_eval_error(
+                s.pool,
+                build_id=build.id_,
+                source=TAG_KIND,
+                error=str(e)[-8000:],
+                code_rev=rev,
+            )
+            return None
+        await builds_q.clear_effect_eval_error(
+            s.pool, build_id=build.id_, source=TAG_KIND
+        )
+        return listing
+    finally:
+        await repos.remove_worktree(worktree)
 
 
 async def _record_listing_error(

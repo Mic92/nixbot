@@ -241,13 +241,15 @@ WHERE build_id = sqlc.arg(build_id) AND kind = sqlc.arg(kind) AND name = sqlc.ar
 
 -- name: EffectsSummary :one
 -- Running while anything is in flight, else the worst outcome. Eval
--- errors of the built commit count as failures. No row when empty.
+-- errors of the built commit count as failures, not those of a
+-- delivery (onEvent or a tag push). No row when empty.
 WITH rows AS (
     SELECT r.status FROM effect_runs r
     WHERE r.build_id = sqlc.arg(build_id)::bigint AND r.owner = 'build'
     UNION ALL
     SELECT 'failed' FROM effect_eval_errors x
-    WHERE x.build_id = sqlc.arg(build_id)::bigint AND x.source <> 'delivery'
+    WHERE x.build_id = sqlc.arg(build_id)::bigint
+      AND x.source NOT IN ('delivery', 'tag')
 )
 SELECT
     count(*) FILTER (WHERE status IN ('failed', 'dependency_failed'))::bigint AS failed,

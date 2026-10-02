@@ -50,6 +50,7 @@ async def attach_linked_event(
         with contextlib.suppress(KeyError, ValueError):
             o.linked_events[build.id_].remove(event)
         await replay_terminal_status(o, event, current)
+        await o.deliver_tag(event, current, current.status)
 
 
 async def replay_terminal_status(
@@ -108,6 +109,7 @@ async def finish_linked(
             # status would otherwise stay pending forever.
             await o.reporter.eval_cancelled(linked, build)
         await o.reporter.build_finished(linked, build, result)
+        await o.deliver_tag(linked, build, result.status)
 
 
 async def is_ancestor(

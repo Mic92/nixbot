@@ -413,7 +413,9 @@ class CIService:
             )
         return True
 
-    async def _process_change(self, change: ChangeRequest) -> None:
+    async def _process_change(
+        self, change: ChangeRequest, *, last_attempt: bool
+    ) -> None:
         project = await self.repo_store.by_forge_id(change.forge, change.forge_repo_id)
         if project is None or not project.enabled:
             return
@@ -423,7 +425,18 @@ class CIService:
             project.id_, change.pr_number, info, change, credentials
         ):
             return
-        if change.pr_number is None and not (
+        if change.tag is not None:
+            peeled = await self._peel_tag(info, change, change.tag, credentials)
+            if not last_attempt and not await self._tree_built(
+                project.id_, info, peeled.commit_sha
+            ):
+                # `git push origin main v1.0` delivers both pushes in
+                # either order. Started by the tag, the build would
+                # leave main attached to it without its own onPush run.
+                msg = "waiting for a branch to build the tagged commit"
+                raise TransientError(msg)
+            change = peeled
+        elif change.pr_number is None and not (
             change.branch == project.default_branch
             or is_merge_queue_branch(change.branch)
         ):
@@ -451,8 +464,34 @@ class CIService:
             base_sha=change.base_sha,
             commit_message=change.commit_message,
             actor=change.actor,
+            tag=change.tag,
         )
         await self.orchestrator.handle_change_event(event, credentials)
+
+    async def _peel_tag(
+        self,
+        info: RepoInfo,
+        change: ChangeRequest,
+        tag: str,
+        credentials: FetchCredentials,
+    ) -> ChangeRequest:
+        """The tag push with its commit. Webhooks carry the tag object of
+        an annotated tag, which is not what builds or gets statuses."""
+        ref = f"refs/tags/{tag}"
+        repos = self.orchestrator.repos
+        await repos.fetch(info.key, info.clone_url, [f"+{ref}:{ref}"], credentials)
+        commit = await repos.rev_parse(info.key, f"{ref}^{{commit}}")
+        return dataclasses.replace(change, commit_sha=commit)
+
+    async def _tree_built(self, project_id: int, info: RepoInfo, commit: str) -> bool:
+        """Whether a build of the commit's tree exists, in any context."""
+        tree_hash = await self.orchestrator.repos.rev_parse(
+            info.key, f"{commit}^{{tree}}"
+        )
+        build = await builds_q.find_reusable_build(
+            self.pool, project_id=project_id, tree_hash=tree_hash
+        )
+        return build is not None
 
     # -- ControlBackend ---------------------------------------------------
 
@@ -615,7 +654,10 @@ class CIService:
     async def _dispatch_work(self, item: WorkItem) -> None:
         payload = item.payload
         if item.kind == "change":
-            await self._process_change(ChangeRequest(**payload))
+            await self._process_change(
+                ChangeRequest(**payload),
+                last_attempt=item.attempts + 1 >= MAX_WORK_ATTEMPTS,
+            )
         elif item.kind == "rerun":
             await restart_dispatch.rerun(
                 self,

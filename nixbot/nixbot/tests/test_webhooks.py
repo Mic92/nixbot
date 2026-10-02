@@ -9,7 +9,7 @@ import hashlib
 import hmac
 import json
 import urllib.parse
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -147,6 +147,50 @@ def test_parse_github_branch_deletion_ignored() -> None:
         )
         is None
     )
+
+
+def test_parse_tag_pushes() -> None:
+    """A tag push names the tag in `tag` and `branch`, so its build gets
+    its own canceller context. The sha may be an annotated tag object:
+    the service peels it."""
+    expected = ChangeRequest(
+        forge="github",
+        forge_repo_id="99",
+        branch="v1.0",
+        commit_sha="tagobj",
+        commit_message="release",
+        tag="v1.0",
+    )
+    github = {
+        "ref": "refs/tags/v1.0",
+        "after": "tagobj",
+        "repository": {"id": 99},
+        "head_commit": {"message": "release"},
+    }
+    assert parse_github_event("push", github) == expected
+    assert parse_gitea_event("push", github) == replace(expected, forge="gitea")
+    gitlab = {
+        "ref": "refs/tags/v1.0",
+        "after": "tagobj",
+        "project": {"id": 99},
+        "commits": [{"id": "tagobj", "message": "release"}],
+    }
+    assert parse_gitlab_event("Tag Push Hook", gitlab) == replace(
+        expected, forge="gitlab"
+    )
+
+
+def test_parse_tag_deletion_ignored() -> None:
+    deleted = {
+        "ref": "refs/tags/v1.0",
+        "after": "0" * 40,
+        "deleted": True,
+        "repository": {"id": 1},
+        "project": {"id": 1},
+    }
+    assert parse_github_event("push", deleted) is None
+    assert parse_gitea_event("push", deleted) is None
+    assert parse_gitlab_event("Tag Push Hook", deleted) is None
 
 
 def test_parse_github_pr() -> None:

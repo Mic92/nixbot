@@ -2,7 +2,10 @@
 worktree of the default branch at the row's code_rev; PR events also
 get an untrusted clone of the PR head. The payload was stored on the
 row at delivery time. Event effects post no forge statuses, see
-docs/EFFECTS.md."""
+docs/EFFECTS.md.
+
+Tag pushes reuse this lifecycle for onPush effects: code_rev is the
+tagged commit and the payload names the tag."""
 
 from __future__ import annotations
 
@@ -17,8 +20,8 @@ from .db_gen import builds as builds_q
 from .db_gen import events as ev_q
 from .db_gen import maintenance as q
 from .db_gen import work_queue as wq
-from .deliver import event_dedup_key
-from .effects import effects_context
+from .deliver import TAG_KIND, event_dedup_key, is_tag_run
+from .effects import effect_push_url, effects_context
 from .executor import failure_excerpt
 from .gitrepo import GitError, pr_refspec
 from .rerun_exec import cancel_running
@@ -120,6 +123,9 @@ async def _run(
     assert row.code_rev is not None  # noqa: S101
     payload = json.loads(row.payload) if row.payload else {}
     pr = payload.get("pullRequest")
+    tag = payload["tag"] if is_tag_run(row.kind) else None
+    # A tag push has no branch; other deliveries run the default branch.
+    branch = None if tag else info.default_branch
     success = False
     error: str | None = None
     async with o.open_effect_log(row.id_) as writer:
@@ -151,19 +157,31 @@ async def _run(
                             o.repos, info, worktree.path, pr["headRev"], info.clone_url
                         )
                     )
+                elif tag is not None and credentials and credentials.token:
+                    # A tag's own commit, trusted like an onPush checkout.
+                    push_url = effect_push_url(
+                        info.forge, info.clone_url, credentials.token
+                    )
+                    if push_url is not None:
+                        checkout = await stack.enter_async_context(
+                            cloned_checkout(
+                                o.repos, info, worktree.path, row.code_rev, push_url
+                            )
+                        )
                 task_token = o.task_tokens.issue(
                     build.project_id,
                     EffectIdentity(
                         forge=info.forge,
                         owner=info.owner,
                         repo=info.repo,
-                        event=row.kind,
+                        event=TAG_KIND if tag else row.kind,
                         effect=row.name,
                         build_id=build.id_,
                         sha=row.code_rev,
-                        branch=info.default_branch,
+                        branch=branch,
                         pr_number=pr["number"] if pr else None,
                         actor=row.actor,
+                        tag=tag,
                     ),
                 )
                 stack.callback(o.task_tokens.revoke, task_token)
@@ -172,7 +190,8 @@ async def _run(
                     info,
                     worktree_path=worktree.path,
                     rev=row.code_rev,
-                    branch=info.default_branch,
+                    branch=branch,
+                    tag=tag,
                     git_token=credentials.token if credentials is not None else None,
                     task_token=task_token,
                 )
@@ -180,9 +199,12 @@ async def _run(
                 ctx.bind_id_token_audiences = partial(
                     o.task_tokens.bind_audiences, task_token
                 )
-                success = await o.effects.run_event_effect(
-                    ctx, row.kind, row.name, payload, writer.write
-                )
+                if tag is not None:
+                    success = await o.effects.run_effect(ctx, row.name, writer.write)
+                else:
+                    success = await o.effects.run_event_effect(
+                        ctx, row.kind, row.name, payload, writer.write
+                    )
         except Exception as e:
             logger.exception(
                 "event effect crashed",
