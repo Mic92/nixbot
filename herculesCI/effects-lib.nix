@@ -16,6 +16,13 @@ let
   prCommentScript = pkgs.writers.writePython3Bin "nixbot-pr-comment" { } (
     builtins.readFile ./nixbot-pr-comment.py
   );
+  # hercules-ci-effects' shell functions (readSecretString, writeSSHKey,
+  # getStateFile, ...), so effects written for its mkEffect run unchanged.
+  # Named as upstream's.
+  setupHook = pkgs.runCommand "hercules-ci-effect-sh" { } ''
+    mkdir -p $out/nix-support
+    cp ${./effects-setup-hook.sh} $out/nix-support/setup-hook
+  '';
 in
 {
   mkEffect =
@@ -61,6 +68,7 @@ in
       secretsMap = builtins.toJSON secretsMap;
       idTokenAudiences = builtins.toJSON idTokenAudiences;
       nativeBuildInputs = [
+        setupHook
         pkgs.cacert
         pkgs.curl
         pkgs.jq
@@ -75,11 +83,14 @@ in
       ];
       initPhase = ''
         exec </dev/null
+        # The setup hook prepares the state API's credentials here.
+        runHook preInit
         export HOME=/build/home
         mkdir -p "$HOME"
         echo "root:x:$(id -u):$(id -g):root:$HOME:/bin/sh" >> /etc/passwd
         mkdir -p ~/.ssh
         echo "BatchMode yes" >> ~/.ssh/config
+        runHook postInit
       '';
       userSetupPhase = ''eval "$userSetupScript"'';
       effectPhase = ''eval "$effectScript"'';

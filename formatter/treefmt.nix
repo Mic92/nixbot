@@ -58,6 +58,8 @@
     "-s"
     "bash"
   ];
+  # Vendored from hercules-ci-effects, kept byte-identical to upstream.
+  settings.formatter.shellcheck.excludes = [ "herculesCI/effects-setup-hook.sh" ];
 
   programs.mypy = {
     enable = pkgs.stdenv.buildPlatform.isLinux;
