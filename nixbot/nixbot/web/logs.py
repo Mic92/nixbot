@@ -604,6 +604,41 @@ class _LogRoutes:
             await asyncio.to_thread(_plain, text, tail, ansi=False)
         )
 
+    async def api_effect_run_text(  # noqa: PLR0913
+        self,
+        request: Request,
+        forge: str,
+        owner: str,
+        name: str,
+        run_id: int,
+        tail: int | None = Query(None, ge=1),
+        ansi: bool = Query(default=False),
+    ) -> PlainTextResponse:
+        """An effect run's log as plain text. ?tail=N keeps the last N
+        lines, ?ansi=1 keeps SGR color sequences."""
+        await self._run_or_404(request, forge, owner, name, run_id)
+        text = await self._effect_run_text(run_id)
+        if text is None:
+            raise HTTPException(status_code=404)
+        return PlainTextResponse(await asyncio.to_thread(_plain, text, tail, ansi=ansi))
+
+    async def api_effect_run_stream(  # noqa: PLR0913
+        self,
+        request: Request,
+        forge: str,
+        owner: str,
+        name: str,
+        run_id: int,
+        tail: int | None = Query(None, ge=1),
+    ) -> StreamingResponse:
+        """SSE stream of an effect run's raw output: `text` events carry
+        the log so far (its last ?tail=N lines), then live output, and
+        `done` ends the stream, right away for a finished run."""
+        await self._run_or_404(request, forge, owner, name, run_id)
+        writer = self.registry.get_effect(run_id)
+        path = self._effect_log_path(run_id)
+        return EventStreamResponse(_raw_events_json(writer, path, tail))
+
     async def build_effect_log_redirect(  # noqa: PLR0913
         self,
         request: Request,
@@ -1144,6 +1179,13 @@ def create_log_api_router(ctx: WebContext, registry: LogRegistry) -> APIRouter:
         routes.api_log_stream
     )
     router.get(f"{base}/logs/{{attr:path}}", response_model=LogToc)(routes.api_log_toc)
+    runs = "/api/repos/{forge}/{owner:owner}/{name:segment}/effects/runs/{run_id:int}"
+    router.get(f"{runs}/text", response_class=PlainTextResponse)(
+        routes.api_effect_run_text
+    )
+    router.get(f"{runs}/stream", response_class=EventStreamResponse)(
+        routes.api_effect_run_stream
+    )
     return router
 
 
@@ -1222,6 +1264,57 @@ async def _stream_events(
             yield _sse(ansi.feed(chunk.decode(errors="replace")))
     finally:
         if writer is not None:
+            writer.unsubscribe(queue)
+
+
+async def _history_and_queue(
+    writer: LogWriter | None, path: Path
+) -> tuple[str, asyncio.Queue[bytes | None] | None]:
+    """Log so far plus, for a running writer, the queue of live chunks,
+    taken atomically so nothing falls between them."""
+    if writer is not None:
+        history_bytes, queue = await writer.subscribe_with_history()
+        return history_bytes.decode(errors="replace"), queue
+    if await asyncio.to_thread(path.exists):
+        data = await asyncio.to_thread(read_log, path)
+        return data.decode(errors="replace"), None
+    return "", None
+
+
+async def _raw_events_json(
+    writer: LogWriter | None, path: Path, tail: int | None
+) -> AsyncGenerator[str, None]:
+    """JSON twin of _stream_events for the /api stream: raw text instead
+    of rendered HTML. History and live chunks come from one atomic
+    subscribe, so nothing is lost or repeated between them."""
+
+    def text_event(text: str) -> str:
+        # json escapes any CR/LF in log text, so payloads cannot forge
+        # SSE fields.
+        payload = json.dumps({"text": text}, separators=(",", ":"))
+        return f"event: text\ndata: {payload}\n\n"
+
+    history, queue = await _history_and_queue(writer, path)
+    try:
+        if tail is not None:
+            history = "".join(history.splitlines(keepends=True)[-tail:])
+        if history:
+            yield text_event(history)
+        if queue is None:
+            yield "event: done\ndata: {}\n\n"
+            return
+        while True:
+            try:
+                chunk = await asyncio.wait_for(queue.get(), timeout=30)
+            except TimeoutError:
+                yield ": keepalive\n\n"
+                continue
+            if chunk is None:
+                yield "event: done\ndata: {}\n\n"
+                return
+            yield text_event(chunk.decode(errors="replace"))
+    finally:
+        if writer is not None and queue is not None:
             writer.unsubscribe(queue)
 
 
