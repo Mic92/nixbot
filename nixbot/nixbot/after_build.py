@@ -67,7 +67,9 @@ async def _effects(  # noqa: PLR0913
 
         await replay_effect_statuses(o, event, build)
         return
-    await o.maybe_run_effects(event, build, worktree_path, credentials)
+    await o.maybe_run_effects(
+        event, build, worktree_path, credentials, skip_succeeded=True
+    )
 
 
 async def _deliveries(

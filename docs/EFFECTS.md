@@ -100,6 +100,28 @@ default.push-image
     └── default.deploy-prod [lock: prod]
 ```
 
+## Skipping what already succeeded
+
+An effect that only depends on some of the build, say a hardware test of a
+firmware image, need not run again when that part did not change. Give it a
+`skipKey` naming what it does, typically the store paths it uses:
+
+```nix
+hil = mkEffect {
+  lock = "rig";
+  skipKey = "${firmware}";
+  effectScript = "flash ${firmware} && run-tests";
+};
+```
+
+When a build's effects are recorded and a run of the same effect with the same
+key succeeded before in this repository, the effect is marked succeeded with the
+reason "skipped: succeeded with this skipKey in build #N". It is not queued, so
+it does not wait for its `lock`, and effects `after` it run as usual. Failed
+runs do not count. Restarting a build's effects runs them regardless. The key is
+the effect's own claim, so include whatever must differ between runs, such as
+the branch if a pull request's success should not stand in for a push.
+
 ## nixbot.toml Configuration
 
 Effects branch configuration and allowing effects to run in PRs is configured

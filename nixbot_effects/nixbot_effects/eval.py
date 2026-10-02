@@ -185,6 +185,7 @@ def _walk_expr(root: str) -> str:
             let d = e.run or e; in {{
               after = map (dep name) (d.after or []);
               lock = d.lock or null;
+              skipKey = d.skipKey or null;
               when = d.when or {{}};
               checkout = (d.__nixbot_effect_checkout or false) == true;
             }};
@@ -212,7 +213,9 @@ async def list_effects(opts: EffectsOptions) -> dict[str, EffectMeta]:
     """
     expr = _walk_expr(f"({await effect_function(opts)})")
     effects = {
-        name: EffectMeta(after=tuple(info["after"]), lock=info["lock"])
+        name: EffectMeta(
+            after=tuple(info["after"]), lock=info["lock"], skip_key=info["skipKey"]
+        )
         for name, info in (await _nix_eval_json(expr, opts)).items()
     }
     # A bad DAG (cycle, unknown dependency) fails discovery right here.

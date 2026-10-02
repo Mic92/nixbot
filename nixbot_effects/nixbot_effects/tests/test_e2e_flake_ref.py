@@ -29,6 +29,7 @@ FLAKE_NIX = """\
           effectScript = "echo deploying staging";
           after = [ [ "default" "notify" ] ];
           lock = "hw-lab";
+          skipKey = "staging-v1";
         };
         notify = {
           effectScript = "echo notifying";
@@ -96,7 +97,7 @@ def _cli(*args: str) -> subprocess.CompletedProcess[str]:
 def test_list_via_flake_ref(flake_repo: Path) -> None:
     """nixbot-effects list <git+file://repo> should work end-to-end,
     flatten nested effects across all onPush jobs to job-prefixed dotted
-    names, and include after/lock."""
+    names, and include after/lock/skipKey."""
     effects = json.loads(_cli("list", f"git+file://{flake_repo}").stdout)
     assert sorted(effects) == [
         "default.env.staging",
@@ -107,11 +108,13 @@ def test_list_via_flake_ref(flake_repo: Path) -> None:
     assert effects["default.env.staging"] == {
         "after": ["default.notify"],
         "lock": "hw-lab",
+        "skip_key": "staging-v1",
     }
-    assert effects["default.notify"] == {"after": [], "lock": None}
+    assert effects["default.notify"] == {"after": [], "lock": None, "skip_key": None}
     assert effects["docs.publish"] == {
         "after": ["default.notify", "docs.lint"],
         "lock": None,
+        "skip_key": None,
     }
 
 
@@ -132,7 +135,7 @@ def test_list_toplevel_effects_output(tmp_path: Path) -> None:
     default job's effects (hercules-ci-agent default job behavior)."""
     repo, _rev = init_repo(tmp_path, {"flake.nix": TOPLEVEL_EFFECTS_FLAKE_NIX})
     effects = json.loads(_cli("list", f"git+file://{repo}").stdout)
-    assert effects == {"default.notify": {"after": [], "lock": None}}
+    assert effects == {"default.notify": {"after": [], "lock": None, "skip_key": None}}
 
 
 def test_graph_via_flake_ref(flake_repo: Path) -> None:

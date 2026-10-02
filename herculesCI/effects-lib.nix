@@ -37,6 +37,10 @@ in
       # serializing runs across builds.
       after ? [ ],
       lock ? null,
+      # A string naming what the effect does, e.g. the store paths it
+      # deploys. nixbot skips the run when one with the same key
+      # succeeded before, see docs/EFFECTS.md.
+      skipKey ? null,
       # onEvent only: conditions nixbot checks against the event before
       # running, see docs/EFFECTS.md. `lock` may contain `{pr}` there.
       when ? { },
@@ -49,7 +53,14 @@ in
         ;
       # Attr paths are nested lists, which cannot be coerced into
       # derivation env vars; expose them via passthru instead.
-      passthru = { inherit after lock when; };
+      passthru = {
+        inherit
+          after
+          lock
+          skipKey
+          when
+          ;
+      };
       isEffect = true;
       __nixbot_effect_checkout = checkout;
       # like upstream hercules-ci-effects

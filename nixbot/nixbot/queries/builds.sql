@@ -300,3 +300,24 @@ SET status = $2,
     finished_at = COALESCE(finished_at, now())
 WHERE id = $1
 RETURNING status_generation;
+
+-- name: SetEffectSkipKey :exec
+UPDATE effect_runs SET skip_key = sqlc.arg(skip_key)::text
+WHERE build_id = sqlc.arg(build_id)::bigint AND kind = 'push'
+  AND name = sqlc.arg(name)::text;
+
+-- name: SucceededWithSkipKey :one
+-- The build whose run of this effect with this key last succeeded.
+SELECT b.number FROM effect_runs r JOIN builds b ON b.id = r.build_id
+WHERE r.project_id = sqlc.arg(project_id)::bigint AND r.kind = 'push'
+  AND r.name = sqlc.arg(name)::text AND r.skip_key = sqlc.arg(skip_key)::text
+  AND r.status = 'succeeded' AND r.build_id <> sqlc.arg(build_id)::bigint
+ORDER BY r.finished_at DESC LIMIT 1;
+
+-- name: SkipSucceededEffect :one
+-- Settle a pending row as succeeded without running it.
+UPDATE effect_runs SET status = 'succeeded', skip_reason = sqlc.arg(skip_reason)::text,
+    started_at = now(), finished_at = now()
+WHERE build_id = sqlc.arg(build_id)::bigint AND kind = 'push'
+  AND name = sqlc.arg(name)::text AND status = 'pending'
+RETURNING id;
