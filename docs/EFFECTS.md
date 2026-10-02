@@ -25,7 +25,7 @@ Effects can declare two attributes on the effect derivation:
 Both are ordinary attributes on the effect derivation: set them next to
 `effectScript`, whether you write plain attribute sets, use this repo's
 [effects-lib](../herculesCI/effects-lib.nix), or upstream
-[hercules-ci-effects](https://docs.hercules-ci.com/hercules-ci-effects/)'
+[hercules-ci-effects](https://docs.hercules-ci.com/hercules-ci-effects/)
 `mkEffect` (extra attributes pass through). They are a nixbot extension:
 Hercules CI itself ignores them; only nixbot orders and serializes on them.
 
@@ -323,6 +323,46 @@ mkEffect {
 }
 ```
 
+### Running a script on another host
+
+`ssh { destination = "user@host"; } SCRIPT` from
+[effects-lib](../herculesCI/effects-lib.nix) returns shell code for an
+`effectScript`. The code copies the closure of `SCRIPT` to the host with
+`nix-copy-closure` and runs it there over `ssh`. It is the `ssh` of
+hercules-ci-effects, so effects written for it work unchanged.
+
+Options:
+
+- `inheritVariables`: shell variables that the remote script can read.
+- `sshOptions`, `nix-copy-closureOptions`: extra arguments for `ssh` and
+  `nix-copy-closure`.
+- `compress`: compress the closure and the session. `compressClosure` and
+  `compressSession` set them separately.
+- `useSubstitutes` (default `true`): let the host fetch paths from its
+  substituters.
+- `buildOnDestination`: build on the host. Needs `destinationPkgs`, a nixpkgs
+  that can be built there.
+
+The SSH key is not set up for you. Call `writeSSHKey` first and add
+`pkgs.openssh` to `inputs`.
+
+```nix
+let
+  inherit (nixbot.lib.effects { inherit pkgs; }) mkEffect ssh;
+in
+mkEffect {
+  inputs = [ pkgs.openssh ];
+  secretsMap.ssh = "deploy-key";
+  effectScript = ''
+    writeSSHKey ssh
+    rev=v1.2.3
+    ${ssh { destination = "root@rig"; inheritVariables = [ "rev" ]; } ''
+      nixos-rebuild switch --flake github:org/repo/$rev
+    ''}
+  '';
+}
+```
+
 ## Pushable repository checkout
 
 Effects that modify the repository (auto-updates, formatting bots) can ask
@@ -512,8 +552,7 @@ Event effects can be restarted from the build and run pages, with
 `nbo build restart N --effect comment/apply`, or
 `POST /api/repos/.../builds/N/effects/restart?name=apply&kind=comment`. A
 running one is cancelled first. The stored payload is reused. A stuck effect can
-be stopped without re-running it: `nbo build cancel N
---effect NAME` or
+be stopped without re-running it: `nbo build cancel N --effect NAME` or
 `POST .../effects/cancel?name=...`.
 
 ### Testing locally

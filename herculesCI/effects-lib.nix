@@ -153,6 +153,10 @@ in
       '';
     };
 
+  # Runs a script on a host over ssh, like hercules-ci-effects' `ssh`.
+  # See docs/EFFECTS.md.
+  ssh = pkgs.callPackage ./call-ssh.nix { };
+
   # When the condition is false we still want eval/build of the effect's
   # closure to succeed, so return a no-op effect instead.
   runIf =
