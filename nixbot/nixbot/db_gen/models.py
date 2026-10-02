@@ -99,6 +99,7 @@ class EffectRun:
     skip_reason: str | None
     actor: str | None
     lock: str | None
+    skip_key: str | None
 
 
 @dataclasses.dataclass()

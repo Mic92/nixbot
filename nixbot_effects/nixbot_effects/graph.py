@@ -19,6 +19,8 @@ class EffectMeta:
 
     after: tuple[str, ...] = ()
     lock: str | None = None
+    # Skip the run when one with the same key succeeded before.
+    skip_key: str | None = None
 
 
 @dataclass(frozen=True)

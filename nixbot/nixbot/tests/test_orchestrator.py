@@ -1162,6 +1162,100 @@ async def test_effects_run_after_default_branch_success(
     assert started is True
 
 
+async def effect_rows(pool: asyncpg.Pool, build_id: int) -> dict[str, tuple]:
+    rows = await pool.fetch(
+        "SELECT name, status, skip_reason FROM effect_runs"
+        " WHERE build_id = $1 AND kind = 'push'",
+        build_id,
+    )
+    return {r["name"]: (r["status"], r["skip_reason"]) for r in rows}
+
+
+async def test_skip_key_skips_what_already_succeeded(
+    pool: asyncpg.Pool,
+    make_env: EnvFactory,
+    upstream: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A push whose effect declares the skipKey of a run that succeeded
+    records it as succeeded without queueing it, so it never waits on a
+    lock. An effect `after` it still runs. A new key runs again."""
+    keys = {"hil": "image-1"}
+    fake = patch_effects(
+        monkeypatch,
+        effects={
+            "hil": EffectMeta(lock="rig", skip_key="image-1"),
+            "notify": EffectMeta(after=("hil",)),
+        },
+    )
+    orchestrator, reporter, project = await make_env(
+        FakeEvalRunner([mk_job("a")]), FakeExecutor(), name="skip-key"
+    )
+
+    async def push(name: str) -> BuildRecord:
+        fake.push["hil"] = EffectMeta(lock="rig", skip_key=keys["hil"])
+        build = await orchestrator.handle_change_event(
+            ChangeEvent(
+                repo=project, branch="main", commit_sha=add_commit(upstream, name)
+            )
+        )
+        assert build is not None
+        await drain_effect_items(orchestrator, project, pool)
+        return build
+
+    first = await push("skip-1")
+    assert fake.ran == ["hil", "notify"]
+
+    second = await push("skip-2")
+    assert fake.ran == ["hil", "notify", "notify"]
+    status, reason = (await effect_rows(pool, second.id_))["hil"]
+    assert status == "succeeded"
+    assert reason == f"skipped: succeeded with this skipKey in build #{first.number}"
+    assert ("effects-finished", second.id_, 0, 2) in {e[:4] for e in reporter.events}
+
+    keys["hil"] = "image-2"
+    await push("skip-3")
+    assert fake.ran == ["hil", "notify", "notify", "hil", "notify"]
+
+
+async def test_skip_key_does_not_skip_after_a_failure_or_a_restart(
+    pool: asyncpg.Pool,
+    make_env: EnvFactory,
+    upstream: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only a success counts. A restart asks for a run, so it runs."""
+    outcomes = [False, True]
+    ran: list[str] = []
+
+    async def run_effect(_ctx: EffectsContext, name: str, _log: object = None) -> bool:
+        ran.append(name)
+        return outcomes.pop(0) if outcomes else True
+
+    patch_effects(
+        monkeypatch, run_effect, effects={"hil": EffectMeta(skip_key="image-1")}
+    )
+    orchestrator, _, project = await make_env(
+        FakeEvalRunner([mk_job("a")]), FakeExecutor(), name="skip-key-fail"
+    )
+    builds = []
+    for name in ("fail-1", "fail-2", "fail-3"):
+        build = await orchestrator.handle_change_event(
+            ChangeEvent(
+                repo=project, branch="main", commit_sha=add_commit(upstream, name)
+            )
+        )
+        assert build is not None
+        builds.append(build)
+        await drain_effect_items(orchestrator, project, pool)
+    # Failed, then ran again and succeeded, then skipped.
+    assert ran == ["hil", "hil"]
+
+    await orchestrator.rerun_effects(project, builds[2])
+    await drain_effect_items(orchestrator, project, pool)
+    assert ran == ["hil", "hil", "hil"]
+
+
 async def test_pr_worktree_config_cannot_grant_effects(
     pool: asyncpg.Pool,
     make_env: EnvFactory,
