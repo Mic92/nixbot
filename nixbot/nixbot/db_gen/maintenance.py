@@ -293,7 +293,7 @@ SELECT status FROM effect_runs WHERE build_id = $1 AND kind = 'push' AND name = 
 """
 
 EFFECT_RUN: typing.Final[str] = """-- name: EffectRun :one
-SELECT id, project_id, kind, owner, build_id, schedule_name, name, status, error, deps, log_size, log_truncated, started_at, finished_at, payload, code_rev, skip_reason, actor, lock FROM effect_runs WHERE build_id = $1 AND kind = $2 AND name = $3
+SELECT id, project_id, kind, owner, build_id, schedule_name, name, status, error, deps, log_size, log_truncated, started_at, finished_at, payload, code_rev, skip_reason, actor, lock, skip_key FROM effect_runs WHERE build_id = $1 AND kind = $2 AND name = $3
 """
 
 BUILD_EFFECT_RUN_IDS: typing.Final[str] = """-- name: BuildEffectRunIds :many
@@ -518,6 +518,7 @@ async def effect_run(conn: ConnectionLike, *, build_id: int | None, kind: str, n
         skip_reason=row[16],
         actor=row[17],
         lock=row[18],
+        skip_key=row[19],
     )
 
 

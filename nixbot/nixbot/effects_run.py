@@ -54,9 +54,12 @@ async def maybe_run_effects(  # noqa: PLR0913
     credentials: FetchCredentials | None = None,
     *,
     only: list[str] | None = None,
+    skip_succeeded: bool = False,
 ) -> None:
     """The only producer of pending build-owned effect rows, each with
-    its queue item. `only` narrows a rerun to the named effects."""
+    its queue item. `only` narrows a rerun to the named effects.
+    `skip_succeeded` settles effects whose skipKey already succeeded
+    instead of queueing them; reruns run them."""
     fresh = await builds_q.get_build(o.pool, id_=build.id_)
     if fresh is None:
         return
@@ -91,7 +94,9 @@ async def maybe_run_effects(  # noqa: PLR0913
     await q.drop_removed_effects(o.pool, build_id=build.id_, names=list(effects))
     if only is not None:
         effects = {n: m for n, m in effects.items() if n in only}
-    await _record_effects(o, event, build, effects, allowed=allowed)
+    await _record_effects(
+        o, event, build, effects, allowed=allowed, skip_succeeded=skip_succeeded
+    )
 
 
 async def _claim_effects(
@@ -107,13 +112,14 @@ async def _claim_effects(
     return await builds_q.mark_effects_started(o.pool, id_=build.id_) is not None
 
 
-async def _record_effects(
+async def _record_effects(  # noqa: PLR0913
     o: Orchestrator,
     event: ChangeEvent,
     build: BuildRecord,
     effects: dict[str, EffectMeta],
     *,
     allowed: bool,
+    skip_succeeded: bool = False,
 ) -> None:
     """Pending rows plus queue items, or skipped rows on a gated ref so
     the page lists what a merge would run."""
@@ -131,13 +137,59 @@ async def _record_effects(
     if not allowed:
         return
     await o.reporter.effects_started(event, build, len(names))
+    queued = [
+        n
+        for n in names
+        if not await _skip_succeeded(o, event, build, n, effects[n], skip_succeeded)
+    ]
     await wq.enqueue_effect_items(
         o.pool,
         build_id=build.id_,
         kind="push",
-        names=names,
-        dedup_keys=[_dedup_key(build, n, effects[n]) for n in names],
+        names=queued,
+        dedup_keys=[_dedup_key(build, n, effects[n]) for n in queued],
     )
+    if len(queued) < len(names):
+        # Nothing else may settle the last effect.
+        await post_effects_summary(o, event, build)
+
+
+async def _skip_succeeded(  # noqa: PLR0913
+    o: Orchestrator,
+    event: ChangeEvent,
+    build: BuildRecord,
+    name: str,
+    meta: EffectMeta,
+    skip_succeeded: bool,
+) -> bool:
+    """Record the run's skipKey, and settle it as succeeded without
+    running when a run with that key succeeded before."""
+    if meta.skip_key is None:
+        return False
+    await builds_q.set_effect_skip_key(
+        o.pool, skip_key=meta.skip_key, build_id=build.id_, name=name
+    )
+    if not skip_succeeded:
+        return False
+    previous = await builds_q.succeeded_with_skip_key(
+        o.pool,
+        project_id=build.project_id,
+        name=name,
+        skip_key=meta.skip_key,
+        build_id=build.id_,
+    )
+    if previous is None:
+        return False
+    reason = f"skipped: succeeded with this skipKey in build #{previous}"
+    if (
+        await builds_q.skip_succeeded_effect(
+            o.pool, skip_reason=reason, build_id=build.id_, name=name
+        )
+        is None
+    ):
+        return False
+    await o.reporter.effect_finished(event, build, name, success=True, error=None)
+    return True
 
 
 async def _effects_allowed(

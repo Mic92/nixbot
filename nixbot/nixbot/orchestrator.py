@@ -513,7 +513,7 @@ class Orchestrator:
         attributes untouched. `only` narrows the rerun to one effect."""
         await rerun_exec.rerun_effects(self, info, build, credentials, only)
 
-    async def maybe_run_effects(
+    async def maybe_run_effects(  # noqa: PLR0913
         self,
         event: ChangeEvent,
         build: BuildRecord,
@@ -521,9 +521,16 @@ class Orchestrator:
         credentials: FetchCredentials | None = None,
         *,
         only: list[str] | None = None,
+        skip_succeeded: bool = False,
     ) -> None:
         await effects_run.maybe_run_effects(
-            self, event, build, worktree_path, credentials, only=only
+            self,
+            event,
+            build,
+            worktree_path,
+            credentials,
+            only=only,
+            skip_succeeded=skip_succeeded,
         )
 
     async def run_effect_item(

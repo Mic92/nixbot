@@ -42,8 +42,11 @@ __all__: collections.abc.Sequence[str] = (
     "record_effect_eval_error",
     "record_effects_ref",
     "set_build_status",
+    "set_effect_skip_key",
     "set_eval_warnings",
     "settle_unfinished_attributes",
+    "skip_succeeded_effect",
+    "succeeded_with_skip_key",
 )
 
 import dataclasses
@@ -377,7 +380,7 @@ SELECT build_id, source, error, code_rev, created_at FROM effect_eval_errors WHE
 """
 
 EFFECTS_FOR_BUILD: typing.Final[str] = """-- name: EffectsForBuild :many
-SELECT id, project_id, kind, owner, build_id, schedule_name, name, status, error, deps, log_size, log_truncated, started_at, finished_at, payload, code_rev, skip_reason, actor, lock FROM effect_runs WHERE build_id = $1 ORDER BY name
+SELECT id, project_id, kind, owner, build_id, schedule_name, name, status, error, deps, log_size, log_truncated, started_at, finished_at, payload, code_rev, skip_reason, actor, lock, skip_key FROM effect_runs WHERE build_id = $1 ORDER BY name
 """
 
 ATTRIBUTE_STATUSES: typing.Final[str] = """-- name: AttributeStatuses :many
@@ -399,6 +402,28 @@ SET status = $2,
     finished_at = COALESCE(finished_at, now())
 WHERE id = $1
 RETURNING status_generation
+"""
+
+SET_EFFECT_SKIP_KEY: typing.Final[str] = """-- name: SetEffectSkipKey :exec
+UPDATE effect_runs SET skip_key = $1::text
+WHERE build_id = $2::bigint AND kind = 'push'
+  AND name = $3::text
+"""
+
+SUCCEEDED_WITH_SKIP_KEY: typing.Final[str] = """-- name: SucceededWithSkipKey :one
+SELECT b.number FROM effect_runs r JOIN builds b ON b.id = r.build_id
+WHERE r.project_id = $1::bigint AND r.kind = 'push'
+  AND r.name = $2::text AND r.skip_key = $3::text
+  AND r.status = 'succeeded' AND r.build_id <> $4::bigint
+ORDER BY r.finished_at DESC LIMIT 1
+"""
+
+SKIP_SUCCEEDED_EFFECT: typing.Final[str] = """-- name: SkipSucceededEffect :one
+UPDATE effect_runs SET status = 'succeeded', skip_reason = $1::text,
+    started_at = now(), finished_at = now()
+WHERE build_id = $2::bigint AND kind = 'push'
+  AND name = $3::text AND status = 'pending'
+RETURNING id
 """
 
 
@@ -815,6 +840,7 @@ def effects_for_build(conn: ConnectionLike, *, build_id: int | None) -> QueryRes
             skip_reason=row[16],
             actor=row[17],
             lock=row[18],
+            skip_key=row[19],
         )
 
     return QueryResults(conn, EFFECTS_FOR_BUILD, _decode_hook, build_id)
@@ -840,6 +866,24 @@ def attribute_status_list(conn: ConnectionLike, *, build_id: int) -> QueryResult
 
 async def bump_build_status(conn: ConnectionLike, *, id_: int, status: str) -> int | None:
     row = await conn.fetchrow(BUMP_BUILD_STATUS, id_, status)
+    if row is None:
+        return None
+    return row[0]
+
+
+async def set_effect_skip_key(conn: ConnectionLike, *, skip_key: str, build_id: int, name: str) -> None:
+    await conn.execute(SET_EFFECT_SKIP_KEY, skip_key, build_id, name)
+
+
+async def succeeded_with_skip_key(conn: ConnectionLike, *, project_id: int, name: str, skip_key: str, build_id: int) -> int | None:
+    row = await conn.fetchrow(SUCCEEDED_WITH_SKIP_KEY, project_id, name, skip_key, build_id)
+    if row is None:
+        return None
+    return row[0]
+
+
+async def skip_succeeded_effect(conn: ConnectionLike, *, skip_reason: str, build_id: int, name: str) -> int | None:
+    row = await conn.fetchrow(SKIP_SUCCEEDED_EFFECT, skip_reason, build_id, name)
     if row is None:
         return None
     return row[0]
