@@ -122,6 +122,7 @@ def effects_context(  # noqa: PLR0913
         branch=branch,
         tag=tag,
         repo=info.name,
+        forge_type=info.forge,
         project_path=info.name,
         secret_name=resolve_effects_secret(
             config.effects_per_repo_secrets, info.forge, info.owner, info.repo

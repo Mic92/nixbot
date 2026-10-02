@@ -24,6 +24,8 @@ class EffectsOptions:
     branch: str | None = None
     url: str | None = None
     tag: str | None = None
+    # "github", "gitea" or "gitlab": primaryRepo.forgeType.
+    forge_type: str | None = None
     locked_url: str | None = None
     default_branch: str | None = None
     # Credentials and secrets, as values.

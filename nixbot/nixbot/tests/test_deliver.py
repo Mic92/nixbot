@@ -666,6 +666,8 @@ async def test_tag_runs_onpush_effects_with_tag(env: dict[str, Any]) -> None:
 
     async def run_effect(ctx: Any, name: str, _log: Any = None) -> bool:
         ran.append((name, ctx.tag, ctx.branch, ctx.rev))
+        # github-releases needs the forge to check out and authenticate.
+        assert (ctx.repo, ctx.forge_type) == ("acme/widget", "github")
         return True
 
     fake.list_effects = list_effects

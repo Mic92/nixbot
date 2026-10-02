@@ -77,6 +77,24 @@ async def test_tag_push_has_no_branch(tmp_path: Path) -> None:
     assert result["ref"] == "refs/tags/v1.0"
 
 
+@pytest.mark.parametrize(
+    ("repo", "owner", "name"),
+    [("acme/widget", "acme", "widget"), ("group/sub/widget", "group/sub", "widget")],
+)
+async def test_repo_identity_as_on_hercules(
+    tmp_path: Path, repo: str, owner: str, name: str
+) -> None:
+    """hercules-ci-effects' github-releases calls the GitHub API with
+    `repo.owner` and `repo.name` and checks out by `repo.forgeType`.
+    Hercules' `name` is the repository alone."""
+    path, rev = init_repo(tmp_path)
+    opts = EffectsOptions(path=path, rev=rev, repo=repo, forge_type="github")
+    result = await effects_args(opts)
+    primary = result["primaryRepo"]
+    assert (primary["owner"], primary["name"]) == (owner, name)
+    assert primary["forgeType"] == "github"
+
+
 class TestFlakeUrl:
     @pytest.mark.parametrize("locked_url", [None, ""], ids=["absent", "empty"])
     def test_local_path_fallback(self, locked_url: str | None) -> None:

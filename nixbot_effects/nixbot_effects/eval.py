@@ -77,8 +77,13 @@ async def effects_args(opts: EffectsOptions) -> dict[str, Any]:
     opts.tag = tag
     url = opts.url or (await get_git_remote_url(opts.path) if has_git else None)
     ref = f"refs/tags/{tag}" if tag else (f"refs/heads/{branch}" if branch else None)
+    # Hercules splits "owner/name". GitLab groups nest, so the owner
+    # is everything before the last slash.
+    owner, _, name = repo.rpartition("/")
     primary_repo = {
-        "name": repo,
+        "name": name,
+        "owner": owner or None,
+        "forgeType": opts.forge_type,
         "branch": branch,
         "ref": ref,
         "tag": tag,
