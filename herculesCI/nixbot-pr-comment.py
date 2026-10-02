@@ -5,6 +5,8 @@ import sys
 import urllib.error
 import urllib.request
 
+USER_AGENT = "nixbot-pr-comment (+https://github.com/Mic92/nixbot)"
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -32,6 +34,8 @@ def main() -> None:
         headers={
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
+            # Cloudflare blocks urllib's default user agent.
+            "User-Agent": USER_AGENT,
         },
     )
     try:
