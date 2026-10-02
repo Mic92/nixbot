@@ -24,7 +24,7 @@ let
     cp ${./effects-setup-hook.sh} $out/nix-support/setup-hook
   '';
 in
-{
+lib.fix (effects: {
   mkEffect =
     args@{
       effectScript ? "",
@@ -116,6 +116,18 @@ in
   # run it there. `''${effects.ssh { destination = "root@host"; } "cmd"}`.
   ssh = pkgs.callPackage ./call-ssh.nix { };
 
+  # hercules-ci-effects' `runNixOS` and `runNixDarwin`: switch a host to an
+  # evaluated configuration over `ssh`, e.g. `effects.runNixOS { configuration
+  # = self.nixosConfigurations.foo; ssh.destination = "root@foo"; }`.
+  runNixOS = pkgs.callPackage ./run-nixos.nix {
+    inherit effects;
+    inherit (effects) mkEffect;
+  };
+  runNixDarwin = pkgs.callPackage ./run-nix-darwin.nix {
+    inherit effects;
+    inherit (effects) mkEffect;
+  };
+
   # When the condition is false we still want eval/build of the effect's
   # closure to succeed, so return a no-op effect instead.
   runIf =
@@ -129,4 +141,4 @@ in
           buildDependenciesOnly = true;
         };
       };
-}
+})

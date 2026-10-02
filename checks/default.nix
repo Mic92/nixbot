@@ -16,6 +16,7 @@ in
   nixbot-tests = self.packages.${pkgs.stdenv.hostPlatform.system}.nixbot.tests.pytest;
   nixbot-effects-tests = self.packages.${pkgs.stdenv.hostPlatform.system}.nixbot-effects.tests.pytest;
   effects-lib-ssh = import ./effects-lib-ssh.nix checkArgs;
+  effects-lib-run-nixos = import ./effects-lib-run-nixos.nix checkArgs;
   sqlc-generated = import ./sqlc.nix checkArgs;
   effects-lib = import ./effects-lib.nix checkArgs;
 }

@@ -22,12 +22,12 @@
   };
 
   /**
-    Minimal effects library (mkEffect, runIf) for flakes that do not
-    want to pull in hercules-ci-effects.
+    Minimal effects library (mkEffect, runIf, ssh, runNixOS, runNixDarwin) for
+    flakes that do not want to pull in hercules-ci-effects.
 
     # Type
     ```
-    effects :: { pkgs :: Nixpkgs } -> { mkEffect, runIf }
+    effects :: { pkgs :: Nixpkgs } -> { mkEffect, runIf, ssh, runNixOS, runNixDarwin }
     ```
   */
   effects = import ../herculesCI/effects-lib.nix;
