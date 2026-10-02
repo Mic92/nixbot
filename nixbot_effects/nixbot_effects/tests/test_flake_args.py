@@ -95,6 +95,26 @@ async def test_repo_identity_as_on_hercules(
     assert primary["forgeType"] == "github"
 
 
+async def test_branch_run_ignores_a_tag_pushed_later(tmp_path: Path) -> None:
+    """A branch push's effects are queued before the commit is tagged but
+    may start after. The daemon names the tag it runs for (or none), so
+    `git tag --points-at` must not turn the branch run into a tag run."""
+    path, rev = init_repo(tmp_path)
+    git(path, "tag", "v1.0")
+    opts = EffectsOptions(path=path, rev=rev, branch="main", detect_tag=False)
+    result = await effects_args(opts)
+    primary = result["primaryRepo"]
+    assert (primary["tag"], primary["branch"]) == (None, "main")
+    assert opts.tag is None
+
+
+async def test_local_run_detects_the_tag_at_the_commit(tmp_path: Path) -> None:
+    path, rev = init_repo(tmp_path)
+    git(path, "tag", "v1.0")
+    result = await effects_args(EffectsOptions(path=path, rev=rev))
+    assert result["primaryRepo"]["tag"] == "v1.0"
+
+
 class TestFlakeUrl:
     @pytest.mark.parametrize("locked_url", [None, ""], ids=["absent", "empty"])
     def test_local_path_fallback(self, locked_url: str | None) -> None:

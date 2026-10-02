@@ -72,7 +72,9 @@ async def effects_args(opts: EffectsOptions) -> dict[str, Any]:
     if branch is None and opts.tag is None and has_git:
         branch = await git_command(["rev-parse", "--abbrev-ref", "HEAD"], opts.path)
     repo = opts.repo or opts.path.name
-    tag = opts.tag or (await git_get_tag(opts.path, rev) if has_git else None)
+    tag = opts.tag
+    if tag is None and opts.detect_tag and has_git:
+        tag = await git_get_tag(opts.path, rev)
     # secret_context needs the tag (isTag conditions), also when resolved from git
     opts.tag = tag
     url = opts.url or (await get_git_remote_url(opts.path) if has_git else None)

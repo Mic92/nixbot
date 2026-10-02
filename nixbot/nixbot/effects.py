@@ -121,6 +121,7 @@ def effects_context(  # noqa: PLR0913
         rev=rev,
         branch=branch,
         tag=tag,
+        detect_tag=False,
         repo=info.name,
         forge_type=info.forge,
         project_path=info.name,
