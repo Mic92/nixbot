@@ -109,17 +109,21 @@ def effects_context(  # noqa: PLR0913
     *,
     worktree_path: Path,
     rev: str,
-    branch: str,
+    branch: str | None,
     git_token: str | None,
     task_token: str | None,
+    tag: str | None = None,
 ) -> EffectsContext:
     """Context with the service-level configuration filled in. Shared
-    by push and scheduled effect runs."""
+    by push and scheduled effect runs. A tag push has no branch."""
     return EffectsContext(
         path=worktree_path,
         rev=rev,
         branch=branch,
+        tag=tag,
+        detect_tag=False,
         repo=info.name,
+        forge_type=info.forge,
         project_path=info.name,
         secret_name=resolve_effects_secret(
             config.effects_per_repo_secrets, info.forge, info.owner, info.repo

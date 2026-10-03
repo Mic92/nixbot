@@ -343,7 +343,8 @@ WITH rows AS (
     WHERE r.build_id = $1::bigint AND r.owner = 'build'
     UNION ALL
     SELECT 'failed' FROM effect_eval_errors x
-    WHERE x.build_id = $1::bigint AND x.source <> 'delivery'
+    WHERE x.build_id = $1::bigint
+      AND x.source NOT IN ('delivery', 'tag')
 )
 SELECT
     count(*) FILTER (WHERE status IN ('failed', 'dependency_failed'))::bigint AS failed,

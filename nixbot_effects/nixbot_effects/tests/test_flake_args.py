@@ -64,6 +64,57 @@ async def test_git_tag_propagates_to_secret_context(tmp_path: Path) -> None:
     assert out == {"deploy": {"data": {"token": "s3cret"}}}
 
 
+async def test_tag_push_has_no_branch(tmp_path: Path) -> None:
+    """A tag push names no branch, as on Hercules CI: the detached
+    checkout must not turn into branch "HEAD"."""
+    repo, rev = init_repo(tmp_path, {"file.txt": "v1"})
+    git(repo, "checkout", "--detach")
+
+    opts = EffectsOptions(path=repo, rev=rev, tag="v1.0")
+    result = await effects_args(opts)
+    assert result["branch"] is None
+    assert result["tag"] == "v1.0"
+    assert result["ref"] == "refs/tags/v1.0"
+
+
+@pytest.mark.parametrize(
+    ("repo", "owner", "name"),
+    [("acme/widget", "acme", "widget"), ("group/sub/widget", "group/sub", "widget")],
+)
+async def test_repo_identity_as_on_hercules(
+    tmp_path: Path, repo: str, owner: str, name: str
+) -> None:
+    """hercules-ci-effects' github-releases calls the GitHub API with
+    `repo.owner` and `repo.name` and checks out by `repo.forgeType`.
+    Hercules' `name` is the repository alone."""
+    path, rev = init_repo(tmp_path)
+    opts = EffectsOptions(path=path, rev=rev, repo=repo, forge_type="github")
+    result = await effects_args(opts)
+    primary = result["primaryRepo"]
+    assert (primary["owner"], primary["name"]) == (owner, name)
+    assert primary["forgeType"] == "github"
+
+
+async def test_branch_run_ignores_a_tag_pushed_later(tmp_path: Path) -> None:
+    """A branch push's effects are queued before the commit is tagged but
+    may start after. The daemon names the tag it runs for (or none), so
+    `git tag --points-at` must not turn the branch run into a tag run."""
+    path, rev = init_repo(tmp_path)
+    git(path, "tag", "v1.0")
+    opts = EffectsOptions(path=path, rev=rev, branch="main", detect_tag=False)
+    result = await effects_args(opts)
+    primary = result["primaryRepo"]
+    assert (primary["tag"], primary["branch"]) == (None, "main")
+    assert opts.tag is None
+
+
+async def test_local_run_detects_the_tag_at_the_commit(tmp_path: Path) -> None:
+    path, rev = init_repo(tmp_path)
+    git(path, "tag", "v1.0")
+    result = await effects_args(EffectsOptions(path=path, rev=rev))
+    assert result["primaryRepo"]["tag"] == "v1.0"
+
+
 class TestFlakeUrl:
     @pytest.mark.parametrize("locked_url", [None, ""], ids=["absent", "empty"])
     def test_local_path_fallback(self, locked_url: str | None) -> None:

@@ -114,6 +114,17 @@ class DeliveryDeduper:
 # --- payload parsing --------------------------------------------------------------
 
 
+def _pushed_ref(ref: str) -> tuple[str, str | None] | None:
+    """(branch, tag) of a pushed ref, None for refs that do not build.
+    A tag names the build context too."""
+    if ref.startswith("refs/heads/"):
+        return ref.removeprefix("refs/heads/"), None
+    if ref.startswith("refs/tags/"):
+        tag = ref.removeprefix("refs/tags/")
+        return tag, tag
+    return None
+
+
 @dataclass(frozen=True)
 class ChangeRequest:
     forge: str
@@ -129,6 +140,10 @@ class ChangeRequest:
     author_association: str | None = None
     # PR head branch lives in the base repository (not a fork).
     head_in_base_repo: bool = False
+    # Tag pushes: the tag name, also in `branch` so the build gets its
+    # own context. commit_sha may be an annotated tag object until the
+    # service peels it.
+    tag: str | None = None
 
 
 def _actor(forge: str, payload: dict[str, Any]) -> str | None:
@@ -320,20 +335,22 @@ def parse_github_event(  # noqa: PLR0911
     if not repo_id:
         return None
     if event_type == "push":
-        ref = payload.get("ref", "")
-        if not ref.startswith("refs/heads/") or payload.get("deleted"):
+        pushed = _pushed_ref(payload.get("ref", ""))
+        if pushed is None or payload.get("deleted"):
             return None
         head = payload.get("after", "")
         if not head or set(head) == {"0"}:
             return None
         head_commit = payload.get("head_commit") or {}
+        branch, tag = pushed
         return ChangeRequest(
             forge="github",
             forge_repo_id=repo_id,
-            branch=ref.removeprefix("refs/heads/"),
+            branch=branch,
             commit_sha=head,
             commit_message=head_commit.get("message", ""),
             actor=_actor("github", payload),
+            tag=tag,
         )
     if event_type == "pull_request":
         return _parse_pr_event("github", repo_id, payload, "synchronize")
@@ -390,8 +407,8 @@ def parse_gitea_event(  # noqa: PLR0911
     if not repo_id:
         return None
     if event_type == "push":
-        ref = payload.get("ref", "")
-        if not ref.startswith("refs/heads/"):
+        pushed = _pushed_ref(payload.get("ref", ""))
+        if pushed is None:
             return None
         head = payload.get("after", "")
         if not head or set(head) == {"0"}:
@@ -406,13 +423,15 @@ def parse_gitea_event(  # noqa: PLR0911
             ),
             {},
         )
+        branch, tag = pushed
         return ChangeRequest(
             forge="gitea",
             forge_repo_id=repo_id,
-            branch=ref.removeprefix("refs/heads/"),
+            branch=branch,
             commit_sha=head,
             commit_message=head_commit.get("message", ""),
             actor=_actor("gitea", payload),
+            tag=tag,
         )
     # Gitea delivers PR head updates as a separate "pull_request_sync"
     # hook event (action "synchronized").
@@ -501,9 +520,10 @@ def parse_gitlab_event(  # noqa: PLR0911
     repo_id = str((payload.get("project") or {}).get("id", ""))
     if not repo_id:
         return None
-    if event_type == "Push Hook":
-        ref = payload.get("ref", "")
-        if not ref.startswith("refs/heads/"):
+    # GitLab reports tag pushes as their own hook.
+    if event_type in ("Push Hook", "Tag Push Hook"):
+        pushed = _pushed_ref(payload.get("ref", ""))
+        if pushed is None:
             return None
         head = payload.get("after", "")
         if not head or set(head) == {"0"}:
@@ -516,13 +536,15 @@ def parse_gitlab_event(  # noqa: PLR0911
             ),
             {},
         )
+        branch, tag = pushed
         return ChangeRequest(
             forge="gitlab",
             forge_repo_id=repo_id,
-            branch=ref.removeprefix("refs/heads/"),
+            branch=branch,
             commit_sha=head,
             commit_message=head_commit.get("message", ""),
             actor=_actor("gitlab", payload),
+            tag=tag,
         )
     if event_type == "Note Hook":
         return _parse_gitlab_note(repo_id, payload)

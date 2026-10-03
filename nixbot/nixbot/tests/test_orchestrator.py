@@ -6,6 +6,7 @@ real git repos, fake eval and executor."""
 from __future__ import annotations
 
 import asyncio
+import json
 import shutil
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
@@ -2088,6 +2089,82 @@ async def test_reuse_for_default_branch_push_runs_effects(
     sha_events = ("effect-started", "effects-started", "effects-finished")
     effect_shas = {e[-1] for e in reporter.events if e[0] in sha_events}
     assert effect_shas == {main_sha}
+
+
+async def tag_deliveries(pool: asyncpg.Pool) -> list[dict[str, object]]:
+    rows = await pool.fetch(
+        "SELECT payload FROM work_queue"
+        " WHERE kind = 'deliver' AND payload->>'kind' = 'tag' ORDER BY id"
+    )
+    return [json.loads(r["payload"]) for r in rows]
+
+
+async def test_tag_reusing_deployed_build_delivers_its_own_effects(
+    pool: asyncpg.Pool,
+    make_env: EnvFactory,
+    upstream: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Tagging a commit main already built and deployed must still
+    release: the tag's effects are a delivery of their own, not the
+    build's once-only onPush run, which stays untouched."""
+    ran = patch_effects(monkeypatch).ran
+    sha = add_commit(upstream, "tag-reuse")
+    orchestrator, _, project = await make_env(
+        FakeEvalRunner([mk_job("a")]), FakeExecutor(), name="tag-reuse"
+    )
+    main_build = await orchestrator.handle_change_event(
+        ChangeEvent(repo=project, branch="main", commit_sha=sha)
+    )
+    assert main_build is not None
+    await drain_effect_items(orchestrator, project, pool)
+    assert ran == ["deploy"]
+
+    tag_build = await orchestrator.handle_change_event(
+        ChangeEvent(
+            repo=project, branch="v1.0", commit_sha=sha, tag="v1.0", actor="github:a"
+        )
+    )
+    assert tag_build is not None
+    assert tag_build.id_ == main_build.id_
+    assert await tag_deliveries(pool) == [
+        {
+            "kind": "tag",
+            "build_id": main_build.id_,
+            "actor": "github:a",
+            "tag": "v1.0",
+            "rev": sha,
+        }
+    ]
+    await drain_effect_items(orchestrator, project, pool)
+    assert ran == ["deploy"]
+
+
+async def test_tag_attached_to_in_flight_build_delivers_on_success(
+    pool: asyncpg.Pool, make_env: EnvFactory, upstream: Path
+) -> None:
+    """`git push origin main v1.0` lands the tag while main's build of
+    the same tree runs. The tag delivers once that build succeeds."""
+    sha = add_commit(upstream, "tag-in-flight")
+    executor = FakeExecutor(gate=asyncio.Event())
+    orchestrator, _, project = await make_env(
+        FakeEvalRunner([mk_job("a")]), executor, name="tag-in-flight"
+    )
+    main = asyncio.create_task(
+        orchestrator.handle_change_event(
+            ChangeEvent(repo=project, branch="main", commit_sha=sha)
+        )
+    )
+    await asyncio.wait_for(executor.started.wait(), timeout=10)
+    await orchestrator.handle_change_event(
+        ChangeEvent(repo=project, branch="v1.0", commit_sha=sha, tag="v1.0")
+    )
+    assert await tag_deliveries(pool) == []
+    assert executor.gate is not None
+    executor.gate.set()
+    build = await main
+    assert build is not None
+    assert [d["tag"] for d in await tag_deliveries(pool)] == ["v1.0"]
 
 
 async def test_restart_of_gated_build_settles_effect_rows(

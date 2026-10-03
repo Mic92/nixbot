@@ -9,7 +9,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 import pytest
-from nixbot_effects import EffectError, EventEffectMeta
+from nixbot_effects import EffectError, EffectMeta, EventEffectMeta
 
 from nixbot.db import get_or_create_build
 from nixbot.db_gen import builds as builds_q
@@ -630,3 +630,113 @@ async def test_listing_failure_recorded_on_build(env: dict[str, Any]) -> None:
     svc.event_listings = EventListingCache()  # as if main moved
     await _deliver(svc, build_id, "github:alice")
     assert await builds_q.effect_eval_errors(svc.pool, build_id=build_id) == []
+
+
+async def _deliver_tag(svc: CIService, build_id: int, tag: str, rev: str) -> None:
+    await svc.enqueue_work(
+        "deliver",
+        f"t-{tag}",
+        {
+            "kind": "tag",
+            "build_id": build_id,
+            "actor": "github:alice",
+            "tag": tag,
+            "rev": rev,
+        },
+    )
+    await svc.drain_work()
+
+
+async def test_tag_runs_onpush_effects_with_tag(env: dict[str, Any]) -> None:
+    """A tag delivery lists the tagged commit's onPush effects with `tag`
+    set, since effects like hercules-ci-effects' github-releases only
+    exist then, and runs each against that commit. A second tag on the
+    same commit (rc, then final) releases again, and a restart reruns
+    with the stored tag."""
+    svc, build_id, sha = env["service"], env["build_id"], env["sha"]
+    git(env["repo"], "tag", "v1.0-rc1")
+    git(env["repo"], "tag", "-a", "v1.0", "-m", "v1.0")
+    fake = env["fake"]
+    listed: list[tuple[str | None, str | None, str | None]] = []
+    ran: list[tuple[str, str | None, str | None, str | None]] = []
+
+    async def list_effects(ctx: Any) -> dict[str, EffectMeta]:
+        listed.append((ctx.tag, ctx.branch, ctx.rev))
+        return {"release": EffectMeta(lock="release")}
+
+    async def run_effect(ctx: Any, name: str, _log: Any = None) -> bool:
+        ran.append((name, ctx.tag, ctx.branch, ctx.rev))
+        # github-releases needs the forge to check out and authenticate.
+        assert (ctx.repo, ctx.forge_type) == ("acme/widget", "github")
+        return True
+
+    fake.list_effects = list_effects
+    fake.run_effect = run_effect
+
+    await _deliver_tag(svc, build_id, "v1.0-rc1", sha)
+    row = (await _rows(svc, build_id))["release"]
+    assert (row["kind"], row["status"], row["code_rev"]) == (
+        "tag:v1.0-rc1",
+        "succeeded",
+        sha,
+    )
+    assert row["lock"] == "release"
+    assert listed == [("v1.0-rc1", None, sha)]
+    assert ran == [("release", "v1.0-rc1", None, sha)]
+    # onEvent effects did not run.
+    assert env["ran"] == []
+
+    await _deliver_tag(svc, build_id, "v1.0", sha)
+    assert [tag for _, tag, _, _ in ran] == ["v1.0-rc1", "v1.0"]
+    # The final tag did not replace the rc's row.
+    kinds = await svc.pool.fetch(
+        "SELECT kind FROM effect_runs WHERE build_id = $1 AND kind LIKE 'tag:%'"
+        " ORDER BY kind",
+        build_id,
+    )
+    assert [r["kind"] for r in kinds] == ["tag:v1.0", "tag:v1.0-rc1"]
+
+    await svc.restart_effects(build_id, "release", kind="tag:v1.0-rc1")
+    await svc.drain_work()
+    assert [tag for _, tag, _, _ in ran] == ["v1.0-rc1", "v1.0", "v1.0-rc1"]
+
+
+async def test_tag_waits_for_a_running_release(env: dict[str, Any]) -> None:
+    """A tag landing while the previous tag's effect still runs on the
+    same build is retried, not dropped like a busy onEvent row."""
+    svc, build_id, sha = env["service"], env["build_id"], env["sha"]
+    git(env["repo"], "tag", "v2.0")
+    env["fake"].push = {"release": EffectMeta()}
+    await svc.pool.execute(
+        "INSERT INTO effect_runs (project_id, kind, build_id, name, status,"
+        " payload, code_rev) VALUES ($1, 'tag:v2.0', $2, 'release', 'running',"
+        " '{}', $3)",
+        env["project_id"],
+        build_id,
+        sha,
+    )
+    await _deliver_tag(svc, build_id, "v2.0", sha)
+    item = await svc.pool.fetchrow(
+        "SELECT status, attempts, error FROM work_queue WHERE kind = 'deliver'"
+        " ORDER BY id DESC LIMIT 1"
+    )
+    assert item["status"] == "failed"
+    assert item["attempts"] > 1
+    assert item["error"] == "release still running for this tag"
+    assert env["fake"].ran == []
+
+
+async def test_tag_listing_failure_recorded_apart_from_build_effects(
+    env: dict[str, Any],
+) -> None:
+    """A tag whose onPush does not evaluate shows why on the build page,
+    labelled as the tag's, without failing the build's own effects."""
+    svc, build_id, sha = env["service"], env["build_id"], env["sha"]
+    git(env["repo"], "tag", "v3.0")
+    env["fake"].push_error = EffectError("error: attribute 'typo' missing")
+    await _deliver_tag(svc, build_id, "v3.0", sha)
+    errors = await builds_q.effect_eval_errors(svc.pool, build_id=build_id)
+    assert [(x.source, x.code_rev, "typo" in x.error) for x in errors] == [
+        ("tag", sha, True)
+    ]
+    assert await builds_q.effects_summary(svc.pool, build_id=build_id) is None

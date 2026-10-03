@@ -36,6 +36,7 @@ from .canceller import (
 from .db import BuildStatus
 from .db_gen import events as ev_q
 from .db_gen import maintenance as q
+from .deliver import TAG_KIND
 from .effects import EffectsBackend, NixEffects
 from .effects_state import TaskTokens
 from .events import (
@@ -464,6 +465,26 @@ class Orchestrator:
                     "failed_attrs": list(failed),
                 },
             )
+
+    async def deliver_tag(
+        self, event: ChangeEvent, build: BuildRecord, status: str
+    ) -> None:
+        """Queue a tag push's onPush effects once its tree built green.
+        They run against the tagged commit, see deliver.py. No-op for
+        other events."""
+        if event.tag is None or status != BuildStatus.SUCCEEDED:
+            return
+        await WorkQueue(self.pool).enqueue(
+            "deliver",
+            f"deliver-{build.project_id}-tag-{event.tag}",
+            {
+                "kind": TAG_KIND,
+                "build_id": build.id_,
+                "actor": event.actor,
+                "tag": event.tag,
+                "rev": event.commit_sha,
+            },
+        )
 
     async def refresh_schedules(self, event: ChangeEvent) -> None:
         """Queue `onSchedule` re-discovery after a successful

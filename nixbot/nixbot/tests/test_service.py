@@ -31,6 +31,7 @@ from nixbot.schedule_runner import scheduled_worktree_id
 from nixbot.schedules import DueEffect, ScheduleWhen
 from nixbot.status import CheckRunStore
 from nixbot.webhooks import ChangeRequest, CheckRerequested, PrApproved, PrClosed
+from nixbot.work_queue import MAX_WORK_ATTEMPTS
 
 from .support import (
     FakeGitlab,
@@ -264,6 +265,89 @@ async def test_build_branches_gates_branch_pushes(
         )
     await service.drain_work()
     assert handled == ["release-1.0"]
+
+
+async def test_tag_push_builds_peeled_commit(
+    service: CIService, git_repo: tuple[Path, str]
+) -> None:
+    """An annotated tag's object is peeled to its commit."""
+    repo, _sha = git_repo
+    commit = git(repo, "rev-parse", "HEAD")
+    git(repo, "tag", "-a", "v1.0", "-m", "v1.0")
+    git(repo, "tag", "nightly")
+    tag_object = git(repo, "rev-parse", "v1.0")
+    assert tag_object != commit
+
+    pool = service.pool
+    project_id = await seed_project(pool, f"file://{repo}")
+    forge_repo_id = await pool.fetchval(
+        "SELECT forge_repo_id FROM projects WHERE id = $1", project_id
+    )
+    # main built the tagged tree already.
+    await insert_build(
+        pool,
+        project_id,
+        commit_sha=commit,
+        tree_hash=git(repo, "rev-parse", "HEAD^{tree}"),
+        status="succeeded",
+    )
+    handled: list[tuple[str | None, str, str]] = []
+
+    async def fake_handle(event: Any, credentials: Any = None) -> None:
+        handled.append((event.tag, event.branch, event.commit_sha))
+
+    service.orchestrator.handle_change_event = fake_handle  # type: ignore[method-assign]
+
+    for tag, sha in (("v1.0", tag_object), ("nightly", commit)):
+        await service.submit(
+            ChangeRequest(
+                forge="github",
+                forge_repo_id=forge_repo_id,
+                branch=tag,
+                commit_sha=sha,
+                tag=tag,
+            )
+        )
+    await service.drain_work()
+    assert handled == [("v1.0", "v1.0", commit), ("nightly", "nightly", commit)]
+
+
+async def test_tag_push_waits_for_a_branch_to_build_its_commit(
+    service: CIService, git_repo: tuple[Path, str]
+) -> None:
+    """`git push origin main v1.0` delivers both pushes in either order.
+    A tag that started the build would leave main attached to it, and
+    main's own onPush run would never happen. So the tag waits for a
+    build of its tree, and only builds a commit no branch built on its
+    last attempt."""
+    repo, _sha = git_repo
+    git(repo, "tag", "v1.0")
+    pool = service.pool
+    project_id = await seed_project(pool, f"file://{repo}")
+    forge_repo_id = await pool.fetchval(
+        "SELECT forge_repo_id FROM projects WHERE id = $1", project_id
+    )
+    handled: list[str | None] = []
+
+    async def fake_handle(event: Any, credentials: Any = None) -> None:
+        handled.append(event.tag)
+
+    service.orchestrator.handle_change_event = fake_handle  # type: ignore[method-assign]
+    await service.submit(
+        ChangeRequest(
+            forge="github",
+            forge_repo_id=forge_repo_id,
+            branch="v1.0",
+            commit_sha=git(repo, "rev-parse", "v1.0"),
+            tag="v1.0",
+        )
+    )
+    await service.drain_work()
+    item = await pool.fetchrow(
+        "SELECT status, attempts FROM work_queue WHERE kind = 'change'"
+    )
+    assert (item["status"], item["attempts"]) == ("done", MAX_WORK_ATTEMPTS - 1)
+    assert handled == ["v1.0"]
 
 
 async def test_pr_approval_gate(

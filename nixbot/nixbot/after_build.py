@@ -34,11 +34,16 @@ async def after_build(  # noqa: PLR0913
     reused: bool = False,
 ) -> None:
     if status == BuildStatus.SUCCEEDED:
-        await _step(
-            "effects",
-            build,
-            _effects(o, event, build, worktree_path, credentials, reused),
-        )
+        if event.tag is not None:
+            # Not the build's once-only onPush run, which belongs to
+            # whichever branch built the tree.
+            await _step("tag", build, o.deliver_tag(event, build, status))
+        else:
+            await _step(
+                "effects",
+                build,
+                _effects(o, event, build, worktree_path, credentials, reused),
+            )
         await _step("schedules", build, o.refresh_schedules(event))
     await _step("deliveries", build, _deliveries(o, event, build, reused))
 

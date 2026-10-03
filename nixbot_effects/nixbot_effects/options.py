@@ -24,6 +24,12 @@ class EffectsOptions:
     branch: str | None = None
     url: str | None = None
     tag: str | None = None
+    # Take the tag from the commit when `tag` is unset. Local runs want
+    # that; the daemon names the tag it runs for, and a tag pushed after
+    # a branch run was queued must not turn it into a tag run.
+    detect_tag: bool = True
+    # "github", "gitea" or "gitlab": primaryRepo.forgeType.
+    forge_type: str | None = None
     locked_url: str | None = None
     default_branch: str | None = None
     # Credentials and secrets, as values.

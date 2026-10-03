@@ -45,6 +45,8 @@ async def register_repo_hook(  # noqa: PLR0913
         "url": target_url,
         "token": secret,
         "push_events": True,
+        # Tag pushes run onPush effects with `tag` set.
+        "tag_push_events": True,
         "merge_requests_events": True,
         # onEvent.comment
         "note_events": True,

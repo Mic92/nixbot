@@ -137,7 +137,13 @@
       </p>
       <div id="attributes">{% include "_attributes.html" %}</div>
       {% for x in effect_eval_errors %}
-        {% set what = "onEvent of " ~ project.default_branch ~ " at " ~ x.code_rev[:8] if x.source == "delivery" else x.source %}
+        {% if x.source == "delivery" %}
+          {% set what = "onEvent of " ~ project.default_branch ~ " at " ~ x.code_rev[:8] %}
+        {% elif x.source == "tag" %}
+          {% set what = "onPush of a tag push at " ~ x.code_rev[:8] %}
+        {% else %}
+          {% set what = x.source %}
+        {% endif %}
         <h2 class="section">{{ status_icon("failed", labelled=false) }}{{ what }} failed to evaluate</h2>
         <pre class="error">{{ x.error | excerpt(4000) | ansi }}</pre>
       {% endfor %}

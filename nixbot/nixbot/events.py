@@ -47,6 +47,9 @@ class ChangeEvent:
     # Who caused this event, forge qualified ("github:alice"). None
     # for polled changes.
     actor: str | None = None
+    # Tag pushes: the tag, also held in `branch`. Its onPush effects run
+    # as a delivery of their own, see deliver.py.
+    tag: str | None = None
 
 
 def event_for_build(repo: RepoInfo, build: BuildRecord) -> ChangeEvent:

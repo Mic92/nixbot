@@ -128,6 +128,17 @@ def test_push_claims(tmp_path: Path) -> None:
     assert issued.expires_at.tzinfo is not None
 
 
+def test_tag_claims(tmp_path: Path) -> None:
+    """A tag push's effects carry the tag ref, like GitHub Actions, so a
+    relying party can trust releases the way it trusts branch pushes."""
+    issuer = make_issuer(tmp_path)
+    identity = push_identity(event="tag", tag="v1.0", branch=None)
+    claims = decode(issuer, issuer.mint(identity, "aud").token)
+    assert claims["sub"] == "repo:github:acme/widgets:ref:refs/tags/v1.0"
+    assert claims["ref"] == "refs/tags/v1.0"
+    assert claims["event"] == "tag"
+
+
 def test_pull_request_claims_have_no_ref(tmp_path: Path) -> None:
     issuer = make_issuer(tmp_path)
     identity = push_identity(

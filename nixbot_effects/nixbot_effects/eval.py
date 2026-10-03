@@ -67,16 +67,25 @@ async def effects_args(opts: EffectsOptions) -> dict[str, Any]:
         msg = "No --rev specified and path is not a git repository"
         raise EffectError(msg)
     branch = opts.branch
-    if branch is None and has_git:
+    # A tag push has no branch (Hercules passes null too). A detached
+    # checkout would otherwise report "HEAD".
+    if branch is None and opts.tag is None and has_git:
         branch = await git_command(["rev-parse", "--abbrev-ref", "HEAD"], opts.path)
     repo = opts.repo or opts.path.name
-    tag = opts.tag or (await git_get_tag(opts.path, rev) if has_git else None)
+    tag = opts.tag
+    if tag is None and opts.detect_tag and has_git:
+        tag = await git_get_tag(opts.path, rev)
     # secret_context needs the tag (isTag conditions), also when resolved from git
     opts.tag = tag
     url = opts.url or (await get_git_remote_url(opts.path) if has_git else None)
     ref = f"refs/tags/{tag}" if tag else (f"refs/heads/{branch}" if branch else None)
+    # Hercules splits "owner/name". GitLab groups nest, so the owner
+    # is everything before the last slash.
+    owner, _, name = repo.rpartition("/")
     primary_repo = {
-        "name": repo,
+        "name": name,
+        "owner": owner or None,
+        "forgeType": opts.forge_type,
         "branch": branch,
         "ref": ref,
         "tag": tag,
