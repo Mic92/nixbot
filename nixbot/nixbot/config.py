@@ -377,6 +377,11 @@ class Config(BaseModel):
     eval_worker_count: int | None = None
     # Concurrent evaluations (global). Default matches today's global eval lock.
     eval_concurrency: int = 1
+    # See EvalSettings.command.
+    eval_command: list[str] = ["nix-eval-jobs"]
+    # Writable in the eval sandbox and shared by every project, for an
+    # evaluator with a persistent cache.
+    eval_writable_paths: list[Path] = []
     # Global cap on concurrent attribute builds; None = derive from CPU count.
     build_concurrency: int | None = None
     build_store: BuildStoreConfig | None = None

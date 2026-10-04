@@ -43,6 +43,8 @@ let
       private_repo_viewers = cfg.privateRepoViewers;
       eval_max_memory_size = cfg.evalMaxMemorySize;
       eval_worker_count = cfg.evalWorkerCount;
+      eval_command = cfg.evalCommand;
+      eval_writable_paths = cfg.evalWritablePaths;
       build_concurrency = cfg.buildConcurrency;
       build_store =
         if cfg.buildStore.url == null then
@@ -334,6 +336,38 @@ in
       type = lib.types.nullOr lib.types.int;
       default = null;
       description = "Number of nix-eval-jobs worker processes; null uses the core count.";
+    };
+
+    evalCommand = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ "nix-eval-jobs" ];
+      example = lib.literalExpression ''
+        [ "''${pkgs.iets}/bin/nix-eval-jobs" "--cache-dir" "/var/lib/nixbot/eval-cache" ]
+      '';
+      description = ''
+        The evaluator to run, as an argv prefix; its own flags go here
+        too. Any program that takes nix-eval-jobs's flags and prints its
+        JSON lines fits. A bare name is looked up in the service's PATH.
+      '';
+    };
+
+    evalWritablePaths = lib.mkOption {
+      type = lib.types.listOf lib.types.path;
+      default = [ ];
+      example = [ "/var/lib/nixbot/eval-cache" ];
+      description = ''
+        Directories that are writable in the evaluation sandbox, for an
+        evaluator that keeps a cache across runs.
+
+        Every evaluation of every project shares these directories,
+        including pull requests from outside contributors. That is what
+        makes the cache useful: the compiled form of one nixpkgs serves
+        all projects. It also means the evaluator is the only boundary
+        between projects. An evaluator that lets the evaluated code read
+        or write the directory lets one project read or poison another's
+        entries. Use this only with an evaluator that keeps the directory
+        out of reach of the code and treats a bad entry as a miss.
+      '';
     };
 
     showTrace = lib.mkOption {
