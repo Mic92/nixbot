@@ -122,6 +122,22 @@ def test_sandbox_command_mounts(tmp_path: Path) -> None:
     assert "CREDENTIALS_DIRECTORY" not in joined
 
 
+def test_alternate_evaluator(tmp_path: Path) -> None:
+    cache = tmp_path / "eval-cache"
+    settings = EvalSettings(
+        gc_roots_dir=tmp_path / "gcroots",
+        command=["iets", "eval-jobs"],
+        extra_args=["--cache-dir", str(cache)],
+        extra_rw_paths=[cache],
+    )
+    cmd = build_eval_command(tmp_path, BranchConfig(), settings)
+    assert cmd[:2] == ["iets", "eval-jobs"]
+    assert cmd[cmd.index("--cache-dir") + 1] == str(cache)
+
+    joined = " ".join(build_sandbox_command(tmp_path / "wt", settings))
+    assert f"--bind {cache} {cache}" in joined
+
+
 def test_sandbox_skips_missing_daemon_socket(tmp_path: Path) -> None:
     # Single-user nix installs have no daemon socket. The sandbox must
     # not hard-bind it (bwrap aborts on missing source paths) and the
