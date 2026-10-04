@@ -323,3 +323,6 @@ SELECT count(*) AS count FROM (
              name, schedule_name, id DESC
 ) latest
 WHERE status IN ('failed', 'dependency_failed');
+
+-- name: WebLatestBuildStatus :one
+SELECT status FROM builds WHERE project_id = $1 ORDER BY number DESC LIMIT 1;

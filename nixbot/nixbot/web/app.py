@@ -397,6 +397,7 @@ class _PageRoutes:
             project=project,
             builds=builds,
             failing_effects=await ctx.queries.failing_effects(project["id"]),
+            latest_status=await ctx.queries.latest_build_status(project["id"]),
             status=status or "",
             ref=ref or "",
             webhook_url=await self._webhook_url(request, project),
@@ -610,6 +611,7 @@ class _PageRoutes:
             schedules=await self._schedules(project["id"]),
             can_run_schedules=await self._can_run_schedules(request, project["id"]),
             failing_effects=await ctx.queries.failing_effects(project["id"]),
+            latest_status=await ctx.queries.latest_build_status(project["id"]),
             can_control=False,
         )
 

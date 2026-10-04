@@ -5,14 +5,8 @@
 {% block body %}
   <main id="main">
     <section class="content">
-      <div class="build-header">
-        <h2>
-          Effects
-          <small>· <a href="{{ repo_path(project) }}">{{ project.owner }}/{{ project.name }}</a></small>
-        </h2>
-      </div>
       {% set tab = "effects" %}
-      {% include "_project_tabs.html" %}
+      {% include "_project_header.html" %}
       {% if not filters and schedules %}
         {% include "_schedules.html" %}
       {% endif %}

@@ -58,6 +58,7 @@ __all__: collections.abc.Sequence[str] = (
     "web_builds_for_repo",
     "web_effects",
     "web_eval_stats",
+    "web_latest_build_status",
     "web_neighbor_numbers",
     "web_project_effect_counts",
     "web_project_effects",
@@ -724,6 +725,10 @@ SELECT count(*) AS count FROM (
 WHERE status IN ('failed', 'dependency_failed')
 """
 
+WEB_LATEST_BUILD_STATUS: typing.Final[str] = """-- name: WebLatestBuildStatus :one
+SELECT status FROM builds WHERE project_id = $1 ORDER BY number DESC LIMIT 1
+"""
+
 
 class QueryResults[T]:
     __slots__ = ("_args", "_conn", "_cursor", "_decode_hook", "_iterator", "_sql")
@@ -1274,6 +1279,13 @@ def web_project_effect_counts(conn: ConnectionLike, *, project_id: int, trigger:
 
 async def web_project_failing_effects(conn: ConnectionLike, *, project_id: int) -> int | None:
     row = await conn.fetchrow(WEB_PROJECT_FAILING_EFFECTS, project_id)
+    if row is None:
+        return None
+    return row[0]
+
+
+async def web_latest_build_status(conn: ConnectionLike, *, project_id: int) -> str | None:
+    row = await conn.fetchrow(WEB_LATEST_BUILD_STATUS, project_id)
     if row is None:
         return None
     return row[0]

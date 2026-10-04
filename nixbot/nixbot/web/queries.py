@@ -194,6 +194,9 @@ class WebQueries:
                 row["payload"] = json.loads(row["payload"])
         return rows
 
+    async def latest_build_status(self, project_id: int) -> str | None:
+        return await gen.web_latest_build_status(self.pool, project_id=project_id)
+
     async def failing_effects(self, project_id: int) -> int:
         return (
             await gen.web_project_failing_effects(self.pool, project_id=project_id) or 0

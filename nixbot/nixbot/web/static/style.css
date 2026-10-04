@@ -1348,6 +1348,13 @@ details.webhook-setup summary {
 	color: var(--fg);
 	font-weight: 600;
 }
+.tab-count {
+	margin-left: 0.3rem;
+	border-color: transparent;
+	font-weight: 600;
+	color: var(--bad);
+	background: color-mix(in srgb, var(--bad) 12%, transparent);
+}
 
 nav.tabs {
 	display: flex;
@@ -1356,6 +1363,8 @@ nav.tabs {
 	border-bottom: 1px solid var(--border);
 }
 nav.tabs a {
+	display: inline-flex;
+	align-items: center;
 	padding: 0.35rem 0.1rem;
 	color: var(--muted);
 	text-decoration: none;
@@ -1367,19 +1376,19 @@ nav.tabs a[aria-current="page"] {
 	font-weight: 600;
 	border-bottom-color: var(--accent);
 }
-nav.tabs .tab-count {
-	margin-left: 0.3rem;
-	padding: 0 0.45rem;
-	border-radius: 99px;
-	font-size: 0.78rem;
+
+/* The active tab is bold: reserve that width so tabs do not shift. */
+nav.tabs .tab-label::after {
+	content: attr(data-label);
+	display: block;
+	height: 0;
+	overflow: hidden;
+	visibility: hidden;
 	font-weight: 600;
-	color: var(--bad);
-	background: color-mix(in srgb, var(--bad) 12%, transparent);
 }
 
-/* Schedules table: headers stay on one line, the name column takes the
-   slack, and "run now" is a quiet button so it does not outweigh a
-   failed run below. */
+/* Schedules: one-line cells, the name takes the slack, and "run now" is
+   quiet so it does not outweigh a failed run below. */
 table.schedules th,
 table.schedules td {
 	white-space: nowrap;

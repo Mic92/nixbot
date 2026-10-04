@@ -1,0 +1,11 @@
+{# Heading and tabs shared by the project's pages. Inputs: project, tab,
+   latest_status, failing_effects. #}
+{% from "_macros.html" import project_link, status_icon %}
+<h2>
+  {% if latest_status %}
+    {{ status_icon(latest_status, labelled=false) }}
+    <span class="visually-hidden">latest build {{ latest_status.replace('_', ' ') }}</span>
+  {% endif %}
+  {{ project_link(project) }}
+</h2>
+{% include "_project_tabs.html" %}
