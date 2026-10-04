@@ -17,6 +17,7 @@ in
   nixbot-effects-tests = self.packages.${pkgs.stdenv.hostPlatform.system}.nixbot-effects.tests.pytest;
   effects-lib-ssh = import ./effects-lib-ssh.nix checkArgs;
   effects-lib-run-nixos = import ./effects-lib-run-nixos.nix checkArgs;
+  effects-lib-flake-update = import ./effects-lib-flake-update.nix checkArgs;
   sqlc-generated = import ./sqlc.nix checkArgs;
   effects-lib = import ./effects-lib.nix checkArgs;
   docs-examples = import ./docs-examples.nix checkArgs;
