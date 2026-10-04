@@ -1,0 +1,54 @@
+{% from "_macros.html" import status_icon, effect_actions %}
+{% set ctx_col = build is not defined or build is none %}
+{% set ns = namespace(group=none) %}
+{% for e in rows %}
+  {% if not ctx_col and ns.group != e.needs_attention %}
+    {% set ns.group = e.needs_attention %}
+    <div class="grp">{{ "Needs attention" if e.needs_attention else "Done" }}</div>
+  {% endif %}
+  {% set pl = (e.why or "") | plain %}
+  <div class="er {{ 'failed' if e.status in ('failed', 'dependency_failed') else 'pending' if e.status in ('pending', 'running') else '' }}">
+    <span>{{ status_icon(e.status) }}</span>
+    <span class="nm">
+      {% if e.id and (e.log_size or e.status == "running") %}
+        <a href="{{ repo_path(project) }}/effects/runs/{{ e.id }}"><code>{{ e.name }}</code></a>
+      {% else %}
+        <code>{{ e.name }}</code>
+      {% endif %}
+    </span>
+    <span><span class="pill">{{ e.trigger }}{% if e.trigger_value %} <b>{{ e.trigger_value }}</b>{% endif %}</span></span>
+    {% if ctx_col %}
+      <span class="ctx">
+        {% if e.build_number %}
+          <a href="{{ build_path(project, e.build_number) }}">#{{ e.build_number }}</a>
+          <span class="muted">{{ e.commit_sha[:7] }}</span>
+        {% elif e.trigger == "schedule" and e.id %}
+          <a href="{{ repo_path(project) }}/effects/runs/{{ e.id }}">run #{{ e.id }}</a>
+        {% else %}
+          <span class="muted">no build</span>
+        {% endif %}
+      </span>
+    {% endif %}
+    <span class="t">
+      {% if e.started_at %}<time datetime="{{ e.started_at.isoformat() }}" title="{{ e.started_at }}">{{ e.started_at | timeago }}</time>{% endif %}
+      {% if e.started_at and e.status not in ("skipped", "pending") %}<span class="muted">· {{ e | duration }}</span>{% endif %}
+    </span>
+    <span class="act">
+      {% if can_control and e.id and e.build_id and e.restart_allowed %}
+        {{ effect_actions(build_path(project, e.build_number), e, e.kind, restart=e.restart_allowed != "cancel") }}
+      {% endif %}
+    </span>
+    {% if e.why %}
+      <div class="why">
+        {% if e.error and (pl | length > 160 or "\n" in pl.strip()) %}
+          <details class="error">
+            <summary>{{ pl | excerpt(160) }}</summary>
+            <pre class="error">{{ e.error | ansi }}</pre>
+          </details>
+        {% else %}
+          {{ pl | excerpt(160) }}
+        {% endif %}
+      </div>
+    {% endif %}
+  </div>
+{% endfor %}

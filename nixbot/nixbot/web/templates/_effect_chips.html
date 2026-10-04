@@ -1,0 +1,9 @@
+{# Status filter chips and the other active filters, as removable pills. #}
+<div class="chips">
+  {% for c in chips %}
+    <a class="chip {{ 'on' if c.on }}" href="{{ c.url }}">{{ c.label }}</a>
+  {% endfor %}
+  {% for p in pills %}
+    <a class="pill" title="remove this filter" href="{{ p.url }}">{{ p.label }} <b>{{ p.value }}</b> ✕</a>
+  {% endfor %}
+</div>

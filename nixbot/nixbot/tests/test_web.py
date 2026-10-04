@@ -45,6 +45,7 @@ from nixbot.web.logs import (
     render_log_lines,
     strip_ansi,
 )
+from nixbot.web.queries import PAGE_SIZE
 from nixbot.web.state_routes import create_state_router
 from nixbot.web.task_routes import create_task_router
 from nixbot.web.templating import (
@@ -1811,12 +1812,11 @@ def test_build_page_shows_event_effects(client: WebHarness) -> None:
 
     client.loop.run_until_complete(seed())
     text = client.get("/repos/github/acme/widget/builds/3").text
-    assert "onPush failed to evaluate" in text
+    # Evaluation failures are rows of the same list as runs.
     assert "undefined variable typo0" in text
-    assert "Event effects" in text
-    assert "pull_request ·" in text
+    assert "evaluation" in text
+    assert "pull_request" in text
     assert "needs write access" in text
-    assert "Effect checks" in text
     assert "comment.apply" in text
     assert "hcloudx missing" in text
 
@@ -2236,56 +2236,63 @@ def test_scheduled_run_viewer_waiting_before_log(client: WebHarness) -> None:
     assert "log unavailable" not in resp.text
 
 
-def test_scheduled_run_history_lists_runs(client: WebHarness) -> None:
-    """The history page lists previous runs of one (schedule, effect),
-    newest first."""
-    ctx = client.ctx
-
-    async def setup() -> tuple[int, int]:
-        project_id = await ctx.pool.fetchval(
-            "SELECT id FROM projects WHERE forge_repo_id = 'web-1'"
-        )
-        first = await _insert_scheduled_run(
-            ctx.pool, project_id, schedule_name="hist", effect="run"
-        )
-        second = await _insert_scheduled_run(
-            ctx.pool, project_id, schedule_name="hist", effect="run", status="failed"
-        )
-        return first, second
-
-    first, second = client.run(setup())
-    resp = client.get(
-        "/repos/github/acme/widget/schedules/runs?schedule=hist&effect=run"
-    )
-    assert resp.status_code == 200
-    assert f"#{first}" in resp.text
-    assert f"#{second}" in resp.text
-    # Newest first: the later id appears before the earlier one.
-    assert resp.text.index(f"#{second}") < resp.text.index(f"#{first}")
-
-
-def test_scheduled_run_history_special_chars(client: WebHarness) -> None:
-    """schedule/effect names are repo-controlled and may contain
-    slashes. Query params route them safely."""
-    ctx = client.ctx
-
-    async def setup() -> int:
-        project_id = await ctx.pool.fetchval(
-            "SELECT id FROM projects WHERE forge_repo_id = 'web-1'"
-        )
-        return await _insert_scheduled_run(
-            ctx.pool, project_id, schedule_name="a/b c", effect="x/y"
-        )
-
-    run_id = client.run(setup())
+def test_old_schedule_history_url_redirects(client: WebHarness) -> None:
     resp = client.run(
         client.http.get(
             "/repos/github/acme/widget/schedules/runs",
-            params={"schedule": "a/b c", "effect": "x/y"},
+            params={"schedule": "a b", "effect": "x"},
         )
     )
-    assert resp.status_code == 200
-    assert f"#{run_id}" in resp.text
+    assert resp.status_code == 301
+    assert resp.headers["location"] == (
+        "/repos/github/acme/widget/effects?trigger=schedule&schedule=a+b&effect=x"
+    )
+
+
+def test_project_effects_filter_and_paginate(client: WebHarness) -> None:
+    """Status filters and counts come from SQL over all runs, the cursor
+    pages past the page size, and names with slashes route safely."""
+    ctx = client.ctx
+
+    async def setup() -> list[int]:
+        project_id = await ctx.pool.fetchval(
+            "SELECT id FROM projects WHERE forge_repo_id = 'web-1'"
+        )
+        await ctx.pool.execute("DELETE FROM effect_runs WHERE schedule_name = 'pg'")
+        # One old failure under many newer successes.
+        return [
+            await _insert_scheduled_run(
+                ctx.pool,
+                project_id,
+                schedule_name="pg",
+                effect="a/b c",
+                status="failed" if i == 0 else "succeeded",
+            )
+            for i in range(PAGE_SIZE + 6)
+        ]
+
+    ids = client.run(setup())
+    base = "/repos/github/acme/widget/effects"
+    params = {"trigger": "schedule", "schedule": "pg", "effect": "a/b c"}
+
+    def get(**extra: str) -> str:
+        resp = client.run(client.http.get(base, params={**params, **extra}))
+        assert resp.status_code == 200
+        return resp.text
+
+    failed = get(status="failed")
+    assert failed.count("run #") == 1
+    assert f"run #{ids[0]}" in failed
+    first = get()
+    assert first.count("run #") == PAGE_SIZE
+    assert "failed 1" in first
+    # Newest first.
+    assert first.index(f"run #{ids[-1]}") < first.index(f"run #{ids[-2]}")
+    cursor = re.search(r"before=(\d+)", first)
+    assert cursor
+    rest = get(before=cursor.group(1))
+    assert rest.count("run #") == 6
+    assert "loading more" not in rest
 
 
 def test_scheduled_run_stream_replays_history(

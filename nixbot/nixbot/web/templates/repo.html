@@ -145,7 +145,7 @@
           </thead>
           {% for s in schedules %}
             {% set label = s.schedule if s.schedule == s.effect else s.schedule ~ " · " ~ s.effect %}
-            {% set history_url = repo_path(project) ~ "/schedules/runs?schedule=" ~ (s.schedule | urlencode) ~ "&effect=" ~ (s.effect | urlencode) %}
+            {% set history_url = repo_path(project) ~ "/effects?trigger=schedule&schedule=" ~ (s.schedule | urlencode) ~ "&effect=" ~ (s.effect | urlencode) %}
             <tr>
               <td class="status">{{ status_icon(s.run.status if s.run else "pending") }}</td>
               <td class="attr-name">

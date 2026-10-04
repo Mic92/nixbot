@@ -12,6 +12,7 @@ import functools
 import html
 import json
 from typing import TYPE_CHECKING, Any, NamedTuple, Protocol
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import (
@@ -31,7 +32,6 @@ from ..ansi import (  # noqa: TID252
 )
 from ..build_scheduler import TERMINAL_FAILURES  # noqa: TID252
 from ..db_gen import maintenance as maint_gen  # noqa: TID252
-from ..db_gen import scheduled as sched_gen  # noqa: TID252
 from ..db_gen import web as gen  # noqa: TID252
 from ..executor import (  # noqa: TID252
     attribute_log_path,
@@ -40,7 +40,7 @@ from ..executor import (  # noqa: TID252
     read_log,
 )
 from ..logstore import LogContainerReader, is_container  # noqa: TID252
-from ..sql_util import row_dict, row_dicts  # noqa: TID252
+from ..sql_util import row_dict  # noqa: TID252
 from ..status import NO_LOG_STATUSES  # noqa: TID252
 from .api_routes import FailureSummary, clean_row
 
@@ -484,8 +484,6 @@ async def _failure_summary(
 # downloads and in the static viewer.
 HISTORY_MAX_LINES = 2000
 
-_HISTORY_PAGE = 50
-
 _FAILURE_STATUSES = {s.value for s in TERMINAL_FAILURES} | {"cancelled"}
 
 
@@ -689,41 +687,20 @@ class _LogRoutes:
             _stream_events(writer, path), media_type="text/event-stream"
         )
 
-    async def scheduled_runs_history(  # noqa: PLR0913
+    async def scheduled_runs_history(
         self,
-        request: Request,
         forge: str,
         owner: str,
         name: str,
         schedule: str,
         effect: str,
-        before: int | None = Query(None, ge=1),
-    ) -> HTMLResponse:
-        """Paginated run history for one (schedule, effect). schedule and
-        effect arrive as query params, never path segments, so the
-        repo-controlled names cannot affect routing or filesystem paths;
-        runs are looked up by id only."""
-        project = await self.ctx.repo_or_404(forge, owner, name, request)
-        rows = await sched_gen.scheduled_runs_for_effect(
-            self.ctx.pool,
-            project_id=project["id"],
-            schedule_name=schedule,
-            effect=effect,
-            before=before,
-            limit_=_HISTORY_PAGE + 1,
+    ) -> RedirectResponse:
+        """Old history URL, now the project effects page."""
+        query = urlencode(
+            {"trigger": "schedule", "schedule": schedule, "effect": effect}
         )
-        runs = row_dicts(rows)
-        has_more = len(runs) > _HISTORY_PAGE
-        runs = runs[:_HISTORY_PAGE]
-        template = "_schedule_run_rows.html" if before else "schedule_runs.html"
-        return await self.ctx.render(
-            template,
-            request=request,
-            project=project,
-            schedule=schedule,
-            effect=effect,
-            runs=runs,
-            has_more=has_more,
+        return RedirectResponse(
+            f"/repos/{forge}/{owner}/{name}/effects?{query}", status_code=301
         )
 
     async def build_failures(  # noqa: PLR0913

@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 
 from http import HTTPStatus
 
-from fastapi import APIRouter, FastAPI, HTTPException, Request, Response
+from fastapi import APIRouter, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import (
     HTMLResponse,
     JSONResponse,
@@ -46,6 +46,14 @@ from . import badge
 from .api_routes import create_api_router
 from .auth_routes import SESSION_COOKIE
 from .badge import message_for
+from .effect_rows import (
+    STATUS_FILTERS,
+    TRIGGERS,
+    attention_first,
+    filter_links,
+    from_eval_errors,
+    from_runs,
+)
 from .events import EventBroker, create_events_router
 from .logs import LogRegistry, create_log_api_router, create_log_router
 from .metrics import create_metrics_router
@@ -53,7 +61,7 @@ from .queries import PAGE_SIZE, BuildFilters, WebQueries
 from .routing import register_owner_convertor
 from .state_routes import create_state_router
 from .task_routes import create_task_router
-from .templating import STATIC_DIR, CachedStaticFiles, make_env
+from .templating import STATIC_DIR, CachedStaticFiles, make_env, repo_path
 from .workload_routes import create_workload_identity_router
 
 if TYPE_CHECKING:
@@ -508,6 +516,10 @@ class _PageRoutes:
             [build], await ctx.visible_repo_ids(request)
         )
         effects = await ctx.queries.effects(build["id"])
+        effect_rows = attention_first(
+            from_eval_errors(await ctx.queries.effect_eval_errors(build["id"]))
+            + from_runs(effects, build)
+        )
         return await ctx.render(
             "build.html",
             request=request,
@@ -520,14 +532,80 @@ class _PageRoutes:
             q=q,
             warned_counts=warned_counts,
             inline=inline,
-            effects=[e for e in effects if e["kind"] == "push"],
-            checks=[e for e in effects if e["kind"] == "check"],
-            event_effects=[e for e in effects if e["kind"] not in ("push", "check")],
+            rows=effect_rows,
             effects_status=await ctx.queries.effects_status(build["id"]),
-            effect_eval_errors=await ctx.queries.effect_eval_errors(build["id"]),
             prev_number=prev_number,
             next_number=next_number,
             can_control=await ctx.can_control(request, build),
+        )
+
+    async def effects_page(  # noqa: PLR0913
+        self,
+        request: Request,
+        forge: str,
+        owner: str,
+        name: str,
+        status: str | None = None,
+        trigger: str | None = None,
+        effect: str | None = None,
+        schedule: str | None = None,
+        before: int | None = Query(None, ge=1),
+    ) -> HTMLResponse:
+        """Every effect run of the project, newest first. Filters are
+        query params, never path segments: effect and schedule names are
+        repo-controlled."""
+        ctx = self.ctx
+        project = await ctx.repo_or_404(forge, owner, name, request)
+        status = status if status in STATUS_FILTERS else None
+        trigger = trigger if trigger in TRIGGERS else None
+        runs = await ctx.queries.project_effects(
+            project["id"],
+            statuses=STATUS_FILTERS[status] if status else None,
+            trigger=trigger,
+            effect=effect or None,
+            schedule=schedule or None,
+            before=before,
+            limit=PAGE_SIZE + 1,
+        )
+        has_more = len(runs) > PAGE_SIZE
+        filters = {
+            k: v
+            for k, v in (
+                ("status", status),
+                ("trigger", trigger),
+                ("effect", effect),
+                ("schedule", schedule),
+            )
+            if v
+        }
+        rows = from_runs(runs[:PAGE_SIZE])
+        if before:
+            return await ctx.render(
+                "_effect_page_rows.html",
+                request=request,
+                project=project,
+                rows=rows,
+                has_more=has_more,
+                filters=filters,
+                can_control=False,
+            )
+        counts = await ctx.queries.project_effect_counts(
+            project["id"],
+            trigger=trigger,
+            effect=effect or None,
+            schedule=schedule or None,
+        )
+        chips, pills = filter_links(f"{repo_path(project)}/effects", filters, counts)
+        return await ctx.render(
+            "effects.html",
+            request=request,
+            project=project,
+            rows=rows,
+            has_more=has_more,
+            filters=filters,
+            chips=chips,
+            pills=pills,
+            can_control=False,
         )
 
     async def attribute_rows(  # noqa: PLR0913
@@ -725,6 +803,7 @@ def create_router(ctx: WebContext) -> APIRouter:
             "/repos/{forge}/{owner:owner}/{name:segment}/attrs/{attr:path}",
             pages.attribute_history,
         ),
+        ("/repos/{forge}/{owner:owner}/{name:segment}/effects", pages.effects_page),
     ]
     for path, handler in html_pages:
         router.get(path, response_class=HTMLResponse)(handler)

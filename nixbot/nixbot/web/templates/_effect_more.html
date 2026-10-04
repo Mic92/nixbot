@@ -1,0 +1,7 @@
+{% if has_more %}
+  {% set more_url = repo_path(project) ~ "/effects?" ~ (filters | urlencode) ~ ("&" if filters) ~ "before=" ~ (rows | last).id %}
+  <div class="scroll-sentinel muted"
+       hx-get="{{ more_url }}"
+       hx-trigger="revealed"
+       hx-swap="outerHTML">loading more…</div>
+{% endif %}

@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}
+  effects · {{ project.owner }}/{{ project.name }}
+{% endblock title %}
+{% block body %}
+  <main id="main">
+    <section class="content">
+      <div class="build-header">
+        <h2>
+          Effects
+          <small>· <a href="{{ repo_path(project) }}">{{ project.owner }}/{{ project.name }}</a></small>
+        </h2>
+      </div>
+      {% include "_effect_chips.html" %}
+      {% if rows %}
+        {% include "_effect_list.html" %}
+      {% else %}
+        <p class="muted">no runs{{ " match these filters" if pills or chips | selectattr("on") | rejectattr("label", "equalto", "all") | list }}</p>
+      {% endif %}
+    </section>
+  </main>
+{% endblock body %}

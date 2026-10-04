@@ -26,6 +26,8 @@ __all__: collections.abc.Sequence[str] = (
     "WebBuildsForRepoRow",
     "WebEvalStatsRow",
     "WebNeighborNumbersRow",
+    "WebProjectEffectCountsRow",
+    "WebProjectEffectsRow",
     "WebQueueRow",
     "WebRecentBuildsRow",
     "WebRepoOverviewRow",
@@ -57,6 +59,8 @@ __all__: collections.abc.Sequence[str] = (
     "web_effects",
     "web_eval_stats",
     "web_neighbor_numbers",
+    "web_project_effect_counts",
+    "web_project_effects",
     "web_projects",
     "web_queue",
     "web_recent_builds",
@@ -343,6 +347,38 @@ class WebEvalStatsRow:
     status: str
     eval_wall_ms: int | None
     eval_alloc_bytes: int | None
+
+
+@dataclasses.dataclass()
+class WebProjectEffectsRow:
+    id_: int
+    project_id: int
+    kind: str
+    owner: str
+    build_id: int | None
+    schedule_name: str | None
+    name: str
+    status: str
+    error: str | None
+    deps: str | None
+    log_size: int
+    log_truncated: bool
+    started_at: datetime.datetime
+    finished_at: datetime.datetime | None
+    payload: str | None
+    code_rev: str | None
+    skip_reason: str | None
+    actor: str | None
+    lock: str | None
+    build_number: int | None
+    commit_sha: str | None
+    branch: str | None
+
+
+@dataclasses.dataclass()
+class WebProjectEffectCountsRow:
+    status: str
+    count: int
 
 
 WEB_PROJECTS: typing.Final[str] = """-- name: WebProjects :many
@@ -639,6 +675,38 @@ WHERE build_id = $1 AND eval_wall_ms IS NOT NULL
 ORDER BY CASE WHEN $2::boolean
     THEN eval_alloc_bytes ELSE eval_wall_ms END DESC, attr
 LIMIT $3::bigint
+"""
+
+WEB_PROJECT_EFFECTS: typing.Final[str] = """-- name: WebProjectEffects :many
+SELECT e.id, e.project_id, e.kind, e.owner, e.build_id, e.schedule_name, e.name, e.status, e.error, e.deps, e.log_size, e.log_truncated, e.started_at, e.finished_at, e.payload, e.code_rev, e.skip_reason, e.actor, e.lock, b.number AS build_number, b.commit_sha, b.branch
+FROM effect_runs e LEFT JOIN builds b ON b.id = e.build_id
+WHERE e.project_id = $1
+  AND ($2::text[] IS NULL OR e.status = ANY($2))
+  AND ($3::text IS NULL
+       OR e.kind = $3
+       OR ($3 = 'tag' AND e.kind LIKE 'tag:%')
+       OR ($3 = 'event'
+           AND e.kind NOT IN ('push', 'check', 'schedule')
+           AND e.kind NOT LIKE 'tag:%'))
+  AND ($4::text IS NULL OR e.name = $4)
+  AND ($5::text IS NULL OR e.schedule_name = $5)
+  AND ($6::bigint IS NULL OR e.id < $6)
+ORDER BY e.id DESC LIMIT $7::bigint
+"""
+
+WEB_PROJECT_EFFECT_COUNTS: typing.Final[str] = """-- name: WebProjectEffectCounts :many
+SELECT e.status, count(*) AS count
+FROM effect_runs e
+WHERE e.project_id = $1
+  AND ($2::text IS NULL
+       OR e.kind = $2
+       OR ($2 = 'tag' AND e.kind LIKE 'tag:%')
+       OR ($2 = 'event'
+           AND e.kind NOT IN ('push', 'check', 'schedule')
+           AND e.kind NOT LIKE 'tag:%'))
+  AND ($3::text IS NULL OR e.name = $3)
+  AND ($4::text IS NULL OR e.schedule_name = $4)
+GROUP BY e.status
 """
 
 
@@ -1150,3 +1218,40 @@ def web_eval_stats(conn: ConnectionLike, *, build_id: int, by_alloc: bool, limit
         return WebEvalStatsRow(attr=row[0], status=row[1], eval_wall_ms=row[2], eval_alloc_bytes=row[3])
 
     return QueryResults(conn, WEB_EVAL_STATS, _decode_hook, build_id, by_alloc, limit_)
+
+
+def web_project_effects(conn: ConnectionLike, *, project_id: int, statuses: collections.abc.Sequence[str] | None, trigger: str | None, effect: str | None, schedule: str | None, before: int | None, limit_: int) -> QueryResults[WebProjectEffectsRow]:
+    def _decode_hook(row: asyncpg.Record) -> WebProjectEffectsRow:
+        return WebProjectEffectsRow(
+            id_=row[0],
+            project_id=row[1],
+            kind=row[2],
+            owner=row[3],
+            build_id=row[4],
+            schedule_name=row[5],
+            name=row[6],
+            status=row[7],
+            error=row[8],
+            deps=row[9],
+            log_size=row[10],
+            log_truncated=row[11],
+            started_at=row[12],
+            finished_at=row[13],
+            payload=row[14],
+            code_rev=row[15],
+            skip_reason=row[16],
+            actor=row[17],
+            lock=row[18],
+            build_number=row[19],
+            commit_sha=row[20],
+            branch=row[21],
+        )
+
+    return QueryResults(conn, WEB_PROJECT_EFFECTS, _decode_hook, project_id, statuses, trigger, effect, schedule, before, limit_)
+
+
+def web_project_effect_counts(conn: ConnectionLike, *, project_id: int, trigger: str | None, effect: str | None, schedule: str | None) -> QueryResults[WebProjectEffectCountsRow]:
+    def _decode_hook(row: asyncpg.Record) -> WebProjectEffectCountsRow:
+        return WebProjectEffectCountsRow(status=row[0], count=row[1])
+
+    return QueryResults(conn, WEB_PROJECT_EFFECT_COUNTS, _decode_hook, project_id, trigger, effect, schedule)

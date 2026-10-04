@@ -166,6 +166,51 @@ class WebQueries:
             )
         )
 
+    async def project_effects(  # noqa: PLR0913
+        self,
+        project_id: int,
+        *,
+        statuses: tuple[str, ...] | None,
+        trigger: str | None,
+        effect: str | None,
+        schedule: str | None,
+        before: int | None,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        rows = _dicts(
+            await gen.web_project_effects(
+                self.pool,
+                project_id=project_id,
+                statuses=statuses,
+                trigger=trigger,
+                effect=effect,
+                schedule=schedule,
+                before=before,
+                limit_=limit,
+            )
+        )
+        for row in rows:
+            if isinstance(row.get("payload"), str):
+                row["payload"] = json.loads(row["payload"])
+        return rows
+
+    async def project_effect_counts(
+        self,
+        project_id: int,
+        *,
+        trigger: str | None,
+        effect: str | None,
+        schedule: str | None,
+    ) -> dict[str, int]:
+        rows = await gen.web_project_effect_counts(
+            self.pool,
+            project_id=project_id,
+            trigger=trigger,
+            effect=effect,
+            schedule=schedule,
+        )
+        return {r.status: r.count for r in rows}
+
     async def effects(self, build_id: int) -> list[dict[str, Any]]:
         rows = _dicts(await gen.web_effects(self.pool, build_id=build_id))
         for row in rows:

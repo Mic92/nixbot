@@ -24,7 +24,7 @@
             {% endif %}
             · <a href="{{ run_url }}.txt">raw</a>
             {% if run.kind == "schedule" %}
-              {% set history_url = repo_path(project) ~ "/schedules/runs?schedule=" ~ (run.schedule_name | urlencode) ~ "&effect=" ~ (run.effect | urlencode) %}
+              {% set history_url = repo_path(project) ~ "/effects?trigger=schedule&schedule=" ~ (run.schedule_name | urlencode) ~ "&effect=" ~ (run.effect | urlencode) %}
               · <a href="{{ history_url }}">history</a>
             {% endif %}
             · <a href="{{ repo_path(project) }}">{{ project.owner }}/{{ project.name }}</a>

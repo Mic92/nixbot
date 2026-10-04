@@ -50,15 +50,3 @@ ORDER BY schedule_name, effect;
 -- name: MarkScheduleRun :exec
 UPDATE scheduled_effects SET last_run = $4
 WHERE project_id = $1 AND schedule_name = $2 AND effect = $3;
-
--- name: ScheduledRunsForEffect :many
--- Run history for one (schedule, effect); cursor on id for infinite
--- scroll (id order matches started_at order for a single effect).
-SELECT id, schedule_name, name AS effect, status, error, started_at, finished_at
-FROM effect_runs
-WHERE project_id = sqlc.arg(project_id)
-  AND kind = 'schedule'
-  AND schedule_name = sqlc.arg(schedule_name)
-  AND name = sqlc.arg(effect)
-  AND (sqlc.narg(before)::bigint IS NULL OR id < sqlc.narg(before))
-ORDER BY id DESC LIMIT sqlc.arg(limit_)::bigint;

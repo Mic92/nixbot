@@ -1240,3 +1240,111 @@ details.webhook-setup summary {
 #succeeded-list .log-card {
 	margin: 0.35rem 0;
 }
+
+/* Effect list: one row per run, the reason under the name. --cols is
+   the grid; a list without the context column drops one. */
+.effect-list {
+	--cols: 28px minmax(0, 1fr) 160px 130px 150px 56px;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	overflow: hidden;
+	background: var(--card);
+}
+.effect-list.nc {
+	--cols: 28px minmax(0, 1fr) 160px 150px 56px;
+}
+.effect-list .er,
+.effect-list .lh {
+	display: grid;
+	grid-template-columns: var(--cols);
+	gap: 0.2rem 0.8rem;
+	align-items: center;
+	padding: 0.55rem 0.8rem;
+	border-left: 3px solid transparent;
+}
+.effect-list .er + .er {
+	border-top: 1px solid var(--border);
+}
+.effect-list .er.failed {
+	--rail: var(--bad);
+}
+.effect-list .er.pending {
+	--rail: var(--queued);
+}
+.effect-list .er.failed,
+.effect-list .er.pending {
+	border-left-color: var(--rail);
+	background: color-mix(in srgb, var(--rail) 6%, transparent);
+}
+.effect-list .lh,
+.effect-list .grp {
+	color: var(--muted);
+	font-size: 0.72rem;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	border-bottom: 1px solid var(--border);
+}
+.effect-list .lh {
+	padding-block: 0.35rem;
+}
+.effect-list .grp {
+	padding: 0.5rem 0.8rem 0.2rem calc(0.8rem + 3px);
+}
+.effect-list .nm code {
+	font-weight: 600;
+}
+.effect-list .why,
+.effect-list .t,
+.effect-list .ctx {
+	font-size: 0.85rem;
+}
+.effect-list .why,
+.effect-list .t {
+	color: var(--muted);
+}
+.effect-list .why {
+	grid-column: 2 / -1;
+}
+.effect-list .er.failed .why {
+	color: var(--bad);
+}
+.effect-list .t {
+	white-space: nowrap;
+}
+.effect-list .act {
+	text-align: right;
+}
+
+/* Small rounded labels: trigger pills, filter chips, the failing count. */
+.pill,
+.chip,
+.tab-count {
+	border: 1px solid var(--border);
+	border-radius: 99px;
+	padding: 0 0.5rem;
+	font-size: 0.78rem;
+	color: var(--muted);
+	background: var(--bg);
+	white-space: nowrap;
+	text-decoration: none;
+}
+.pill b {
+	color: var(--fg);
+	font-weight: 600;
+}
+.chips {
+	display: flex;
+	gap: 0.4rem;
+	flex-wrap: wrap;
+	margin: 0.3rem 0 0.7rem;
+}
+.chip {
+	padding: 0.15rem 0.7rem;
+	font-size: 0.85rem;
+}
+.chip.on {
+	border-color: var(--fg);
+	color: var(--fg);
+	font-weight: 600;
+}

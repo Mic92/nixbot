@@ -273,3 +273,37 @@ WHERE build_id = $1 AND eval_wall_ms IS NOT NULL
 ORDER BY CASE WHEN sqlc.arg(by_alloc)::boolean
     THEN eval_alloc_bytes ELSE eval_wall_ms END DESC, attr
 LIMIT sqlc.arg(limit_)::bigint;
+
+-- name: WebProjectEffects :many
+-- Every effect run of a project, newest first, cursor on id. trigger is
+-- one of push, check, schedule, tag, event; NULL filters match all.
+SELECT e.*, b.number AS build_number, b.commit_sha, b.branch
+FROM effect_runs e LEFT JOIN builds b ON b.id = e.build_id
+WHERE e.project_id = sqlc.arg(project_id)
+  AND (sqlc.narg(statuses)::text[] IS NULL OR e.status = ANY(sqlc.narg(statuses)))
+  AND (sqlc.narg(trigger)::text IS NULL
+       OR e.kind = sqlc.narg(trigger)
+       OR (sqlc.narg(trigger) = 'tag' AND e.kind LIKE 'tag:%')
+       OR (sqlc.narg(trigger) = 'event'
+           AND e.kind NOT IN ('push', 'check', 'schedule')
+           AND e.kind NOT LIKE 'tag:%'))
+  AND (sqlc.narg(effect)::text IS NULL OR e.name = sqlc.narg(effect))
+  AND (sqlc.narg(schedule)::text IS NULL OR e.schedule_name = sqlc.narg(schedule))
+  AND (sqlc.narg(before)::bigint IS NULL OR e.id < sqlc.narg(before))
+ORDER BY e.id DESC LIMIT sqlc.arg(limit_)::bigint;
+
+-- name: WebProjectEffectCounts :many
+-- Runs per status under the same filters as WebProjectEffects, minus
+-- status and cursor, for the filter chips.
+SELECT e.status, count(*) AS count
+FROM effect_runs e
+WHERE e.project_id = sqlc.arg(project_id)
+  AND (sqlc.narg(trigger)::text IS NULL
+       OR e.kind = sqlc.narg(trigger)
+       OR (sqlc.narg(trigger) = 'tag' AND e.kind LIKE 'tag:%')
+       OR (sqlc.narg(trigger) = 'event'
+           AND e.kind NOT IN ('push', 'check', 'schedule')
+           AND e.kind NOT LIKE 'tag:%'))
+  AND (sqlc.narg(effect)::text IS NULL OR e.name = sqlc.narg(effect))
+  AND (sqlc.narg(schedule)::text IS NULL OR e.schedule_name = sqlc.narg(schedule))
+GROUP BY e.status;
