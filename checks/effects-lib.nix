@@ -44,8 +44,14 @@ pkgs.runCommand "effects-lib-shell-helpers"
     [[ $(stat -c %a ~/.ssh/id_rsa) == 400 ]]
 
     # getStateFile/putStateFile authenticate with the run's task token.
-    initHerculesCIAPI
-    [[ $(cat "$herculesCIHeaders") == "Authorization: Bearer task-token" ]]
+    # The token file stays out of the working directory (the checkout).
+    mkdir workdir sandbox-tmp
+    (
+      cd workdir
+      TMPDIR=$TMPDIR/sandbox-tmp initHerculesCIAPI
+      [[ $(cat "$herculesCIHeaders") == "Authorization: Bearer task-token" ]]
+      [[ -z $(ls -A) ]]
+    )
 
     # Phases: a failing prior check does not stop the effect, and state is
     # uploaded once.

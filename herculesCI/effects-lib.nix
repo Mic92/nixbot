@@ -20,7 +20,10 @@ let
   # getStateFile, ...). Same derivation name as upstream's.
   setupHook = pkgs.runCommand "hercules-ci-effect-sh" { } ''
     mkdir -p $out/nix-support
-    cp ${./effects-setup-hook.sh} $out/nix-support/setup-hook
+    # The headers file holds the task token. Upstream puts it in $PWD, which
+    # is the repository clone with checkout = true; $TMPDIR is /build.
+    sed 's|\$PWD/hercules-ci.headers|$TMPDIR/hercules-ci.headers|' \
+      ${./effects-setup-hook.sh} >$out/nix-support/setup-hook
   '';
 in
 lib.fix (effects: {
