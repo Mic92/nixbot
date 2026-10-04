@@ -8,7 +8,9 @@ import json
 import os
 import subprocess
 import sys
+import time
 import webbrowser
+from http import HTTPStatus
 from typing import TYPE_CHECKING, Any, NoReturn
 
 from nixbot_effects import EffectError
@@ -36,6 +38,10 @@ from .watch_tty import TtyWatch
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
+
+# Wait up to 10s for a run's final status after its log stream ended.
+EFFECT_STATUS_POLLS = 40
+EFFECT_STATUS_POLL_SECONDS = 0.25
 
 EXIT_OK = 0
 EXIT_BUILD_FAILED = 1
@@ -479,12 +485,20 @@ def _match_attr(attrs: list[dict], selector: str) -> dict:
 
 def cmd_log(client: NixbotClient, args: argparse.Namespace) -> int:
     repo = resolve_repo(client, args.repo)
+    if sum(x is not None for x in (args.attr, args.effect, args.effect_run)) > 1:
+        msg = "give only one of ATTR, --effect and --effect-run"
+        raise UsageError(msg)
+    if args.effect_run is not None:
+        return _log_effect(client, repo, args.effect_run, args)
     number = resolve_build(client, repo, args.number)
     detail = client.build(repo, number)
     build_failed = detail["build"]["status"] in FAILED_STATUSES
 
+    if args.effect is not None:
+        effect = _match_effect(detail["effects"], args.effect)
+        return _log_effect(client, repo, effect["id"], args)
     if args.follow and args.attr is None:
-        msg = "--follow needs an attribute"
+        msg = "--follow needs an attribute or --effect"
         raise UsageError(msg)
     if args.attr is None:  # whole build: print the failure summary
         summary = client.failures(repo, number, tail=args.tail)
@@ -544,6 +558,74 @@ def follow_attr(
             break
     if not streamed:
         print(client.log_text(repo, number, attr, tail=tail), end="")
+
+
+def _log_effect(
+    client: NixbotClient, repo: RepoRef, run_id: int, args: argparse.Namespace
+) -> int:
+    """`nbo log` for one effect run. The exit code is read after following,
+    so it reflects how the run ended."""
+    run = client.effect_run(repo, run_id)
+    if args.follow:
+        printed = follow_effect(client, repo, run_id, tail=args.tail)
+        run = _final_effect_run(client, repo, run_id)
+        if not printed:
+            _say_no_log(run)
+    elif args.json is not None:
+        print_json(run, args.json)
+    else:
+        _print_effect_text(client, repo, run, args.tail)
+    return EXIT_BUILD_FAILED if run["status"] in FAILED_STATUSES else EXIT_OK
+
+
+def _print_effect_text(
+    client: NixbotClient, repo: RepoRef, run: dict, tail: int | None
+) -> None:
+    """The run's log; a run that never started has none, say why."""
+    try:
+        print(client.effect_run_text(repo, run["id"], tail=tail), end="")
+    except ApiError as e:
+        if e.status != HTTPStatus.NOT_FOUND:
+            raise
+        _say_no_log(run)
+
+
+def _say_no_log(run: dict) -> None:
+    reason = run.get("skip_reason") or run.get("error")
+    suffix = f": {reason}" if reason else ""
+    print(f"no log: {run['status']}{suffix}", file=sys.stderr)
+
+
+def _final_effect_run(client: NixbotClient, repo: RepoRef, run_id: int) -> dict:
+    """The stream ends when the log is closed, shortly before the run's
+    status is written, so wait for a final one."""
+    for _ in range(EFFECT_STATUS_POLLS):
+        run = client.effect_run(repo, run_id)
+        if run["status"] not in ("pending", "running"):
+            break
+        time.sleep(EFFECT_STATUS_POLL_SECONDS)
+    return run
+
+
+def follow_effect(
+    client: NixbotClient, repo: RepoRef, run_id: int, *, tail: int | None
+) -> bool:
+    """Print an effect run's log so far, then its live output until the
+    run ends. Output arrives in arbitrary chunks, so lines are buffered
+    and sanitized whole. False if there was no output at all."""
+    pending = ""
+    printed = False
+    for event, data in client.effect_run_stream(repo, run_id, tail=tail):
+        if event == "text":
+            printed = True
+            *lines, pending = (pending + data["text"]).split("\n")
+            for line in lines:
+                print(sanitize_line(line), flush=True)
+        elif event == "done":
+            break
+    if pending:
+        print(sanitize_line(pending), flush=True)
+    return printed
 
 
 def cmd_auth_status(client: NixbotClient, args: argparse.Namespace) -> int:
@@ -708,6 +790,9 @@ running ones. Piped or in CI it prints one line per finished attribute.""",
   nbo log 412 nixos-eve --tail 100  only the last 100 lines
   nbo log 412 nixos-eve --follow    stream while it is still building
   nbo log 412 /nix/store/…-foo.drv  log of one derivation by store path
+  nbo log 412 --effect deploy-eve   log of an effect of the build
+  nbo log 412 --effect deploy -f    stream a running effect
+  nbo log --effect-run 9185 -f      any effect run by id, e.g. a scheduled one
   nbo log 412 -R github/Mic92/dotfiles   without a local checkout""",
     )
     log.add_argument("number", type=int, nargs="?")
@@ -717,10 +802,24 @@ running ones. Piped or in CI it prints one line per finished attribute.""",
         metavar="ATTR|DRV-PATH",
         help="attribute (substring) or .drv store path",
     )
+    log.add_argument(
+        "--effect",
+        metavar="NAME",
+        help="log of this effect of the build (name or unambiguous substring)",
+    )
+    log.add_argument(
+        "--effect-run",
+        type=int,
+        metavar="ID",
+        help="log of the effect run with this id (from `nbo build view --json`)",
+    )
     _add_repo_arg(log)
     log.add_argument("--tail", type=int, metavar="N", help="last N lines")
     log.add_argument(
-        "-f", "--follow", action="store_true", help="stream a running attribute's log"
+        "-f",
+        "--follow",
+        action="store_true",
+        help="stream a running attribute's or effect's log",
     )
     _add_json_arg(log)
     log.set_defaults(func=cmd_log)

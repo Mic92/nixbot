@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from typing import TYPE_CHECKING
@@ -18,7 +19,7 @@ from nixbot_cli.term import sanitize_line, strip_ansi
 
 from nixbot.api_tokens import ApiTokenStore
 from nixbot.auth import AuthzConfig, User
-from nixbot.executor import attribute_log_path, container_path
+from nixbot.executor import attribute_log_path, container_path, effect_run_log_path
 from nixbot.logstore import LogContainerWriter
 from nixbot.web.control_routes import create_control_api_router
 
@@ -35,7 +36,7 @@ from .test_cli_api import make_client
 from .test_control import FakeBackend
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
     from pathlib import Path
 
     from fastapi import FastAPI
@@ -637,3 +638,162 @@ def test_build_watch_attr_waits_for_selected_attributes(
 def test_print_table_empty(capsys: pytest.CaptureFixture[str]) -> None:
     cli.print_table([], ["id", "status"])
     assert capsys.readouterr().out == ""
+
+
+def _deploy_run_id(harness: WebHarness, tmp_path: Path, text: bytes) -> int:
+    """Write a finished log for build #1's `deploy` effect run; its id."""
+
+    async def seed() -> int:
+        harness.ctx.state_dir = tmp_path
+        run_id = await harness.ctx.pool.fetchval(
+            "SELECT e.id FROM effect_runs e JOIN builds b ON b.id = e.build_id "
+            "WHERE b.number = 1 AND e.name = 'deploy'"
+        )
+        path = effect_run_log_path(tmp_path, run_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(zstandard.ZstdCompressor().compress(text))
+        return int(run_id)
+
+    return harness.run(seed())
+
+
+def test_log_effect_by_name_and_id(
+    harness: WebHarness,
+    api: NixbotClient,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """--effect picks an effect run of the build, --effect-run any run by
+    id. Both exit with the run's status."""
+    run_id = _deploy_run_id(harness, tmp_path, b"switching\nerror: activation failed\n")
+    log = ["log", "-R", "acme/widget"]
+
+    assert run_cli(api, *log, "1", "--effect", "deploy") == 1
+    assert capsys.readouterr().out == "switching\nerror: activation failed\n"
+
+    assert run_cli(api, *log, "1", "--effect", "deploy", "--tail", "1") == 1
+    assert capsys.readouterr().out == "error: activation failed\n"
+
+    assert run_cli(api, *log, "1", "--effect", "deploy", "--follow") == 1
+    assert capsys.readouterr().out == "switching\nerror: activation failed\n"
+
+    assert run_cli(api, *log, "--effect-run", str(run_id)) == 1
+    assert capsys.readouterr().out == "switching\nerror: activation failed\n"
+
+    assert run_cli(api, *log, "--effect-run", str(run_id), "--json", "status") == 1
+    assert json.loads(capsys.readouterr().out) == [{"status": "failed"}]
+
+
+def test_log_effect_is_not_shadowed_by_attributes(
+    harness: WebHarness, api: NixbotClient, tmp_path: Path
+) -> None:
+    """An attribute whose name contains the effect's name does not hide
+    the effect, and the effect does not hide the attribute."""
+    _deploy_run_id(harness, tmp_path, b"switching\n")
+
+    async def add_attr() -> None:
+        await harness.ctx.pool.execute(
+            "INSERT INTO build_attributes (build_id, attr, system, status) "
+            "SELECT id, 'nixos-deploy-eve', 'x86_64-linux', 'succeeded' "
+            "FROM builds WHERE number = 1"
+        )
+
+    harness.run(add_attr())
+    with pytest.raises(cli.UsageError, match="no effect matches"):
+        run_cli(api, "log", "1", "--effect", "eve", "-R", "acme/widget")
+    assert run_cli(api, "log", "1", "--effect", "deploy", "-R", "acme/widget") == 1
+    with pytest.raises(cli.UsageError, match="only one of"):
+        run_cli(api, "log", "1", "deploy", "--effect", "deploy", "-R", "acme/widget")
+
+
+def test_follow_effect_buffers_partial_lines(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Effect output arrives in arbitrary chunks; lines are printed whole
+    and sanitized, including a final line without a newline."""
+    body = (
+        'event: text\ndata: {"text":"hel"}\n\n'
+        ": keepalive\n\n"
+        'event: text\ndata: {"text":"lo\\nwor\\u001b]0;title\\u0007"}\n\n'
+        'event: text\ndata: {"text":"ld"}\n\n'
+        "event: done\ndata: {}\n\n"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/repos/github/acme/widget/effects/runs/7/stream"
+        assert request.url.params.get("tail") == "5"
+        return httpx.Response(
+            200, content=body, headers={"content-type": "text/event-stream"}
+        )
+
+    client = NixbotClient(
+        http=httpx.Client(
+            base_url="http://test", transport=httpx.MockTransport(handler)
+        )
+    )
+    cli.follow_effect(client, REPO, 7, tail=5)
+    assert capsys.readouterr().out == "hello\nworld\n"
+
+
+def _client(handler: Callable[[httpx.Request], httpx.Response]) -> NixbotClient:
+    return NixbotClient(
+        http=httpx.Client(
+            base_url="http://test", transport=httpx.MockTransport(handler)
+        )
+    )
+
+
+def test_follow_effect_exit_code_waits_for_the_final_status(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The stream ends when the log is closed, a moment before the run's
+    status is written. The exit code must not be taken from "running"."""
+    statuses = iter(["running", "running", "failed"])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/stream"):
+            return httpx.Response(
+                200,
+                content='event: text\ndata: {"text":"boom\\n"}\n\nevent: done\ndata: {}\n\n',
+                headers={"content-type": "text/event-stream"},
+            )
+        return httpx.Response(200, json={"id": 7, "status": next(statuses)})
+
+    args = cli.build_parser().parse_args(
+        ["log", "--effect-run", "7", "-f", "-R", "github/acme/widget"]
+    )
+    assert cli.cmd_log(_client(handler), args) == cli.EXIT_BUILD_FAILED
+    assert capsys.readouterr().out == "boom\n"
+
+
+def test_log_effect_without_log_says_why(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A skipped run has no log. Print its reason instead of a bare 404."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/text"):
+            return httpx.Response(404, json={"detail": "Not Found"})
+        return httpx.Response(
+            200,
+            json={
+                "id": 7,
+                "status": "skipped",
+                "skip_reason": "`after` is not supported on tag pushes",
+                "error": None,
+            },
+        )
+
+    args = cli.build_parser().parse_args(
+        ["log", "--effect-run", "7", "-R", "github/acme/widget"]
+    )
+    assert cli.cmd_log(_client(handler), args) == cli.EXIT_OK
+    out = capsys.readouterr()
+    assert out.out == ""
+    assert "skipped: `after` is not supported on tag pushes" in out.err
+
+    args = cli.build_parser().parse_args(
+        ["log", "--effect-run", "7", "-f", "-R", "github/acme/widget"]
+    )
+    assert cli.cmd_log(_client(handler), args) == cli.EXIT_OK
+    assert "skipped: `after` is not supported" in capsys.readouterr().err

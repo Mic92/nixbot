@@ -125,6 +125,14 @@ class Effect(BaseModel):
     finished_at: datetime | None
 
 
+class EffectRun(Effect):
+    """One effect run, also those without a build (scheduled ones)."""
+
+    build_number: int | None
+    schedule_name: str | None
+    skip_reason: str | None
+
+
 class BuildDetail(BaseModel):
     build: Build
     attributes: list[Attribute]

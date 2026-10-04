@@ -1568,6 +1568,7 @@ def test_llms_txt(client: WebHarness) -> None:
     assert response.status_code == 200
     assert "/api/openapi.json" in response.text
     assert "failures" in response.text
+    assert "/effects/runs/{id}/text" in response.text
 
 
 def test_event_broker_pushes_status_changes(

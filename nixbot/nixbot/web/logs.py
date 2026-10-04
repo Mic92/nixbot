@@ -8,6 +8,7 @@ executor's LogWriter fans out to any number of SSE subscribers.
 from __future__ import annotations
 
 import asyncio
+import codecs
 import functools
 import html
 import json
@@ -42,7 +43,7 @@ from ..executor import (  # noqa: TID252
 from ..logstore import LogContainerReader, is_container  # noqa: TID252
 from ..sql_util import row_dict  # noqa: TID252
 from ..status import NO_LOG_STATUSES  # noqa: TID252
-from .api_routes import FailureSummary, clean_row
+from .api_routes import EffectRun, FailureSummary, clean_row
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Iterable
@@ -602,6 +603,48 @@ class _LogRoutes:
             await asyncio.to_thread(_plain, text, tail, ansi=False)
         )
 
+    async def api_effect_run(
+        self, request: Request, forge: str, owner: str, name: str, run_id: int
+    ) -> dict[str, Any]:
+        """Status of one effect run."""
+        _, run = await self._run_or_404(request, forge, owner, name, run_id)
+        return clean_row({**run, "name": run["effect"]})
+
+    async def api_effect_run_text(  # noqa: PLR0913
+        self,
+        request: Request,
+        forge: str,
+        owner: str,
+        name: str,
+        run_id: int,
+        tail: int | None = Query(None, ge=1),
+        ansi: bool = Query(default=False),
+    ) -> PlainTextResponse:
+        """An effect run's log as plain text. ?tail=N keeps the last N
+        lines, ?ansi=1 keeps SGR color sequences."""
+        await self._run_or_404(request, forge, owner, name, run_id)
+        text = await self._effect_run_text(run_id)
+        if text is None:
+            raise HTTPException(status_code=404)
+        return PlainTextResponse(await asyncio.to_thread(_plain, text, tail, ansi=ansi))
+
+    async def api_effect_run_stream(  # noqa: PLR0913
+        self,
+        request: Request,
+        forge: str,
+        owner: str,
+        name: str,
+        run_id: int,
+        tail: int | None = Query(None, ge=1),
+    ) -> StreamingResponse:
+        """SSE stream of an effect run's raw output: `text` events carry
+        the log so far (its last ?tail=N lines), then live output, and
+        `done` ends the stream, right away for a finished run."""
+        await self._run_or_404(request, forge, owner, name, run_id)
+        writer = self.registry.get_effect(run_id)
+        path = self._effect_log_path(run_id)
+        return EventStreamResponse(_raw_events_json(writer, path, tail))
+
     async def build_effect_log_redirect(  # noqa: PLR0913
         self,
         request: Request,
@@ -1121,6 +1164,14 @@ def create_log_api_router(ctx: WebContext, registry: LogRegistry) -> APIRouter:
         routes.api_log_stream
     )
     router.get(f"{base}/logs/{{attr:path}}", response_model=LogToc)(routes.api_log_toc)
+    runs = "/api/repos/{forge}/{owner:owner}/{name:segment}/effects/runs/{run_id:int}"
+    router.get(runs, response_model=EffectRun)(routes.api_effect_run)
+    router.get(f"{runs}/text", response_class=PlainTextResponse)(
+        routes.api_effect_run_text
+    )
+    router.get(f"{runs}/stream", response_class=EventStreamResponse)(
+        routes.api_effect_run_stream
+    )
     return router
 
 
@@ -1166,15 +1217,9 @@ async def _stream_events(
     subscriber to a huge log does not push megabytes through the
     ANSI renderer."""
     ansi = AnsiHtmlStream()
-    if writer is not None:
-        history_bytes, queue = await writer.subscribe_with_history()
-        history = history_bytes.decode(errors="replace")
-    else:
-        queue = None
-        history = ""
-        if path is not None and await asyncio.to_thread(path.exists):
-            data = await asyncio.to_thread(read_log, path)
-            history = data.decode(errors="replace")
+    decoder = _utf8_decoder()
+    history_bytes, queue = await _history_and_queue(writer, path)
+    history = decoder.decode(history_bytes)
     if history:
         lines = history.splitlines(keepends=True)
         if len(lines) > HISTORY_MAX_LINES:
@@ -1187,18 +1232,80 @@ async def _stream_events(
         yield "event: done\ndata: \n\n"
         return
     try:
-        while True:
-            try:
-                chunk = await asyncio.wait_for(queue.get(), timeout=30)
-            except TimeoutError:
-                yield ": keepalive\n\n"
-                continue
-            if chunk is None:
-                yield "event: done\ndata: \n\n"
-                return
-            yield _sse(ansi.feed(chunk.decode(errors="replace")))
+        async for text in _live_text(queue, decoder):
+            yield ": keepalive\n\n" if text is None else _sse(ansi.feed(text))
+        yield "event: done\ndata: \n\n"
     finally:
         if writer is not None:
+            writer.unsubscribe(queue)
+
+
+def _utf8_decoder() -> codecs.IncrementalDecoder:
+    """Chunks of output can end inside a multi-byte character; one decoder
+    for history and live chunks keeps it whole."""
+    return codecs.getincrementaldecoder("utf-8")(errors="replace")
+
+
+async def _live_text(
+    queue: asyncio.Queue[bytes | None], decoder: codecs.IncrementalDecoder
+) -> AsyncGenerator[str | None, None]:
+    """Decoded live chunks until the writer closes. None every 30s without
+    output, so the caller can send a keepalive."""
+    while True:
+        try:
+            chunk = await asyncio.wait_for(queue.get(), timeout=30)
+        except TimeoutError:
+            yield None
+            continue
+        if chunk is None:
+            return
+        yield decoder.decode(chunk)
+
+
+async def _history_and_queue(
+    writer: LogWriter | None, path: Path | None
+) -> tuple[bytes, asyncio.Queue[bytes | None] | None]:
+    """Log so far plus, for a running writer, the queue of live chunks,
+    taken atomically so nothing falls between them."""
+    if writer is not None:
+        return await writer.subscribe_with_history()
+    if path is not None and await asyncio.to_thread(path.exists):
+        return await asyncio.to_thread(read_log, path), None
+    return b"", None
+
+
+async def _raw_events_json(
+    writer: LogWriter | None, path: Path, tail: int | None
+) -> AsyncGenerator[str, None]:
+    """JSON twin of _stream_events for the /api stream: raw text instead
+    of rendered HTML. History and live chunks come from one atomic
+    subscribe, so nothing is lost or repeated between them."""
+
+    def text_event(text: str) -> str:
+        # json escapes any CR/LF in log text, so payloads cannot forge
+        # SSE fields.
+        payload = json.dumps({"text": text}, separators=(",", ":"))
+        return f"event: text\ndata: {payload}\n\n"
+
+    decoder = _utf8_decoder()
+    history_bytes, queue = await _history_and_queue(writer, path)
+    history = decoder.decode(history_bytes)
+    try:
+        if tail is not None:
+            history = "".join(history.splitlines(keepends=True)[-tail:])
+        if history:
+            yield text_event(history)
+        if queue is None:
+            yield "event: done\ndata: {}\n\n"
+            return
+        async for text in _live_text(queue, decoder):
+            if text is None:
+                yield ": keepalive\n\n"
+            elif text:
+                yield text_event(text)
+        yield "event: done\ndata: {}\n\n"
+    finally:
+        if writer is not None and queue is not None:
             writer.unsubscribe(queue)
 
 

@@ -13,6 +13,8 @@ nbo build view 412                           # status + failed attributes
 nbo build watch 412 [--attr treefmt]         # exit 1 on failure
 nbo log 412                                  # failure summary with log tails
 nbo log 412 checks.x86_64-linux.foo --tail 200   # or --follow
+nbo log 412 --effect deploy [--follow]       # an effect's log; exit 1 if it failed
+nbo log --effect-run 9185                    # any effect run by id, e.g. scheduled
 nbo build restart 412 --attr treefmt         # token: NIXBOT_TOKEN / hosts.toml
 nbo build restart 412 --effects|--effect deploy  # all or one (repeatable)
 nbo build cancel 412 [--effects|--effect deploy]

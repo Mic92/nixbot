@@ -114,9 +114,15 @@ nbo log 412                                         # failure summary with log t
 nbo log 412 checks.x86_64-linux.nixos-test --tail 200
 nbo log 412 /nix/store/...-zfs-2.2.4.drv            # one derivation of the attribute
 nbo log 412 checks.x86_64-linux.nixos-test --follow # stream while it runs
+nbo log 412 --effect deploy                         # log of an effect of the build
+nbo log 412 --effect deploy --follow                # stream a running effect
+nbo log --effect-run 9185                           # any effect run by id
 ```
 
-Attribute arguments accept unambiguous substrings.
+Attribute and effect arguments accept unambiguous substrings. For an effect, the
+exit code is 1 if the run failed. `--effect-run` also reaches runs without a
+build, such as scheduled ones. The id of a run is in `nbo build view --json` and
+in the URL of its page on the web UI.
 
 ## Effects
 
