@@ -440,7 +440,9 @@ class _ControlRoutes:
         await self.backend.run_scheduled_now(
             project["id"], schedule, effect, match["when_spec"]
         )
-        return RedirectResponse(f"/repos/{forge}/{owner}/{name}", status_code=303)
+        return RedirectResponse(
+            f"/repos/{forge}/{owner}/{name}/effects", status_code=303
+        )
 
     async def regenerate_webhook_secret(
         self, request: Request, project_id: int

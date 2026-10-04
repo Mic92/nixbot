@@ -13,6 +13,9 @@
       </div>
       {% set tab = "effects" %}
       {% include "_project_tabs.html" %}
+      {% if not filters and schedules %}
+        {% include "_schedules.html" %}
+      {% endif %}
       {% include "_effect_chips.html" %}
       {% if rows %}
         {% include "_effect_list.html" %}

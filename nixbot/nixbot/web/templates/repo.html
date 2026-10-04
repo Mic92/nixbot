@@ -127,64 +127,6 @@
           {% endfor %}
         </table>
       {% endif %}
-      {% if schedules %}
-        <h2 class="section">Schedules</h2>
-        <table class="attrs">
-          <caption class="visually-hidden">scheduled effects</caption>
-          <thead>
-            <tr>
-              <th scope="col">
-                <span class="visually-hidden">status</span>
-              </th>
-              <th scope="col">schedule</th>
-              <th scope="col">when</th>
-              <th scope="col">next run</th>
-              <th scope="col">last run</th>
-              <th scope="col">
-                <span class="visually-hidden">actions</span>
-              </th>
-            </tr>
-          </thead>
-          {% for s in schedules %}
-            {% set label = s.schedule if s.schedule == s.effect else s.schedule ~ " · " ~ s.effect %}
-            {% set history_url = repo_path(project) ~ "/effects?trigger=schedule&schedule=" ~ (s.schedule | urlencode) ~ "&effect=" ~ (s.effect | urlencode) %}
-            <tr>
-              <td class="status">{{ status_icon(s.run.status if s.run else "pending") }}</td>
-              <td class="attr-name">
-                <a href="{{ history_url }}">{{ label }}</a>
-              </td>
-              <td class="muted attr-status">{{ s.when }}</td>
-              <td class="muted attr-status">
-                {% if s.next %}
-                  <time datetime="{{ s.next.isoformat() }}" title="{{ s.next }}">{{ s.next | timeuntil }}</time>
-                {% else %}
-                  —
-                {% endif %}
-              </td>
-              <td class="muted attr-status">
-                {% if s.run %}
-                  <a href="{{ repo_path(project) }}/effects/runs/{{ s.run.id }}">
-                    <time datetime="{{ s.run.started_at.isoformat() }}"
-                          title="{{ s.run.started_at }}">{{ s.run.started_at | timeago }}</time>
-                  </a>
-                {% else %}
-                  never
-                {% endif %}
-              </td>
-              <td class="attr-status">
-                {# UX only. The run route enforces authz server-side. #}
-                {% if can_run_schedules %}
-                  <form method="post" action="{{ repo_path(project) }}/schedules/run">
-                    <input type="hidden" name="schedule" value="{{ s.schedule }}">
-                    <input type="hidden" name="effect" value="{{ s.effect }}">
-                    <button>run now</button>
-                  </form>
-                {% endif %}
-              </td>
-            </tr>
-          {% endfor %}
-        </table>
-      {% endif %}
       {% set rows_url = repo_path(project) ~ "/rows?status=" ~ (status or "") ~ "&ref=" ~ ((ref or "") | urlencode) %}
       <div class="table-scroll">
         <table class="builds">

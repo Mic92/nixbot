@@ -368,6 +368,13 @@ class _PageRoutes:
             await ctx.request_user(request), ctx.authz
         )
 
+    async def _schedules(self, project_id: int) -> list[Any]:
+        store = ScheduledEffectsStore(self.ctx.pool)
+        return schedule_overview(
+            await store.schedules_for_project(project_id),
+            await store.latest_runs_for_project(project_id),
+        )
+
     async def _failed_effects(self, project_id: int) -> int:
         """Failed effect runs of the project, for the tab badge."""
         counts = await self.ctx.queries.project_effect_counts(
@@ -392,7 +399,6 @@ class _PageRoutes:
             page=page,
             filters=BuildFilters.for_ref(ref, status=status),
         )
-        store = ScheduledEffectsStore(ctx.pool)
         return await ctx.render(
             "repo.html",
             request=request,
@@ -402,11 +408,6 @@ class _PageRoutes:
             status=status or "",
             ref=ref or "",
             webhook_url=await self._webhook_url(request, project),
-            schedules=schedule_overview(
-                await store.schedules_for_project(project["id"]),
-                await store.latest_runs_for_project(project["id"]),
-            ),
-            can_run_schedules=await self._can_run_schedules(request, project["id"]),
             pending_approvals=await approvals_q.pending_approvals(
                 ctx.pool, project_id=project["id"]
             ),
@@ -614,6 +615,8 @@ class _PageRoutes:
             filters=filters,
             chips=chips,
             pills=pills,
+            schedules=await self._schedules(project["id"]),
+            can_run_schedules=await self._can_run_schedules(request, project["id"]),
             failed_effects=await self._failed_effects(project["id"]),
             can_control=False,
         )

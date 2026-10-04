@@ -436,7 +436,7 @@ def test_run_schedule(harness: WebHarness) -> None:
 
     response = harness.post(url, ROOT, data=data)
     assert response.status_code == 303
-    assert response.headers["location"] == "/repos/github/acme/widget"
+    assert response.headers["location"] == "/repos/github/acme/widget/effects"
     assert BACKEND.scheduled_runs == [(1, "nightly", "deploy", "{}")]
 
     # Unknown schedule is a 404, not an enqueue.
@@ -448,6 +448,21 @@ def test_run_schedule(harness: WebHarness) -> None:
 
     # Cross-origin rejected.
     assert harness.post(url, ROOT, data=data, origin="http://evil").status_code == 403
+
+
+def test_schedules_are_listed_on_the_effects_page(harness: WebHarness) -> None:
+    """The Schedules table and its run-now button live under the effects
+    tab, not on the builds page."""
+    repo = harness.get("/repos/github/acme/widget", ROOT).text
+    effects = harness.get("/repos/github/acme/widget/effects", ROOT).text
+    assert "Schedules" not in repo
+    assert "run now" not in repo
+    assert "Schedules" in effects
+    assert "run now" in effects
+    assert "run now" not in harness.get("/repos/github/acme/widget/effects").text
+    # A filtered list is about runs, not about the schedule definitions.
+    filtered = harness.get("/repos/github/acme/widget/effects?status=failed", ROOT)
+    assert "Schedules" not in filtered.text
 
 
 def test_repo_refresh(harness: WebHarness) -> None:
