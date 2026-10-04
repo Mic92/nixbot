@@ -25,7 +25,7 @@ let
 in
 {
   mkEffect =
-    {
+    args@{
       effectScript ? "",
       userSetupScript ? "",
       name ? "effect",
@@ -55,103 +55,119 @@ in
       preGetStatePhases ? "",
       preEffectPhases ? "priorCheckPhase",
       postEffectPhases ? "effectCheckPhase",
+      passthru ? { },
+      # Like upstream's mkEffect, any other attribute goes to mkDerivation
+      # (e.g. runNixOS sets dontUnpack and passthru.prebuilt).
+      ...
     }:
-    pkgs.stdenvNoCC.mkDerivation {
-      inherit
-        name
-        effectScript
-        userSetupScript
-        getStateScript
-        putStateScript
-        priorCheckScript
-        effectCheckScript
-        ;
-      # Attr paths are nested lists, which cannot be coerced into
-      # derivation env vars; expose them via passthru instead.
-      passthru = { inherit after lock when; };
-      isEffect = true;
-      __nixbot_effect_checkout = checkout;
-      # like upstream hercules-ci-effects
-      __hci_effect_fsroot_copy = pkgs.runCommand "mkEffect-root" { } ''
-        mkdir -p $out/bin $out/usr/bin
-        ln -s ${lib.getExe pkgs.bash} $out/bin/sh
-        ln -s ${pkgs.coreutils}/bin/env $out/usr/bin/env
-      '';
-      secretsMap = builtins.toJSON secretsMap;
-      idTokenAudiences = builtins.toJSON idTokenAudiences;
-      nativeBuildInputs = [
-        setupHook
-        pkgs.cacert
-        pkgs.curl
-        pkgs.jq
-        prCommentScript
+    pkgs.stdenvNoCC.mkDerivation (
+      removeAttrs args [
+        "inputs"
+        "checkout"
+        "idTokenAudiences"
+        "after"
+        "lock"
+        "when"
       ]
-      ++ (if idTokenAudiences != [ ] then [ idTokenScript ] else [ ])
-      ++ inputs;
-      phases = lib.splitString " " (
-        lib.concatStringsSep " " (
-          lib.filter (p: p != "") [
-            "initPhase"
-            preGetStatePhases
-            "getStatePhase"
-            "userSetupPhase"
-            preEffectPhases
-            "effectPhase"
-            "putStatePhase"
-            postEffectPhases
-          ]
-        )
-      );
-      initPhase = ''
-        exec </dev/null
-        # The setup hook prepares the state API's credentials here.
-        runHook preInit
-        export HOME=/build/home
-        mkdir -p "$HOME"
-        echo "root:x:$(id -u):$(id -g):root:$HOME:/bin/sh" >> /etc/passwd
-        mkdir -p ~/.ssh
-        echo "BatchMode yes" >> ~/.ssh/config
-        runHook postInit
-      '';
-      getStatePhase = ''
-        runHook preGetState
-        eval "$getStateScript"
-        runHook postGetState
-        registerPutStatePhaseOnFailure
-      '';
-      userSetupPhase = ''
-        runHook preUserSetup
-        eval "$userSetupScript"
-        runHook postUserSetup
-      '';
-      # A failing check must not stop the effect: it may fix the problem.
-      priorCheckPhase = ''
-        runHook prePriorCheck
-        if [[ -n "$priorCheckScript" ]] && ! eval "$priorCheckScript"; then
-          echo 1>&2 "WARNING: prior check failed, continuing"
-        fi
-        runHook postPriorCheck
-      '';
-      effectPhase = ''
-        runHook preEffect
-        eval "$effectScript"
-        runHook postEffect
-      '';
-      # Runs on failure too, see registerPutStatePhaseOnFailure.
-      putStatePhase = ''
-        if [[ -z ''${PUT_STATE_DONE:-} ]]; then
-          runHook prePutState
-          eval "$putStateScript"
-          runHook postPutState
-          PUT_STATE_DONE=true
-        fi
-      '';
-      effectCheckPhase = ''
-        runHook preEffectCheck
-        eval "$effectCheckScript"
-        runHook postEffectCheck
-      '';
-    };
+      // {
+        inherit
+          name
+          effectScript
+          userSetupScript
+          getStateScript
+          putStateScript
+          priorCheckScript
+          effectCheckScript
+          ;
+        # Attr paths are nested lists, which cannot be coerced into
+        # derivation env vars; expose them via passthru instead.
+        passthru = passthru // {
+          inherit after lock when;
+        };
+        isEffect = true;
+        __nixbot_effect_checkout = checkout;
+        # like upstream hercules-ci-effects
+        __hci_effect_fsroot_copy = pkgs.runCommand "mkEffect-root" { } ''
+          mkdir -p $out/bin $out/usr/bin
+          ln -s ${lib.getExe pkgs.bash} $out/bin/sh
+          ln -s ${pkgs.coreutils}/bin/env $out/usr/bin/env
+        '';
+        secretsMap = builtins.toJSON secretsMap;
+        idTokenAudiences = builtins.toJSON idTokenAudiences;
+        nativeBuildInputs = [
+          setupHook
+          pkgs.cacert
+          pkgs.curl
+          pkgs.jq
+          prCommentScript
+        ]
+        ++ (if idTokenAudiences != [ ] then [ idTokenScript ] else [ ])
+        ++ inputs;
+        phases = lib.splitString " " (
+          lib.concatStringsSep " " (
+            lib.filter (p: p != "") [
+              "initPhase"
+              preGetStatePhases
+              "getStatePhase"
+              "userSetupPhase"
+              preEffectPhases
+              "effectPhase"
+              "putStatePhase"
+              postEffectPhases
+            ]
+          )
+        );
+        initPhase = ''
+          exec </dev/null
+          # The setup hook prepares the state API's credentials here.
+          runHook preInit
+          export HOME=/build/home
+          mkdir -p "$HOME"
+          echo "root:x:$(id -u):$(id -g):root:$HOME:/bin/sh" >> /etc/passwd
+          mkdir -p ~/.ssh
+          echo "BatchMode yes" >> ~/.ssh/config
+          runHook postInit
+        '';
+        getStatePhase = ''
+          runHook preGetState
+          eval "$getStateScript"
+          runHook postGetState
+          registerPutStatePhaseOnFailure
+        '';
+        userSetupPhase = ''
+          runHook preUserSetup
+          eval "$userSetupScript"
+          runHook postUserSetup
+        '';
+        # A failing check must not stop the effect: it may fix the problem.
+        priorCheckPhase = ''
+          runHook prePriorCheck
+          if [[ -n "$priorCheckScript" ]] && ! eval "$priorCheckScript"; then
+            echo 1>&2 "WARNING: prior check failed, continuing"
+          fi
+          runHook postPriorCheck
+        '';
+        effectPhase = ''
+          runHook preEffect
+          eval "$effectScript"
+          runHook postEffect
+        '';
+        # Runs on failure too, see registerPutStatePhaseOnFailure.
+        putStatePhase = ''
+          if [[ -z ''${PUT_STATE_DONE:-} ]]; then
+            runHook prePutState
+            eval "$putStateScript"
+            runHook postPutState
+            PUT_STATE_DONE=true
+          fi
+        '';
+        effectCheckPhase = ''
+          runHook preEffectCheck
+          eval "$effectCheckScript"
+          runHook postEffectCheck
+        '';
+      }
+    );
 
   # Runs a script on a host over ssh, like hercules-ci-effects' `ssh`.
   # See docs/EFFECTS.md.
