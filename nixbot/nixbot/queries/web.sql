@@ -307,3 +307,19 @@ WHERE e.project_id = sqlc.arg(project_id)
   AND (sqlc.narg(effect)::text IS NULL OR e.name = sqlc.narg(effect))
   AND (sqlc.narg(schedule)::text IS NULL OR e.schedule_name = sqlc.narg(schedule))
 GROUP BY e.status;
+
+-- name: WebProjectFailingEffects :one
+-- Effects whose latest run failed. An effect is its name under one
+-- trigger; every tag counts as the trigger "tag", so a later tag that
+-- succeeds clears an earlier tag's failure.
+SELECT count(*) AS count FROM (
+    SELECT DISTINCT ON (
+        CASE WHEN kind LIKE 'tag:%' THEN 'tag' ELSE kind END,
+        name, schedule_name
+    ) status
+    FROM effect_runs
+    WHERE project_id = $1
+    ORDER BY CASE WHEN kind LIKE 'tag:%' THEN 'tag' ELSE kind END,
+             name, schedule_name, id DESC
+) latest
+WHERE status IN ('failed', 'dependency_failed');

@@ -22,7 +22,7 @@ STATUS_FILTERS: dict[str, tuple[str, ...]] = {
 
 
 def trigger(
-    kind: str, schedule_name: str | None, branch: str | None
+    kind: str, schedule_name: str | None, branch: str | None, name: str = ""
 ) -> tuple[str, str]:
     """(label, value) of what started a run."""
     if kind.startswith("tag:"):
@@ -30,7 +30,8 @@ def trigger(
     if kind == "push":
         return "push", branch or ""
     if kind == "schedule":
-        return "schedule", schedule_name or ""
+        # The effect's own name says it already.
+        return "schedule", "" if schedule_name == name else schedule_name or ""
     if kind == "check":
         return "check", ""
     return "event", kind
@@ -50,7 +51,10 @@ def _restart_allowed(run: dict[str, Any], build: dict[str, Any] | None) -> str:
 
 def _row(run: dict[str, Any], build: dict[str, Any] | None) -> dict[str, Any]:
     label, value = trigger(
-        run["kind"], run.get("schedule_name"), (build or {}).get("branch")
+        run["kind"],
+        run.get("schedule_name"),
+        (build or {}).get("branch"),
+        run["name"],
     )
     return {
         **run,
@@ -114,7 +118,7 @@ def filter_links(
     active = filters.get("status")
     chips = [
         {
-            "label": f"{name} {sum(by_status.get(s, 0) for s in statuses)}",
+            "label": f"{name} runs {sum(by_status.get(s, 0) for s in statuses)}",
             "url": _url(base, {**others, "status": name}),
             "on": active == name,
         }

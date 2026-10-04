@@ -1376,3 +1376,28 @@ nav.tabs .tab-count {
 	color: var(--bad);
 	background: color-mix(in srgb, var(--bad) 12%, transparent);
 }
+
+/* Schedules table: headers stay on one line, the name column takes the
+   slack, and "run now" is a quiet button so it does not outweigh a
+   failed run below. */
+table.schedules th,
+table.schedules td {
+	white-space: nowrap;
+}
+table.schedules td.attr-name {
+	width: 100%;
+}
+button.quiet {
+	background: none;
+	border: 1px solid transparent;
+	color: var(--muted);
+	font: inherit;
+	font-size: 0.85rem;
+	padding: 0.15rem 0.5rem;
+	border-radius: 6px;
+	cursor: pointer;
+}
+button.quiet:hover {
+	border-color: var(--border);
+	color: var(--fg);
+}

@@ -4,9 +4,9 @@
 {% set ctx_col = build is not defined or build is none %}
 <div class="effect-list{{ ' nc' if not ctx_col }}">
   <div class="lh">
-    <span class="visually-hidden">status</span><span>effect</span><span>trigger</span>
+    <span aria-hidden="true">&nbsp;</span><span>effect</span><span>trigger</span>
     {% if ctx_col %}<span>context</span>{% endif %}
-    <span>when</span><span class="visually-hidden">actions</span>
+    <span>when</span><span aria-hidden="true">&nbsp;</span>
   </div>
   {% include "_effect_rows.html" %}
   {% include "_effect_more.html" %}

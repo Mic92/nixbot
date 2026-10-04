@@ -194,6 +194,11 @@ class WebQueries:
                 row["payload"] = json.loads(row["payload"])
         return rows
 
+    async def failing_effects(self, project_id: int) -> int:
+        return (
+            await gen.web_project_failing_effects(self.pool, project_id=project_id) or 0
+        )
+
     async def project_effect_counts(
         self,
         project_id: int,

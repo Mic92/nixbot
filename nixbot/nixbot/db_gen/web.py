@@ -61,6 +61,7 @@ __all__: collections.abc.Sequence[str] = (
     "web_neighbor_numbers",
     "web_project_effect_counts",
     "web_project_effects",
+    "web_project_failing_effects",
     "web_projects",
     "web_queue",
     "web_recent_builds",
@@ -709,6 +710,20 @@ WHERE e.project_id = $1
 GROUP BY e.status
 """
 
+WEB_PROJECT_FAILING_EFFECTS: typing.Final[str] = """-- name: WebProjectFailingEffects :one
+SELECT count(*) AS count FROM (
+    SELECT DISTINCT ON (
+        CASE WHEN kind LIKE 'tag:%' THEN 'tag' ELSE kind END,
+        name, schedule_name
+    ) status
+    FROM effect_runs
+    WHERE project_id = $1
+    ORDER BY CASE WHEN kind LIKE 'tag:%' THEN 'tag' ELSE kind END,
+             name, schedule_name, id DESC
+) latest
+WHERE status IN ('failed', 'dependency_failed')
+"""
+
 
 class QueryResults[T]:
     __slots__ = ("_args", "_conn", "_cursor", "_decode_hook", "_iterator", "_sql")
@@ -1255,3 +1270,10 @@ def web_project_effect_counts(conn: ConnectionLike, *, project_id: int, trigger:
         return WebProjectEffectCountsRow(status=row[0], count=row[1])
 
     return QueryResults(conn, WEB_PROJECT_EFFECT_COUNTS, _decode_hook, project_id, trigger, effect, schedule)
+
+
+async def web_project_failing_effects(conn: ConnectionLike, *, project_id: int) -> int | None:
+    row = await conn.fetchrow(WEB_PROJECT_FAILING_EFFECTS, project_id)
+    if row is None:
+        return None
+    return row[0]

@@ -1,7 +1,7 @@
 {% from "_macros.html" import status_icon %}
 {% if schedules %}
   <h2 class="section">Schedules</h2>
-  <table class="attrs">
+  <table class="attrs schedules">
     <caption class="visually-hidden">scheduled effects</caption>
     <thead>
       <tr>
@@ -49,7 +49,7 @@
             <form method="post" action="{{ repo_path(project) }}/schedules/run">
               <input type="hidden" name="schedule" value="{{ s.schedule }}">
               <input type="hidden" name="effect" value="{{ s.effect }}">
-              <button>run now</button>
+              <button class="quiet">run now</button>
             </form>
           {% endif %}
         </td>

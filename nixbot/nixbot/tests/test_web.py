@@ -2255,9 +2255,57 @@ def test_project_tabs_link_builds_and_effects(client: WebHarness) -> None:
     effects = client.get("/repos/github/acme/widget/effects").text
     for text in (repo, effects):
         assert 'href="/repos/github/acme/widget/effects"' in text
-        assert re.search(r"tab-count\">\d+ failed<", text)
+        assert re.search(r"tab-count\">\d+ failing<", text)
     assert re.search(r'href="/repos/github/acme/widget"\s+aria-current="page"', repo)
     assert re.search(r'effects"\s+aria-current="page"', effects)
+
+
+def test_failing_badge_counts_effects_whose_latest_run_failed(
+    client: WebHarness,
+) -> None:
+    """A failure stops counting once the same effect succeeds again, and
+    every tag is one effect for this."""
+    ctx = client.ctx
+
+    async def failing() -> int:
+        project_id = await ctx.pool.fetchval(
+            "SELECT id FROM projects WHERE forge_repo_id = 'web-1'"
+        )
+        return int(await ctx.queries.failing_effects(project_id))
+
+    async def run(kind: str, name: str, status: str, schedule: str | None) -> None:
+        project_id = await ctx.pool.fetchval(
+            "SELECT id FROM projects WHERE forge_repo_id = 'web-1'"
+        )
+        build_id = (
+            None
+            if kind == "schedule"
+            else await ctx.pool.fetchval(
+                "SELECT id FROM builds WHERE project_id = $1 LIMIT 1", project_id
+            )
+        )
+        await ctx.pool.execute(
+            "INSERT INTO effect_runs (project_id, kind, build_id, schedule_name,"
+            " name, status, finished_at) VALUES ($1, $2, $3, $4, $5, $6, now())",
+            project_id,
+            kind,
+            build_id,
+            schedule,
+            name,
+            status,
+        )
+
+    client.run(ctx.pool.execute("DELETE FROM effect_runs"))
+    assert client.run(failing()) == 0
+    client.run(run("schedule", "gc", "failed", "nightly"))
+    client.run(run("tag:v1", "release", "failed", None))
+    assert client.run(failing()) == 2
+    # The next tag succeeding clears the tag failure, a later schedule run
+    # the schedule failure.
+    client.run(run("tag:v2", "release", "succeeded", None))
+    assert client.run(failing()) == 1
+    client.run(run("schedule", "gc", "succeeded", "nightly"))
+    assert client.run(failing()) == 0
 
 
 def test_old_schedule_history_url_redirects(client: WebHarness) -> None:
@@ -2309,7 +2357,7 @@ def test_project_effects_filter_and_paginate(client: WebHarness) -> None:
     assert f"run #{ids[0]}" in failed
     first = get()
     assert first.count("run #") == PAGE_SIZE
-    assert "failed 1" in first
+    assert "failed runs 1" in first
     # Newest first.
     assert first.index(f"run #{ids[-1]}") < first.index(f"run #{ids[-2]}")
     cursor = re.search(r"before=(\d+)", first)
