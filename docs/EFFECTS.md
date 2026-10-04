@@ -323,28 +323,62 @@ mkEffect {
 }
 ```
 
-### Running a script on another host
+## Deploying to other machines
 
-`ssh { destination = "user@host"; } SCRIPT` from
-[effects-lib](../herculesCI/effects-lib.nix) returns shell code for an
-`effectScript`. The code copies the closure of `SCRIPT` to the host with
-`nix-copy-closure` and runs it there over `ssh`. It is the `ssh` of
-hercules-ci-effects, so effects written for it work unchanged.
+effects-lib has hercules-ci-effects' helpers for deploying over SSH, with the
+same arguments, so effects written for them keep working. `runNixOS` and
+`runNixDarwin` switch a machine to a configuration. `ssh` runs a script on a
+machine.
 
-Options:
+None of them sets up an SSH key. Keep the key in a secret and write it with
+`writeSSHKey` in `userSetupScript`, as the examples do.
 
-- `inheritVariables`: shell variables that the remote script can read.
-- `sshOptions`, `nix-copy-closureOptions`: extra arguments for `ssh` and
-  `nix-copy-closure`.
-- `compress`: compress the closure and the session. `compressClosure` and
-  `compressSession` set them separately.
-- `useSubstitutes` (default `true`): let the host fetch paths from its
-  substituters.
-- `buildOnDestination`: build on the host. Needs `destinationPkgs`, a nixpkgs
-  that can be built there.
+### Switching a machine to a configuration
 
-The SSH key is not set up for you. Call `writeSSHKey` first and add
-`pkgs.openssh` to `inputs`.
+```nix
+let
+  inherit (nixbot.lib.effects { inherit pkgs; }) runNixOS runNixDarwin;
+in
+{
+  deploy-rig = runNixOS {
+    configuration = self.nixosConfigurations.rig;
+    ssh.destination = "root@rig";
+    secretsMap.ssh = "deploy-key";
+    userSetupScript = "writeSSHKey ssh";
+  };
+
+  deploy-mac = runNixDarwin {
+    configuration = self.darwinConfigurations.mac;
+    ssh.destination = "admin@mac";
+    secretsMap.ssh = "deploy-key";
+    userSetupScript = "writeSSHKey ssh";
+  };
+}
+```
+
+`runNixOS` builds the configuration, copies it to the host and runs
+`switch-to-configuration` there. `runNixDarwin` does the same with
+`darwin-rebuild activate`, through `sudo` unless the SSH user is root or can
+write the profile directory. The system that gets deployed is the effect's
+`passthru.prebuilt`.
+
+- `configuration`: an evaluated configuration, like
+  `self.nixosConfigurations.rig`. A module works too. `runNixOS` evaluates it
+  with `system` and `nixpkgs`, `runNixDarwin` with `nix-darwin`, `system` and
+  `pkgs` (or `nixpkgs`).
+- `ssh`: the connection, with the
+  [options of `ssh`](#running-a-script-on-a-host). Only `destination` is
+  required.
+- `buildOnDestination`: shorthand for `ssh.buildOnDestination`.
+- `profile` (`runNixOS` only): the profile to set. The default is
+  `/nix/var/nix/profiles/system`.
+- Everything else goes to `mkEffect`. `runNixDarwin` replaces `effectScript`, so
+  write the key in `userSetupScript`.
+
+### Running a script on a host
+
+`ssh` copies the closure of a script to a host with `nix-copy-closure` and runs
+the script there over `ssh`. It returns shell code for an `effectScript`:
 
 ```nix
 let
@@ -353,8 +387,8 @@ in
 mkEffect {
   inputs = [ pkgs.openssh ];
   secretsMap.ssh = "deploy-key";
+  userSetupScript = "writeSSHKey ssh";
   effectScript = ''
-    writeSSHKey ssh
     rev=v1.2.3
     ${ssh { destination = "root@rig"; inheritVariables = [ "rev" ]; } ''
       nixos-rebuild switch --flake github:org/repo/$rev
@@ -362,6 +396,19 @@ mkEffect {
   '';
 }
 ```
+
+Options:
+
+- `destination` (required): the host, as `user@host`.
+- `inheritVariables`: variables of the effect that the script can read.
+- `sshOptions`, `nix-copy-closureOptions`: extra arguments for `ssh` and
+  `nix-copy-closure`.
+- `compress`: compress the copy and the session. `compressClosure` and
+  `compressSession` set them separately.
+- `useSubstitutes` (default `true`): let the host fetch paths from its
+  substituters.
+- `buildOnDestination`: build on the host. Needs `destinationPkgs`, a nixpkgs
+  that can be built there.
 
 ## Pushable repository checkout
 
