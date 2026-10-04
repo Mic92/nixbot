@@ -19,6 +19,7 @@ in
   effects-lib-run-nixos = import ./effects-lib-run-nixos.nix checkArgs;
   sqlc-generated = import ./sqlc.nix checkArgs;
   effects-lib = import ./effects-lib.nix checkArgs;
+  docs-examples = import ./docs-examples.nix checkArgs;
 }
 // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
   nixbot = import ./nixbot.nix checkArgs;
