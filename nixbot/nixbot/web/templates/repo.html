@@ -16,6 +16,8 @@
         {% endif %}
         {{ project_link(project) }}
       </h2>
+      {% set tab = "builds" %}
+      {% include "_project_tabs.html" %}
       <form method="get" class="filters">
         <select name="status" aria-label="status" onchange="this.form.submit()">
           <option value="">all statuses</option>

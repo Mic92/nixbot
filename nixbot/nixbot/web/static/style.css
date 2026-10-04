@@ -1348,3 +1348,31 @@ details.webhook-setup summary {
 	color: var(--fg);
 	font-weight: 600;
 }
+
+nav.tabs {
+	display: flex;
+	gap: 1.2rem;
+	margin: 0.2rem 0 0.8rem;
+	border-bottom: 1px solid var(--border);
+}
+nav.tabs a {
+	padding: 0.35rem 0.1rem;
+	color: var(--muted);
+	text-decoration: none;
+	border-bottom: 2px solid transparent;
+	margin-bottom: -1px;
+}
+nav.tabs a[aria-current="page"] {
+	color: var(--fg);
+	font-weight: 600;
+	border-bottom-color: var(--accent);
+}
+nav.tabs .tab-count {
+	margin-left: 0.3rem;
+	padding: 0 0.45rem;
+	border-radius: 99px;
+	font-size: 0.78rem;
+	font-weight: 600;
+	color: var(--bad);
+	background: color-mix(in srgb, var(--bad) 12%, transparent);
+}

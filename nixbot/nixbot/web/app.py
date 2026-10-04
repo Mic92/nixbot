@@ -47,6 +47,7 @@ from .api_routes import create_api_router
 from .auth_routes import SESSION_COOKIE
 from .badge import message_for
 from .effect_rows import (
+    FAILED,
     STATUS_FILTERS,
     TRIGGERS,
     attention_first,
@@ -367,6 +368,13 @@ class _PageRoutes:
             await ctx.request_user(request), ctx.authz
         )
 
+    async def _failed_effects(self, project_id: int) -> int:
+        """Failed effect runs of the project, for the tab badge."""
+        counts = await self.ctx.queries.project_effect_counts(
+            project_id, trigger=None, effect=None, schedule=None
+        )
+        return sum(counts.get(s, 0) for s in FAILED)
+
     async def repo_page(  # noqa: PLR0913
         self,
         request: Request,
@@ -390,6 +398,7 @@ class _PageRoutes:
             request=request,
             project=project,
             builds=builds,
+            failed_effects=await self._failed_effects(project["id"]),
             status=status or "",
             ref=ref or "",
             webhook_url=await self._webhook_url(request, project),
@@ -605,6 +614,7 @@ class _PageRoutes:
             filters=filters,
             chips=chips,
             pills=pills,
+            failed_effects=await self._failed_effects(project["id"]),
             can_control=False,
         )
 

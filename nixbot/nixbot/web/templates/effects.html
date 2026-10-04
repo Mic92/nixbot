@@ -11,6 +11,8 @@
           <small>· <a href="{{ repo_path(project) }}">{{ project.owner }}/{{ project.name }}</a></small>
         </h2>
       </div>
+      {% set tab = "effects" %}
+      {% include "_project_tabs.html" %}
       {% include "_effect_chips.html" %}
       {% if rows %}
         {% include "_effect_list.html" %}

@@ -1,0 +1,10 @@
+{# builds | effects tabs of a project. Inputs: project, tab, failed_effects. #}
+<nav class="tabs" aria-label="project">
+  <a href="{{ repo_path(project) }}"
+     {% if tab == "builds" %}aria-current="page"{% endif %}>builds</a>
+  <a href="{{ repo_path(project) }}/effects"
+     {% if tab == "effects" %}aria-current="page"{% endif %}>
+    effects
+    {% if failed_effects %}<span class="tab-count">{{ failed_effects }} failed</span>{% endif %}
+  </a>
+</nav>

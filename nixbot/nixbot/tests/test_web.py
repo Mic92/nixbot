@@ -2236,6 +2236,30 @@ def test_scheduled_run_viewer_waiting_before_log(client: WebHarness) -> None:
     assert "log unavailable" not in resp.text
 
 
+def test_project_tabs_link_builds_and_effects(client: WebHarness) -> None:
+    """Both project pages carry the tabs, with the failed-run count on
+    the effects tab."""
+    ctx = client.ctx
+
+    async def setup() -> None:
+        project_id = await ctx.pool.fetchval(
+            "SELECT id FROM projects WHERE forge_repo_id = 'web-1'"
+        )
+        await ctx.pool.execute("DELETE FROM effect_runs WHERE schedule_name = 'tab'")
+        await _insert_scheduled_run(
+            ctx.pool, project_id, schedule_name="tab", effect="x", status="failed"
+        )
+
+    client.run(setup())
+    repo = client.get("/repos/github/acme/widget").text
+    effects = client.get("/repos/github/acme/widget/effects").text
+    for text in (repo, effects):
+        assert 'href="/repos/github/acme/widget/effects"' in text
+        assert re.search(r"tab-count\">\d+ failed<", text)
+    assert re.search(r'href="/repos/github/acme/widget"\s+aria-current="page"', repo)
+    assert re.search(r'effects"\s+aria-current="page"', effects)
+
+
 def test_old_schedule_history_url_redirects(client: WebHarness) -> None:
     resp = client.run(
         client.http.get(
