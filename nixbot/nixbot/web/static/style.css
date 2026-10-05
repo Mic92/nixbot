@@ -696,6 +696,16 @@ h2.section .status {
 	justify-content: space-between;
 	gap: 1rem;
 }
+.section-actions {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+	gap: 0.5rem;
+}
+.section-actions form {
+	margin: 0;
+}
 
 /* Log viewer */
 pre.log {

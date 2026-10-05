@@ -146,7 +146,7 @@
                 else effects_status -}}
             </span>
           </h2>
-          <span>
+          <span class="section-actions">
             {% if can_control and effects_status in ("pending", "running") %}
               <form method="post"
                     action="{{ build_path(project, build.number) }}/effects/cancel">
