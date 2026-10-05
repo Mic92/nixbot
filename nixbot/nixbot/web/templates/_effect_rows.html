@@ -2,9 +2,9 @@
 {% set ctx_col = build is not defined or build is none %}
 {% set ns = namespace(group=none) %}
 {% for e in rows %}
-  {% if not ctx_col and ns.group != e.needs_attention %}
-    {% set ns.group = e.needs_attention %}
-    <div class="grp">{{ "Needs attention" if e.needs_attention else "Done" }}</div>
+  {% if not ctx_col and ns.group != e.group %}
+    {% set ns.group = e.group %}
+    <div class="grp">{{ e.group }}</div>
   {% endif %}
   {% set pl = (e.why or "") | plain %}
   <div class="er {{ 'failed' if e.status in ('failed', 'dependency_failed') else 'pending' if e.status in ('pending', 'running') else '' }}">

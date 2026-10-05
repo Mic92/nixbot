@@ -33,7 +33,7 @@ def trigger(
         # The effect's own name says it already.
         return "schedule", "" if schedule_name == name else schedule_name or ""
     if kind == "check":
-        return "check", ""
+        return "build only", ""
     return "event", kind
 
 
@@ -47,6 +47,17 @@ def _restart_allowed(run: dict[str, Any], build: dict[str, Any] | None) -> str:
     if run["kind"] == "check":
         return "cancel"
     return "yes" if run.get("payload") is not None else ""
+
+
+GROUPS = ("Needs attention", "Done", "Dependency checks")
+
+
+def _group(run: dict[str, Any]) -> str:
+    """Passing checks only build an effect's dependencies, so they sit
+    below the runs. A failing or waiting one is still on top."""
+    if run["status"] in FAILED + WAITING:
+        return GROUPS[0]
+    return GROUPS[2] if run["kind"] == "check" else GROUPS[1]
 
 
 def _row(run: dict[str, Any], build: dict[str, Any] | None) -> dict[str, Any]:
@@ -64,6 +75,7 @@ def _row(run: dict[str, Any], build: dict[str, Any] | None) -> dict[str, Any]:
         "trigger_value": value,
         "why": run.get("skip_reason") or run.get("error"),
         "needs_attention": run["status"] in FAILED + WAITING,
+        "group": _group(run),
     }
 
 
@@ -91,6 +103,7 @@ def from_eval_errors(errors: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "why": x["error"],
                 "error": x["error"],
                 "needs_attention": True,
+                "group": GROUPS[0],
                 "log_size": 0,
                 "started_at": None,
                 "finished_at": None,
@@ -101,8 +114,9 @@ def from_eval_errors(errors: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def attention_first(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Failures and waiting runs on top. Only for a single build's few rows."""
-    return sorted(rows, key=lambda r: not r["needs_attention"])
+    """Failures and waiting runs on top, passing checks last. Only for a
+    single build's few rows."""
+    return sorted(rows, key=lambda r: GROUPS.index(r["group"]))
 
 
 def _url(base: str, filters: dict[str, str]) -> str:

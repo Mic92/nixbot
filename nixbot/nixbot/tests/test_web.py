@@ -1822,6 +1822,38 @@ def test_build_page_shows_event_effects(client: WebHarness) -> None:
     assert "hcloudx missing" in text
 
 
+def test_build_page_groups_dependency_checks_apart(client: WebHarness) -> None:
+    """Checks only build an effect's dependencies, so passing ones are
+    listed after the runs. A failing check still needs attention."""
+
+    async def seed() -> None:
+        pool = client.ctx.pool
+        build_id = await pool.fetchval("SELECT id FROM builds WHERE number = 3")
+        await _insert_effect_run(
+            pool, build_id, "rollout", "succeeded", finished_at=datetime.now(UTC)
+        )
+        for name, status in (("comment.ok", "succeeded"), ("comment.bad", "failed")):
+            await pool.execute(
+                "INSERT INTO effect_runs (project_id, kind, build_id, name, status,"
+                " finished_at) SELECT project_id, 'check', id, $2, $3, now()"
+                " FROM builds WHERE id = $1",
+                build_id,
+                name,
+                status,
+            )
+
+    client.loop.run_until_complete(seed())
+    text = client.get("/repos/github/acme/widget/builds/3").text
+    headers = re.findall(r'<div class="grp">([^<]+)</div>', text)
+    assert headers == ["Needs attention", "Done", "Dependency checks"]
+    order = [
+        text.index(f"<code>{n}</code>")
+        for n in ("comment.bad", "rollout", "comment.ok")
+    ]
+    assert order == sorted(order)
+    assert "build only" in text
+
+
 def test_effect_log_raw_text(client: WebHarness, tmp_path: Path) -> None:
     async def seed_effect_log() -> None:
         ctx = client.ctx
