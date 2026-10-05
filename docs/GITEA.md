@@ -14,7 +14,7 @@ status updates, and secure authentication.
        the repository is still discovered, but the webhook must be created
        manually: POST to `https://<domain>/webhooks/gitea` with the events push,
        pull_request, pull_request_sync, and for
-       [onEvent effects](EFFECTS.md#onevent) also pull_request_comment and
+       [onEvent effects](EFFECTS.md#event-effects) also pull_request_comment and
        pull_request_label.
      - **Per-user visibility**: nixbot decides who may see a private repository
        by asking `GET /repos/{owner}/{repo}/collaborators/{user}/permission`
@@ -32,8 +32,8 @@ status updates, and secure authentication.
    - Required permissions:
      - `write:repository` - To create webhooks and update commit statuses
      - `write:issue` - To post pull request comments from
-       [onEvent effects](EFFECTS.md#onevent) (`nixbot-pr-comment`) and reply to
-       `/command` comments
+       [onEvent effects](EFFECTS.md#event-effects) (`nixbot-pr-comment`) and
+       reply to `/command` comments
      - `read:user` - To list the repositories the user has access to
    - Save the token securely
 

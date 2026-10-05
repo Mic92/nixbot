@@ -1,33 +1,23 @@
-# Hercules CI effects
+# Effects
 
-See [flake.nix](../flake.nix) for an example and the
-[Hercules CI effects documentation](https://docs.hercules-ci.com/hercules-ci/effects/)
-for the upstream reference.
+An effect is a script that changes something outside the build: pushing an
+image, deploying a machine, publishing a release, commenting on a pull request.
+nixbot builds everything an effect needs first, then runs it in a sandbox with
+access to the Nix store, the network and the secrets you configured.
 
-## Ordering and locks
+Effects follow
+[Hercules CI effects](https://docs.hercules-ci.com/hercules-ci/effects/): a
+flake that works there works here, with
+[hercules-ci-effects](https://docs.hercules-ci.com/hercules-ci-effects/) as the
+library; `mkEffect` is also available from nixbot's
+[effects-lib](../herculesCI/effects-lib.nix). nixbot adds ordering and locks,
+skipping unchanged effects, tag and event effects, and the `nbo effects`
+command.
 
-Effects can declare two attributes on the effect derivation:
+## Your first effect
 
-- `after`: attribute paths of effects of the same build that must succeed first,
-  e.g. `[ [ "default" "build-image" ] ]`. Each entry is a list of strings: the
-  onPush job first, then the path inside that job's effects attrset (nested
-  effects work too: `[ "default" "env" "staging" ]`), so it matches the dotted
-  names shown everywhere else and can reference effects of another job. The
-  effect only starts once everything in `after` succeeded; if a dependency
-  fails, the effect is marked `skipped` and reported as a failure. Effects not
-  ordered against each other run in parallel.
-- `lock`: a named lock. Effects holding the same lock name run one at a time per
-  project, across builds and pull requests — use it for shared resources like a
-  staging environment or a hardware lab. A lock is handed out in build order:
-  all of a build's effects on a lock finish before the next build's start, so
-  multi-effect deployments never interleave across builds.
-
-Both are ordinary attributes on the effect derivation: set them next to
-`effectScript`, whether you write plain attribute sets, use this repo's
-[effects-lib](../herculesCI/effects-lib.nix), or upstream
-[hercules-ci-effects](https://docs.hercules-ci.com/hercules-ci-effects/)
-`mkEffect` (extra attributes pass through). They are a nixbot extension:
-Hercules CI itself ignores them; only nixbot orders and serializes on them.
+Effects live in the `herculesCI` output of your flake. Every `onPush.<job>` is
+evaluated, and the attributes of its `outputs.effects` are the effects:
 
 ```nix
 # flake.nix
@@ -37,60 +27,115 @@ Hercules CI itself ignores them; only nixbot orders and serializes on them.
   outputs = { self, nixpkgs, nixbot, ... }: {
     herculesCI = { primaryRepo, ... }: let
       pkgs = nixpkgs.legacyPackages.x86_64-linux;
-      # Or hercules-ci-effects' mkEffect; after/lock pass through there too.
       inherit (nixbot.lib.effects { inherit pkgs; }) mkEffect;
     in {
-      onPush.default.outputs.effects = {
-        push-image = mkEffect {
-          inputs = [ pkgs.skopeo ];
-          effectScript = ''
-            skopeo copy docker-archive:${self.packages.x86_64-linux.image} \
-              docker://registry.example.org/app:${primaryRepo.rev}
-          '';
-        };
-
-        # Starts only after push-image succeeded; the "staging" lock makes
-        # concurrent PRs take turns deploying to staging.
-        deploy-staging = mkEffect {
-          after = [ [ "default" "push-image" ] ];
-          lock = "staging";
-          inputs = [ pkgs.kubectl ];
-          effectScript = ''
-            kubectl set image deployment/app app=registry.example.org/app:${primaryRepo.rev}
-          '';
-        };
-
-        deploy-prod = mkEffect {
-          after = [ [ "default" "deploy-staging" ] ];
-          lock = "prod";
-          inputs = [ pkgs.kubectl ];
-          effectScript = ''
-            kubectl --context prod set image deployment/app app=registry.example.org/app:${primaryRepo.rev}
-          '';
-        };
-
-        # No after/lock: runs in parallel with everything else.
-        notify = mkEffect {
-          inputs = [ pkgs.curl ];
-          effectScript = ''
-            curl -sf -d "deployed ${primaryRepo.rev}" https://chat.example.org/hook
-          '';
-        };
+      onPush.default.outputs.effects.notify = mkEffect {
+        inputs = [ pkgs.curl ];
+        effectScript = ''
+          curl -sf -d "built ${primaryRepo.rev}" https://chat.example.org/hook
+        '';
       };
     };
   };
 }
 ```
 
-With this flake, one push runs `push-image` and `notify` immediately and in
-parallel, then `deploy-staging`, then `deploy-prod`. If `push-image` fails, both
-deploys end up `skipped` and the commit status is red. Cycles or unknown paths
-in `after` fail effect discovery.
+Push this to the default branch. Once the build is green, `notify` runs and its
+log appears on the build page, next to the build's other results. The `effects`
+commit status shows whether all effects succeeded.
 
-nixbot evaluates every `onPush.<job>` of the `herculesCI` output. Outside the
-flake, effects are addressed by their dotted attribute path prefixed with the
-job name: `nbo effects run default.deploy-staging`, log names, and the `after`
-entries in `nbo effects list` output. Inspect the DAG locally:
+Try it before pushing with `nbo effects run default.notify`, see
+[Running effects locally](#running-effects-locally).
+
+## When effects run
+
+- A push to the default branch runs its `onPush` effects after the build
+  succeeded. Other branches and pull requests only build the effects'
+  dependencies and report problems as "Effect checks", see
+  [Checks on every build](#checks-on-every-build).
+- `effects_branches` and `effects_on_pull_requests` in `nixbot.toml` allow
+  effects on more branches or on pull requests. nixbot reads them from the
+  default branch, so a pull request cannot enable itself. See
+  [Per Repository Configuration](../README.md#per-repository-configuration).
+  Pull request effects get the same secrets, so only enable them for
+  repositories you trust all contributors of.
+- Pushing a tag runs the effects too, see [Tag pushes](#tag-pushes).
+- [Event effects](#event-effects) run when a pull request turns green, a comment
+  asks for it, and similar events.
+
+A build's effects start after all its builds succeeded and run in parallel,
+unless you [order them](#ordering-effects).
+
+## Running effects locally
+
+`nbo effects` (part of the [nbo CLI](CLI.md#effects)) lists, graphs and runs
+effects without pushing, also for a remote flake reference:
+
+```console
+$ nbo effects list
+$ nbo effects graph
+$ nbo effects run default.deploy
+$ nbo effects run github:org/repo/branch#default.deploy
+```
+
+Effects are named by their `onPush` job and attribute path, `default.deploy` for
+`onPush.default.outputs.effects.deploy`. For secrets see
+[Running locally with secrets](#running-locally-with-secrets). `--secrets FILE`
+and `nbo effects --help` list the remaining flags.
+
+## Ordering effects
+
+Two attributes on an effect control when it runs:
+
+- `after`: effects of the same build that must succeed first, each as
+  `[ "<job>" "<attribute>" ... ]`, e.g. `[ [ "default" "push-image" ] ]`. If a
+  dependency fails, the effect is `skipped` and the build is reported as failed.
+  Effects not ordered against each other run in parallel. Cycles or unknown
+  paths fail effect discovery.
+- `lock`: a named lock. Effects holding the same lock run one at a time per
+  project, across builds and pull requests, which suits a staging environment or
+  a hardware lab. A lock is handed out in build order, so the effects of two
+  builds never interleave.
+
+Both are plain attributes next to `effectScript`. Hercules CI ignores them.
+
+```nix
+herculesCI = { primaryRepo, ... }: {
+  onPush.default.outputs.effects = {
+    push-image = mkEffect {
+      inputs = [ pkgs.skopeo ];
+      effectScript = ''
+        skopeo copy docker-archive:${self.packages.x86_64-linux.image} \
+          docker://registry.example.org/app:${primaryRepo.rev}
+      '';
+    };
+
+    deploy-staging = mkEffect {
+      after = [ [ "default" "push-image" ] ];
+      lock = "staging";
+      inputs = [ pkgs.kubectl ];
+      effectScript = "kubectl set image deployment/app app=registry.example.org/app:${primaryRepo.rev}";
+    };
+
+    deploy-prod = mkEffect {
+      after = [ [ "default" "deploy-staging" ] ];
+      lock = "prod";
+      inputs = [ pkgs.kubectl ];
+      effectScript = "kubectl --context prod set image deployment/app app=registry.example.org/app:${primaryRepo.rev}";
+    };
+
+    # No after or lock: starts immediately.
+    notify = mkEffect {
+      inputs = [ pkgs.curl ];
+      effectScript = ''curl -sf -d "deployed ${primaryRepo.rev}" https://chat.example.org/hook'';
+    };
+  };
+};
+```
+
+One push runs `push-image` and `notify` at once, then `deploy-staging`, then
+`deploy-prod`. If `push-image` fails, both deploys are skipped and the commit
+status is red. `nbo effects graph` shows the result:
 
 ```console
 $ nbo effects graph
@@ -100,7 +145,7 @@ default.push-image
     └── default.deploy-prod [lock: prod]
 ```
 
-## Running only on changed inputs (`when.changed`)
+## Skipping unchanged effects
 
 `when.changed` names the inputs an effect depends on. The effect is not run
 again while they are the same as in its last successful run:
@@ -126,106 +171,41 @@ it run as usual.
 Failed runs and runs for pull requests do not count. A restart always runs the
 effect. Only `onPush` effects support `when.changed`, and no other `when` key.
 
-## nixbot.toml Configuration
+## Secrets and credentials
 
-Effects branch configuration and allowing effects to run in PRs is configured
-via nixbot.toml in the default branch and is documented in the
-[README.md](../README.md#per-repository-configuration).
+An effect asks for secrets with `secretsMap`, which maps the name the script
+uses to a secret nixbot holds. The sections below configure the secrets, read
+them in a script and write the credential files common tools expect.
 
-## CLI usage
+### Configuring secrets on the server
 
-The `nbo effects` commands (part of the [nbo CLI](CLI.md)) can list and run
-effects locally, or against remote repositories using
-[Nix flake references](https://nix.dev/manual/nix/latest/command-ref/new-cli/nix3-flake#flake-references).
+Secrets are configured per repository or per organization:
 
-### Local repository
+1. **Repository-specific**: `"github:owner/repo"` — applies to a single
+   repository
+2. **Organization-wide**: `"github:org/*"` — applies to all repositories in an
+   organization
 
-```console
-$ cd my-repo
-$ nbo effects list
-{"default.deploy": {"after": ["default.notify"], "lock": "hw-lab"}, "default.notify": {"after": [], "lock": null}}
+```nix
+services.nixbot.effects.perRepoSecretFiles = {
+  # All repos in nix-community org get this token
+  "github:nix-community/*" = config.agenix.secrets.nix-community-effects.path;
 
-$ nbo effects graph
-default.notify
-└── default.deploy [lock: hw-lab]
+  # This specific repo gets its own token (overrides org-level)
+  "github:nix-community/nixbot" = config.agenix.secrets.nixbot-effects.path;
 
-$ nbo effects run default.deploy
+  # All repos in a Gitea org
+  "gitea:my-org/*" = config.agenix.secrets.my-org-effects.path;
+};
 ```
 
-### Remote repository (flake reference)
-
-No local checkout needed:
-
-```console
-$ nbo effects run github:org/repo/branch#default.deploy
-$ nbo effects list github:org/repo/branch
-$ nbo effects list-schedules github:org/repo/branch
-$ nbo effects run-scheduled github:org/repo#flake-update update
-```
-
-### Subcommands
-
-| Command          | Description                                                   |
-| ---------------- | ------------------------------------------------------------- |
-| `list`           | List effects with metadata (`--event KIND` adds skip reasons) |
-| `graph`          | Show the effect DAG as an ASCII tree                          |
-| `run`            | Run a single effect (`--event KIND` runs an onEvent one)      |
-| `list-schedules` | List scheduled effects                                        |
-| `run-scheduled`  | Run a specific effect from a schedule                         |
-
-### Flags
-
-All subcommands accept:
-
-| Flag           | Description                                                                                                                      |
-| -------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `--rev`        | Git revision to use                                                                                                              |
-| `--branch`     | Git branch to use                                                                                                                |
-| `--repo`       | Git repo name                                                                                                                    |
-| `--path`       | Path to the repository (default: current directory)                                                                              |
-| `--debug`      | Enable debug mode (may leak secrets such as GITHUB_TOKEN)                                                                        |
-| `--no-refresh` | Do not pass `--refresh` when resolving flake references (refresh is on by default so remote refs resolve to the latest revision) |
-
-`run` and `run-scheduled` also accept:
-
-| Flag        | Description                      |
-| ----------- | -------------------------------- |
-| `--secrets` | Path to a JSON file with secrets |
-
-## Running effects locally with secrets
-
-Pass `--secrets` to provide secrets when running effects locally. The file is a
-JSON object where each key is a secret name and its value has a `"data"` field
-containing key-value pairs:
-
-```json
-{
-  "my-secret": {
-    "data": {
-      "token": "ghp_xxxxxxxxxxxx",
-      "username": "deploy-bot"
-    }
-  }
-}
-```
-
-```console
-$ nbo effects run --secrets secrets.json default.deploy
-```
-
-Inside the effect, secrets are available at `/run/secrets.json` (via
-`HERCULES_CI_SECRETS_JSON`). This follows the
-[hercules-ci secrets format](https://docs.hercules-ci.com/hercules-ci-agent/secrets-json/).
-
-## Shell helpers
-
-`mkEffect` from [effects-lib](../herculesCI/effects-lib.nix) provides the shell
-functions of
-[hercules-ci-effects](https://docs.hercules-ci.com/hercules-ci-effects/), so
-effects written for it work unchanged. In the functions below, a secret `NAME`
-is a key of the effect's `secretsMap`, or of the secrets JSON if it has none.
+The secrets files must be valid JSON files containing the secrets that will be
+made available to your effects at runtime.
 
 ### Reading secrets
+
+In the shell functions below, a secret `NAME` is a key of the effect's
+`secretsMap`, or of the secrets JSON if it has none.
 
 - `readSecretString NAME PATH` prints a string from the secret's `data`. `PATH`
   is a `jq` path. It fails if the path doesn't exist.
@@ -269,39 +249,32 @@ mkEffect {
 }
 ```
 
-```nix
-mkEffect {
-  inputs = [ pkgs.docker-client ];
-  secretsMap.docker = "docker";
-  effectScript = ''
-    writeDockerKey docker             # ~/.docker/{key,cert,ca}.pem
-    useDockerHost builder.example.org
-    docker ps
-  '';
+### Running locally with secrets
+
+Pass `--secrets` to provide secrets when running effects locally. The file is a
+JSON object where each key is a secret name and its value has a `"data"` field
+containing key-value pairs:
+
+```json
+{
+  "my-secret": {
+    "data": {
+      "token": "ghp_xxxxxxxxxxxx",
+      "username": "deploy-bot"
+    }
+  }
 }
 ```
 
-```nix
-mkEffect {
-  inputs = [ pkgs.awscli2 ];
-  secretsMap.aws = "aws";
-  effectScript = ''
-    writeAWSSecret aws prod           # profile "prod" in ~/.aws/credentials
-    aws --profile prod s3 ls
-  '';
-}
+```console
+$ nbo effects run --secrets secrets.json default.deploy
 ```
 
-```nix
-mkEffect {
-  inputs = [ pkgs.gnupg ];
-  secretsMap.gpg = "release-key";
-  effectScript = ''
-    writeGPGKey gpg
-    echo hi | gpg --clearsign
-  '';
-}
-```
+Inside the effect, secrets are available at `/run/secrets.json` (via
+`HERCULES_CI_SECRETS_JSON`). This follows the
+[hercules-ci secrets format](https://docs.hercules-ci.com/hercules-ci-agent/secrets-json/).
+
+## State files and phases
 
 ### State files
 
@@ -352,9 +325,8 @@ mkEffect {
 ## Deploying to other machines
 
 effects-lib has hercules-ci-effects' helpers for deploying over SSH, with the
-same arguments, so effects written for them keep working. `runNixOS` and
-`runNixDarwin` switch a machine to a configuration. `ssh` runs a script on a
-machine.
+same arguments. `runNixOS` and `runNixDarwin` switch a machine to a
+configuration. `ssh` runs a script on a machine.
 
 None of them sets up an SSH key. Keep the key in a secret and write it with
 `writeSSHKey` in `userSetupScript`, as the examples do.
@@ -507,7 +479,7 @@ Limitations:
 - An effect with `after` is skipped. Use a shared `lock` to order tag effects.
 - Pushing a tag again while its run is going retries for a while, then fails.
 
-## Event effects (`onEvent`)
+## Event effects
 
 `onPush` effects run when a branch is built. `onEvent` effects react to what
 happens around a build: a pull request turning green, a `/command` comment, a PR
@@ -643,29 +615,3 @@ a `when` can be tried without pushing. Flags cover what `when` looks at: `--pr`,
 `--actor`, `--permission`, `--author-permission`, `--label`, `--modified`,
 `--command`, `--args`, `--build-status`, `--previous-build-status`.
 `--payload FILE` takes a payload nixbot recorded instead.
-
-## Buildbot secrets configuration
-
-When running effects through nixbot (not locally), secrets are configured at
-different scopes:
-
-1. **Repository-specific**: `"github:owner/repo"` — applies to a single
-   repository
-2. **Organization-wide**: `"github:org/*"` — applies to all repositories in an
-   organization
-
-```nix
-services.nixbot.effects.perRepoSecretFiles = {
-  # All repos in nix-community org get this token
-  "github:nix-community/*" = config.agenix.secrets.nix-community-effects.path;
-
-  # This specific repo gets its own token (overrides org-level)
-  "github:nix-community/nixbot" = config.agenix.secrets.nixbot-effects.path;
-
-  # All repos in a Gitea org
-  "gitea:my-org/*" = config.agenix.secrets.my-org-effects.path;
-};
-```
-
-The secrets files must be valid JSON files containing the secrets that will be
-made available to your effects at runtime.
