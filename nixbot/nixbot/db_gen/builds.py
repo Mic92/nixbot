@@ -10,6 +10,7 @@ __all__: collections.abc.Sequence[str] = (
     "EffectDepStatusesRow",
     "EffectsSummaryRow",
     "EvalJobRowsRow",
+    "LastRealRunWithInputsRow",
     "LockBuildRowRow",
     "QueryResults",
     "attach_build_to_pr",
@@ -34,6 +35,7 @@ __all__: collections.abc.Sequence[str] = (
     "finish_effect",
     "get_build",
     "insert_build_effects",
+    "last_real_run_with_inputs",
     "lock_build_identity",
     "lock_build_row",
     "mark_attribute_building",
@@ -41,6 +43,7 @@ __all__: collections.abc.Sequence[str] = (
     "record_attributes",
     "record_effect_eval_error",
     "record_effects_ref",
+    "reuse_effect_run",
     "set_build_status",
     "set_eval_warnings",
     "settle_unfinished_attributes",
@@ -95,6 +98,12 @@ class LockBuildRowRow:
     id_: int
     status: str
     status_generation: int
+
+
+@dataclasses.dataclass()
+class LastRealRunWithInputsRow:
+    id_: int
+    number: int
 
 
 LOCK_BUILD_IDENTITY: typing.Final[str] = """-- name: LockBuildIdentity :exec
@@ -304,14 +313,17 @@ RETURNING id
 """
 
 INSERT_BUILD_EFFECTS: typing.Final[str] = """-- name: InsertBuildEffects :exec
-INSERT INTO effect_runs (project_id, kind, build_id, name, status, deps, finished_at)
+INSERT INTO effect_runs (project_id, kind, build_id, name, status, deps,
+                         changed_inputs, force_run, finished_at)
 SELECT b.project_id, $1::text, b.id, u.name, $2::text,
-       u.deps::jsonb,
+       u.deps::jsonb, NULLIF(u.changed, '')::jsonb,
+       $3::boolean,
        CASE WHEN $2::text = 'pending' THEN NULL ELSE now() END
 FROM builds b,
-     (SELECT unnest($3::text[]) AS name,
-             unnest($4::text[]) AS deps) AS u
-WHERE b.id = $5::bigint
+     (SELECT unnest($4::text[]) AS name,
+             unnest($5::text[]) AS deps,
+             unnest($6::text[]) AS changed) AS u
+WHERE b.id = $7::bigint
 ON CONFLICT (build_id, kind, name) DO NOTHING
 """
 
@@ -378,7 +390,7 @@ SELECT build_id, source, error, code_rev, created_at FROM effect_eval_errors WHE
 """
 
 EFFECTS_FOR_BUILD: typing.Final[str] = """-- name: EffectsForBuild :many
-SELECT id, project_id, kind, owner, build_id, schedule_name, name, status, error, deps, log_size, log_truncated, started_at, finished_at, payload, code_rev, skip_reason, actor, lock FROM effect_runs WHERE build_id = $1 ORDER BY name
+SELECT id, project_id, kind, owner, build_id, schedule_name, name, status, error, deps, log_size, log_truncated, started_at, finished_at, payload, code_rev, skip_reason, actor, lock, changed_inputs, force_run, reused_from FROM effect_runs WHERE build_id = $1 ORDER BY name
 """
 
 ATTRIBUTE_STATUSES: typing.Final[str] = """-- name: AttributeStatuses :many
@@ -400,6 +412,26 @@ SET status = $2,
     finished_at = COALESCE(finished_at, now())
 WHERE id = $1
 RETURNING status_generation
+"""
+
+LAST_REAL_RUN_WITH_INPUTS: typing.Final[str] = """-- name: LastRealRunWithInputs :one
+SELECT r.id, b.number FROM effect_runs r JOIN builds b ON b.id = r.build_id
+WHERE r.project_id = $1::bigint AND r.kind = 'push'
+  AND r.name = $2::text
+  AND r.changed_inputs = $3::jsonb
+  AND r.status = 'succeeded' AND r.reused_from IS NULL
+  AND r.build_id <> $4::bigint
+  AND b.effects_pr_number IS NULL
+ORDER BY r.finished_at DESC LIMIT 1
+"""
+
+REUSE_EFFECT_RUN: typing.Final[str] = """-- name: ReuseEffectRun :one
+UPDATE effect_runs SET status = 'succeeded',
+    reused_from = $1::bigint,
+    started_at = now(), finished_at = now()
+WHERE build_id = $2::bigint AND kind = 'push'
+  AND name = $3::text AND status = 'pending'
+RETURNING id
 """
 
 
@@ -753,8 +785,8 @@ async def claim_effect(conn: ConnectionLike, *, status: str, build_id: int, kind
     return row[0]
 
 
-async def insert_build_effects(conn: ConnectionLike, *, kind: str, status: str, names: collections.abc.Sequence[str], deps: collections.abc.Sequence[str], build_id: int) -> None:
-    await conn.execute(INSERT_BUILD_EFFECTS, kind, status, names, deps, build_id)
+async def insert_build_effects(conn: ConnectionLike, *, kind: str, status: str, force_run: bool, names: collections.abc.Sequence[str], deps: collections.abc.Sequence[str], changed: collections.abc.Sequence[str], build_id: int) -> None:
+    await conn.execute(INSERT_BUILD_EFFECTS, kind, status, force_run, names, deps, changed, build_id)
 
 
 async def drop_removed_checks(conn: ConnectionLike, *, build_id: int, names: collections.abc.Sequence[str]) -> None:
@@ -816,6 +848,9 @@ def effects_for_build(conn: ConnectionLike, *, build_id: int | None) -> QueryRes
             skip_reason=row[16],
             actor=row[17],
             lock=row[18],
+            changed_inputs=row[19],
+            force_run=row[20],
+            reused_from=row[21],
         )
 
     return QueryResults(conn, EFFECTS_FOR_BUILD, _decode_hook, build_id)
@@ -841,6 +876,20 @@ def attribute_status_list(conn: ConnectionLike, *, build_id: int) -> QueryResult
 
 async def bump_build_status(conn: ConnectionLike, *, id_: int, status: str) -> int | None:
     row = await conn.fetchrow(BUMP_BUILD_STATUS, id_, status)
+    if row is None:
+        return None
+    return row[0]
+
+
+async def last_real_run_with_inputs(conn: ConnectionLike, *, project_id: int, name: str, changed_inputs: str, build_id: int) -> LastRealRunWithInputsRow | None:
+    row = await conn.fetchrow(LAST_REAL_RUN_WITH_INPUTS, project_id, name, changed_inputs, build_id)
+    if row is None:
+        return None
+    return LastRealRunWithInputsRow(id_=row[0], number=row[1])
+
+
+async def reuse_effect_run(conn: ConnectionLike, *, reused_from: int, build_id: int, name: str) -> int | None:
+    row = await conn.fetchrow(REUSE_EFFECT_RUN, reused_from, build_id, name)
     if row is None:
         return None
     return row[0]

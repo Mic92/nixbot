@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 from .errors import EffectError
 from .graph import EffectMeta, EventEffectMeta, validate_deps
-from .match import KINDS, validate_when
+from .match import KINDS, push_changed, validate_when
 from .proc import stream_command
 
 if TYPE_CHECKING:
@@ -221,7 +221,11 @@ async def list_effects(opts: EffectsOptions) -> dict[str, EffectMeta]:
     """
     expr = _walk_expr(f"({await effect_function(opts)})")
     effects = {
-        name: EffectMeta(after=tuple(info["after"]), lock=info["lock"])
+        name: EffectMeta(
+            after=tuple(info["after"]),
+            lock=info["lock"],
+            changed=push_changed(name, info["when"]),
+        )
         for name, info in (await _nix_eval_json(expr, opts)).items()
     }
     # A bad DAG (cycle, unknown dependency) fails discovery right here.

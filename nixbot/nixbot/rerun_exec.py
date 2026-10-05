@@ -210,7 +210,7 @@ async def rerun_effects(
             worktree_path,
         ):
             await o.maybe_run_effects(
-                event, build, worktree_path, credentials, only=names
+                event, build, worktree_path, credentials, only=names, force_run=True
             )
             await o.refresh_schedules(event)
         # The enqueued effect items share this build's key and only

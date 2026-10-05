@@ -115,6 +115,8 @@ async def enqueue_checks(
         status="pending",
         names=names,
         deps=["null"] * len(names),
+        changed=[""] * len(names),
+        force_run=False,
     )
     await o.reporter.effects_started(event, build, len(names))
     await wq.enqueue_effect_items(

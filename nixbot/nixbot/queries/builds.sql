@@ -208,13 +208,16 @@ RETURNING id;
 -- The only producer of pending build-owned rows. Restarts delete rows
 -- first, so a conflict means the row belongs to a live or finished run
 -- (a gated ref reusing a build) and stays.
-INSERT INTO effect_runs (project_id, kind, build_id, name, status, deps, finished_at)
+INSERT INTO effect_runs (project_id, kind, build_id, name, status, deps,
+                         changed_inputs, force_run, finished_at)
 SELECT b.project_id, sqlc.arg(kind)::text, b.id, u.name, sqlc.arg(status)::text,
-       u.deps::jsonb,
+       u.deps::jsonb, NULLIF(u.changed, '')::jsonb,
+       sqlc.arg(force_run)::boolean,
        CASE WHEN sqlc.arg(status)::text = 'pending' THEN NULL ELSE now() END
 FROM builds b,
      (SELECT unnest(sqlc.arg(names)::text[]) AS name,
-             unnest(sqlc.arg(deps)::text[]) AS deps) AS u
+             unnest(sqlc.arg(deps)::text[]) AS deps,
+             unnest(sqlc.arg(changed)::text[]) AS changed) AS u
 WHERE b.id = sqlc.arg(build_id)::bigint
 ON CONFLICT (build_id, kind, name) DO NOTHING;
 
@@ -302,3 +305,24 @@ SET status = $2,
     finished_at = COALESCE(finished_at, now())
 WHERE id = $1
 RETURNING status_generation;
+
+-- name: LastRealRunWithInputs :one
+-- The newest real success of this effect with exactly these inputs.
+-- Pull request runs are no source for a default branch push.
+SELECT r.id, b.number FROM effect_runs r JOIN builds b ON b.id = r.build_id
+WHERE r.project_id = sqlc.arg(project_id)::bigint AND r.kind = 'push'
+  AND r.name = sqlc.arg(name)::text
+  AND r.changed_inputs = sqlc.arg(changed_inputs)::jsonb
+  AND r.status = 'succeeded' AND r.reused_from IS NULL
+  AND r.build_id <> sqlc.arg(build_id)::bigint
+  AND b.effects_pr_number IS NULL
+ORDER BY r.finished_at DESC LIMIT 1;
+
+-- name: ReuseEffectRun :one
+-- Settle a pending row as succeeded without running it.
+UPDATE effect_runs SET status = 'succeeded',
+    reused_from = sqlc.arg(reused_from)::bigint,
+    started_at = now(), finished_at = now()
+WHERE build_id = sqlc.arg(build_id)::bigint AND kind = 'push'
+  AND name = sqlc.arg(name)::text AND status = 'pending'
+RETURNING id;

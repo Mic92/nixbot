@@ -46,8 +46,9 @@ lib.fix (effects: {
       # serializing runs across builds.
       after ? [ ],
       lock ? null,
-      # onEvent only: conditions nixbot checks against the event before
-      # running, see docs/EFFECTS.md. `lock` may contain `{pr}` there.
+      # onEvent: conditions nixbot checks against the event before
+      # running. `lock` may contain `{pr}` there. onPush: only
+      # `when.changed`, see docs/EFFECTS.md.
       when ? { },
       # Phase scripts and the extra phases around them, as in
       # hercules-ci-effects' mkEffect.

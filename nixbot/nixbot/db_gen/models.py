@@ -99,6 +99,9 @@ class EffectRun:
     skip_reason: str | None
     actor: str | None
     lock: str | None
+    changed_inputs: str | None
+    force_run: bool
+    reused_from: int | None
 
 
 @dataclasses.dataclass()

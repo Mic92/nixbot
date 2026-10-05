@@ -17,11 +17,16 @@ WHEN_KEYS = frozenset(
 )
 _LEVELS = {None: 0, "none": 0, "read": 1, "write": 2, "admin": 3}
 _TRANSITIONS = {"broke", "fixed"}
+MAX_CHANGED_INPUTS = 32
+MAX_CHANGED_VALUE_BYTES = 1024
 
 Payload = dict[str, Any]
 
 
 def validate_when(name: str, when: dict[str, Any]) -> None:
+    if "changed" in when:
+        msg = f"effect '{name}': when.changed is only supported for onPush effects"
+        raise EffectError(msg)
     unknown = set(when) - WHEN_KEYS
     if unknown:
         msg = f"effect '{name}': unknown `when` keys: {', '.join(sorted(unknown))}"
@@ -36,6 +41,39 @@ def validate_when(name: str, when: dict[str, Any]) -> None:
     if (t := when.get("transition")) is not None and t not in _TRANSITIONS:
         msg = f"effect '{name}': when.transition must be broke|fixed, got {t!r}"
         raise EffectError(msg)
+
+
+def push_changed(name: str, when: dict[str, Any]) -> dict[str, str] | None:
+    """Normalised `when.changed` of an onPush effect."""
+    others = set(when) - {"changed"}
+    if others:
+        msg = (
+            f"effect '{name}': onPush effects only support `when.changed`, "
+            f"got: {', '.join(sorted(others))}"
+        )
+        raise EffectError(msg)
+    changed = when.get("changed")
+    if changed is None:
+        return None
+    if not isinstance(changed, dict) or not all(
+        isinstance(v, str) for v in changed.values()
+    ):
+        msg = f"effect '{name}': when.changed must be an attribute set of strings"
+        raise EffectError(msg)
+    if len(changed) > MAX_CHANGED_INPUTS:
+        msg = f"effect '{name}': when.changed takes at most {MAX_CHANGED_INPUTS} inputs"
+        raise EffectError(msg)
+    if "" in changed:
+        msg = f"effect '{name}': when.changed input names must not be empty"
+        raise EffectError(msg)
+    for key, value in changed.items():
+        if len(value.encode()) > MAX_CHANGED_VALUE_BYTES:
+            msg = (
+                f"effect '{name}': when.changed input '{key}' exceeds the limit of "
+                f"{MAX_CHANGED_VALUE_BYTES} bytes"
+            )
+            raise EffectError(msg)
+    return dict(changed)
 
 
 def _permission(when: dict[str, Any], payload: Payload) -> str | None:

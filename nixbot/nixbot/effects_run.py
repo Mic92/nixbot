@@ -54,6 +54,7 @@ async def maybe_run_effects(  # noqa: PLR0913
     credentials: FetchCredentials | None = None,
     *,
     only: list[str] | None = None,
+    force_run: bool = False,
 ) -> None:
     """The only producer of pending build-owned effect rows, each with
     its queue item. `only` narrows a rerun to the named effects."""
@@ -91,7 +92,9 @@ async def maybe_run_effects(  # noqa: PLR0913
     await q.drop_removed_effects(o.pool, build_id=build.id_, names=list(effects))
     if only is not None:
         effects = {n: m for n, m in effects.items() if n in only}
-    await _record_effects(o, event, build, effects, allowed=allowed)
+    await _record_effects(
+        o, event, build, effects, allowed=allowed, force_run=force_run
+    )
 
 
 async def _claim_effects(
@@ -107,13 +110,14 @@ async def _claim_effects(
     return await builds_q.mark_effects_started(o.pool, id_=build.id_) is not None
 
 
-async def _record_effects(
+async def _record_effects(  # noqa: PLR0913
     o: Orchestrator,
     event: ChangeEvent,
     build: BuildRecord,
     effects: dict[str, EffectMeta],
     *,
     allowed: bool,
+    force_run: bool = False,
 ) -> None:
     """Pending rows plus queue items, or skipped rows on a gated ref so
     the page lists what a merge would run."""
@@ -127,6 +131,8 @@ async def _record_effects(
         status="pending" if allowed else "skipped",
         names=names,
         deps=[json.dumps(list(effects[n].after)) for n in names],
+        changed=[_changed_json(effects[n]) for n in names],
+        force_run=force_run,
     )
     if not allowed:
         return
@@ -138,6 +144,39 @@ async def _record_effects(
         names=names,
         dedup_keys=[_dedup_key(build, n, effects[n]) for n in names],
     )
+
+
+def _changed_json(meta: EffectMeta) -> str:
+    """ "" becomes NULL in the INSERT."""
+    return "" if meta.changed is None else json.dumps(meta.changed, sort_keys=True)
+
+
+async def _reuse_last_success(
+    o: Orchestrator, event: ChangeEvent, build: BuildRecord, name: str
+) -> bool:
+    """Decided at claim time: the run that answers the question is
+    often still ahead of this item in the same lock queue."""
+    run = await q.effect_run(o.pool, build_id=build.id_, kind="push", name=name)
+    if run is None or run.changed_inputs is None or run.force_run:
+        return False
+    source = await builds_q.last_real_run_with_inputs(
+        o.pool,
+        project_id=build.project_id,
+        name=name,
+        changed_inputs=run.changed_inputs,
+        build_id=build.id_,
+    )
+    if source is None:
+        return False
+    if (
+        await builds_q.reuse_effect_run(
+            o.pool, reused_from=source.id_, build_id=build.id_, name=name
+        )
+        is None
+    ):
+        return False
+    await o.reporter.effect_finished(event, build, name, success=True, error=None)
+    return True
 
 
 async def _effects_allowed(
@@ -303,6 +342,9 @@ async def _claimed_effect_item(
         event = effects_event_for_build(info, build)
         await _skip_effect(o, event, build, name, failed_dep)
         await post_effects_summary(o, event, build)
+        return
+    if await _reuse_last_success(o, effects_event_for_build(info, build), build, name):
+        await post_effects_summary(o, effects_event_for_build(info, build), build)
         return
     async with o.rerun_worktree(info, build, "effect", credentials) as (
         worktree_event,

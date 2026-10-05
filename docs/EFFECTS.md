@@ -100,6 +100,32 @@ default.push-image
     └── default.deploy-prod [lock: prod]
 ```
 
+## Running only on changed inputs (`when.changed`)
+
+`when.changed` names the inputs an effect depends on. The effect is not run
+again while they are the same as in its last successful run:
+
+```nix
+let
+  firmware = self.packages.x86_64-linux.image;
+  flasher = pkgs.hello;
+in
+mkEffect {
+  lock = "rig";
+  when.changed = { inherit firmware flasher; };
+  effectScript = "flash ${firmware} && run-tests";
+}
+```
+
+Values must be strings, typically store paths: up to 32 inputs of at most 1024
+bytes each. When the effect's turn comes (after its `lock`) and the last
+successful run of this effect in the repository had the same inputs, it is
+marked succeeded as "unchanged since build #N" without running. Effects `after`
+it run as usual.
+
+Failed runs and runs for pull requests do not count. A restart always runs the
+effect. Only `onPush` effects support `when.changed`, and no other `when` key.
+
 ## nixbot.toml Configuration
 
 Effects branch configuration and allowing effects to run in PRs is configured

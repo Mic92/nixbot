@@ -1163,6 +1163,119 @@ async def test_effects_run_after_default_branch_success(
     assert started is True
 
 
+async def changed_rows(pool: asyncpg.Pool, build_id: int) -> dict[str, tuple]:
+    rows = await pool.fetch(
+        "SELECT r.name, r.status, src.build_id AS src_build"
+        " FROM effect_runs r LEFT JOIN effect_runs src ON src.id = r.reused_from"
+        " WHERE r.build_id = $1 AND r.kind = 'push'",
+        build_id,
+    )
+    return {r["name"]: (r["status"], r["src_build"]) for r in rows}
+
+
+async def push_commit(
+    orchestrator: Orchestrator, project: RepoInfo, upstream: Path, name: str
+) -> BuildRecord:
+    build = await orchestrator.handle_change_event(
+        ChangeEvent(repo=project, branch="main", commit_sha=add_commit(upstream, name))
+    )
+    assert build is not None
+    return build
+
+
+async def test_when_changed_reuses_the_last_success(
+    pool: asyncpg.Pool,
+    make_env: EnvFactory,
+    upstream: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same inputs as the last real success: the row is succeeded and
+    points at that run, the effect does not run, `after` dependents do.
+    Other inputs run again."""
+    fake = patch_effects(
+        monkeypatch,
+        effects={
+            "hil": EffectMeta(changed={"firmware": "fw-1"}),
+            "notify": EffectMeta(after=("hil",)),
+        },
+    )
+    orchestrator, reporter, project = await make_env(
+        FakeEvalRunner([mk_job("a")]), FakeExecutor(), name="changed"
+    )
+    first = await push_commit(orchestrator, project, upstream, "c1")
+    await drain_effect_items(orchestrator, project, pool)
+    assert fake.ran == ["hil", "notify"]
+
+    second = await push_commit(orchestrator, project, upstream, "c2")
+    await drain_effect_items(orchestrator, project, pool)
+    assert fake.ran == ["hil", "notify", "notify"]
+    assert (await changed_rows(pool, second.id_))["hil"] == ("succeeded", first.id_)
+    assert ("effects-finished", second.id_, 0, 2) in {e[:4] for e in reporter.events}
+
+    fake.push["hil"] = EffectMeta(changed={"firmware": "fw-2"})
+    third = await push_commit(orchestrator, project, upstream, "c3")
+    await drain_effect_items(orchestrator, project, pool)
+    assert fake.ran[-2:] == ["hil", "notify"]
+    assert (await changed_rows(pool, third.id_))["hil"] == ("succeeded", None)
+
+
+async def test_when_changed_decides_when_the_lock_is_free(
+    pool: asyncpg.Pool,
+    make_env: EnvFactory,
+    upstream: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two builds queue behind one lock before either ran. The second
+    is decided when it is claimed, so it sees the first's success."""
+    fake = patch_effects(
+        monkeypatch,
+        effects={"hil": EffectMeta(lock="rig", changed={"firmware": "fw-1"})},
+    )
+    orchestrator, _, project = await make_env(
+        FakeEvalRunner([mk_job("a")]), FakeExecutor(), name="changed-lock"
+    )
+    first = await push_commit(orchestrator, project, upstream, "q1")
+    second = await push_commit(orchestrator, project, upstream, "q2")
+    await drain_effect_items(orchestrator, project, pool)
+    assert fake.ran == ["hil"]
+    assert (await changed_rows(pool, second.id_))["hil"] == ("succeeded", first.id_)
+
+
+async def test_when_changed_ignores_failures_and_follows_a_restart(
+    pool: asyncpg.Pool,
+    make_env: EnvFactory,
+    upstream: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only a success counts. A restart asks for a run, so it runs and
+    is no longer marked as reused."""
+    outcomes = [False, True]
+    ran: list[str] = []
+
+    async def run_effect(_ctx: EffectsContext, name: str, _log: object = None) -> bool:
+        ran.append(name)
+        return outcomes.pop(0) if outcomes else True
+
+    patch_effects(
+        monkeypatch, run_effect, effects={"hil": EffectMeta(changed={"fw": "1"})}
+    )
+    orchestrator, _, project = await make_env(
+        FakeEvalRunner([mk_job("a")]), FakeExecutor(), name="changed-fail"
+    )
+    builds = []
+    for name in ("f1", "f2", "f3"):
+        builds.append(await push_commit(orchestrator, project, upstream, name))
+        await drain_effect_items(orchestrator, project, pool)
+    # Failed, ran again and succeeded, then reused.
+    assert ran == ["hil", "hil"]
+    assert (await changed_rows(pool, builds[2].id_))["hil"][1] == builds[1].id_
+
+    await orchestrator.rerun_effects(project, builds[2])
+    await drain_effect_items(orchestrator, project, pool)
+    assert ran == ["hil", "hil", "hil"]
+    assert (await changed_rows(pool, builds[2].id_))["hil"] == ("succeeded", None)
+
+
 async def test_pr_worktree_config_cannot_grant_effects(
     pool: asyncpg.Pool,
     make_env: EnvFactory,
@@ -1527,6 +1640,8 @@ async def test_effect_rows_roundtrip(pool: asyncpg.Pool, tmp_path: Path) -> None
         status="pending",
         names=["deploy"],
         deps=["[]"],
+        changed=[""],
+        force_run=False,
     )
     assert await claim() is not None
     assert await claim() is None

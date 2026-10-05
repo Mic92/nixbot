@@ -19,6 +19,9 @@ class EffectMeta:
 
     after: tuple[str, ...] = ()
     lock: str | None = None
+    # `when.changed`: run only if one of these differs from the last
+    # real success.
+    changed: dict[str, str] | None = None
 
 
 @dataclass(frozen=True)

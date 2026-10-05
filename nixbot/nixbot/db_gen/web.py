@@ -373,6 +373,9 @@ class WebProjectEffectsRow:
     skip_reason: str | None
     actor: str | None
     lock: str | None
+    changed_inputs: str | None
+    force_run: bool
+    reused_from: int | None
     build_number: int | None
     commit_sha: str | None
     branch: str | None
@@ -542,7 +545,7 @@ SELECT id FROM effect_runs WHERE build_id = $1 AND kind = 'push' AND name = $2
 """
 
 WEB_EFFECTS: typing.Final[str] = """-- name: WebEffects :many
-SELECT id, project_id, kind, owner, build_id, schedule_name, name, status, error, deps, log_size, log_truncated, started_at, finished_at, payload, code_rev, skip_reason, actor, lock FROM effect_runs WHERE build_id = $1
+SELECT id, project_id, kind, owner, build_id, schedule_name, name, status, error, deps, log_size, log_truncated, started_at, finished_at, payload, code_rev, skip_reason, actor, lock, changed_inputs, force_run, reused_from FROM effect_runs WHERE build_id = $1
 ORDER BY array_position(
     ARRAY['failed', 'dependency_failed', 'running', 'pending', 'succeeded', 'skipped'],
     status), name
@@ -682,7 +685,7 @@ LIMIT $3::bigint
 """
 
 WEB_PROJECT_EFFECTS: typing.Final[str] = """-- name: WebProjectEffects :many
-SELECT e.id, e.project_id, e.kind, e.owner, e.build_id, e.schedule_name, e.name, e.status, e.error, e.deps, e.log_size, e.log_truncated, e.started_at, e.finished_at, e.payload, e.code_rev, e.skip_reason, e.actor, e.lock, b.number AS build_number, b.commit_sha, b.branch
+SELECT e.id, e.project_id, e.kind, e.owner, e.build_id, e.schedule_name, e.name, e.status, e.error, e.deps, e.log_size, e.log_truncated, e.started_at, e.finished_at, e.payload, e.code_rev, e.skip_reason, e.actor, e.lock, e.changed_inputs, e.force_run, e.reused_from, b.number AS build_number, b.commit_sha, b.branch
 FROM effect_runs e LEFT JOIN builds b ON b.id = e.build_id
 WHERE e.project_id = $1
   AND ($2::text[] IS NULL OR e.status = ANY($2))
@@ -1023,6 +1026,9 @@ def web_effects(conn: ConnectionLike, *, build_id: int | None) -> QueryResults[m
             skip_reason=row[16],
             actor=row[17],
             lock=row[18],
+            changed_inputs=row[19],
+            force_run=row[20],
+            reused_from=row[21],
         )
 
     return QueryResults(conn, WEB_EFFECTS, _decode_hook, build_id)
@@ -1264,9 +1270,12 @@ def web_project_effects(conn: ConnectionLike, *, project_id: int, statuses: coll
             skip_reason=row[16],
             actor=row[17],
             lock=row[18],
-            build_number=row[19],
-            commit_sha=row[20],
-            branch=row[21],
+            changed_inputs=row[19],
+            force_run=row[20],
+            reused_from=row[21],
+            build_number=row[22],
+            commit_sha=row[23],
+            branch=row[24],
         )
 
     return QueryResults(conn, WEB_PROJECT_EFFECTS, _decode_hook, project_id, statuses, trigger, effect, schedule, before, limit_)
