@@ -435,6 +435,29 @@ derivation attribute; effects built without `mkEffect` can set the attribute
 directly. Effects that do not set it get no checkout. If the repository has no
 forge token to push with, the effect fails with an error.
 
+The forge token can push only if the GitHub App installation may write the
+repository's contents. Where it may not, push with a secret of your own instead:
+drop the clone's `url.*.insteadOf` entries, which route every URL on the forge
+through the forge token, and authenticate with the secret.
+
+For lock file updates, effects-lib has hercules-ci-effects' `flakeUpdate`, with
+the same arguments. It updates the lock on a branch, brings an existing branch
+up to date with `baseMergeBranch` (by `baseMergeMethod`: merge, rebase,
+fast-forward or reset), pushes, opens a pull request to the default branch on
+GitHub, Gitea or GitLab, and with `autoMergeMethod` enables GitHub auto-merge.
+It fetches, pushes and calls the forge with `tokenSecret`, the forge token by
+default:
+
+```nix
+effects.update = (nixbot.lib.effects { inherit pkgs; }).flakeUpdate {
+  baseMergeBranch = "develop";
+  baseMergeMethod = "reset";
+  pullRequestTitle = "chore: update flake.lock";
+  # A secret that may push, where the forge token may not.
+  tokenSecret = "github";
+};
+```
+
 ## Tag pushes
 
 Pushing a tag runs the tagged commit's `onPush` effects with `primaryRepo.tag`
