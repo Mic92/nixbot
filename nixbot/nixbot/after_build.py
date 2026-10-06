@@ -70,6 +70,10 @@ async def _effects(  # noqa: PLR0913
         # onto the commit that reused the build.
         from .build_reuse import replay_effect_statuses  # noqa: PLC0415
 
+        logger.info(
+            "reused build: replaying effect statuses",
+            extra={"build_id": build.id_, "sha": event.commit_sha},
+        )
         await replay_effect_statuses(o, event, build)
         return
     await o.maybe_run_effects(event, build, worktree_path, credentials)
