@@ -43,6 +43,31 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(entry, default=str)
 
 
+# Successful reads of these paths are polled or streamed by the UI and
+# would otherwise be most of the journal.
+_QUIET_PREFIXES = ("/static/", "/events")
+_QUIET_INFIX = "/logs/"
+
+
+class AccessLogFilter(logging.Filter):
+    """Keeps uvicorn's access log for what matters: errors and anything
+    but the high-volume log/static/event-stream reads, which only show
+    up at debug level."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if logging.getLogger().isEnabledFor(logging.DEBUG):
+            return True
+        # uvicorn: (client_addr, method, full_path, http_version, status)
+        args = record.args
+        if not isinstance(args, tuple) or len(args) != 5:  # noqa: PLR2004
+            return True
+        path = str(args[2]).split("?", 1)[0]
+        status = args[4]
+        if not isinstance(status, int) or status >= 400:  # noqa: PLR2004
+            return True
+        return not (path.startswith(_QUIET_PREFIXES) or _QUIET_INFIX in path)
+
+
 def setup_logging(level: str = "info", *, json_format: bool = True) -> None:
     handler = logging.StreamHandler(sys.stderr)
     if json_format:
@@ -55,3 +80,10 @@ def setup_logging(level: str = "info", *, json_format: bool = True) -> None:
     root.handlers.clear()
     root.addHandler(handler)
     root.setLevel(level.upper())
+    # httpx logs every outgoing request at info without saying why; the
+    # forge clients log the interesting ones themselves.
+    for name in ("httpx", "httpcore"):
+        logging.getLogger(name).setLevel(
+            logging.DEBUG if root.isEnabledFor(logging.DEBUG) else logging.WARNING
+        )
+    logging.getLogger("uvicorn.access").addFilter(AccessLogFilter())

@@ -439,7 +439,9 @@ async def _run_startup(service: CIService) -> None:
 # their own. Without the cap uvicorn waits for them forever and
 # systemd SIGKILLs the service on every stop.
 # lifespan="off": _serve runs the app lifespan once for all listeners.
+# log_config=None: uvicorn's own handlers would bypass our formatter.
 _UVICORN_OPTS: dict[str, Any] = {
+    "log_config": None,
     "log_level": "info",
     "lifespan": "off",
     "timeout_graceful_shutdown": 5,
