@@ -1745,6 +1745,9 @@ def test_build_page_shows_effects(client: WebHarness) -> None:
     async def seed_effects() -> None:
         ctx = client.ctx
         build_id = await ctx.pool.fetchval("SELECT id FROM builds WHERE number = 2")
+        await ctx.pool.execute(
+            "UPDATE builds SET status = 'succeeded' WHERE id = $1", build_id
+        )
         await _insert_effect_run(
             ctx.pool,
             build_id,
@@ -1776,7 +1779,7 @@ def test_build_page_shows_effects(client: WebHarness) -> None:
     assert 'id="effects-status" class="status skipped"' in pr_text
     assert "not run for pull requests" in pr_text
     assert "effects/restart" not in pr_text
-    # The builds list flags builds whose effects are live or failed.
+    # The builds list folds live or failed effects into the single status icon.
     listing = client.get("/repos/github/acme/widget").text
     assert 'title="effects running"' in listing
     assert 'title="effects skipped"' not in listing

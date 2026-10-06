@@ -3,16 +3,16 @@
 {% set row = b if "owner" in b else project %}
 <tr data-id="{{ b.id }}">
   <td>
-    {{ status_icon(b.status) }}<a href="{{ build_path(row, b.number) }}">#{{ b.number }}</a>
-    {%- if b.effects_status %}
-      <a href="{{ build_path(row, b.number) }}#effects-status"
-         title="effects {{ b.effects_status }}">
-      {{- status_icon(b.effects_status, labelled=false) }}<span class="visually-hidden">effects {{ b.effects_status }}</span></a>
-    {%- endif %}
-  </td>
-  {% if "project_name" in b %}<td>{{ repo_name(b.owner, b.project_name) }}</td>{% endif %}
-  <td>{{ ref_link(row, b) }}</td>
-  <td>{{ commit_link(row, b.commit_sha) }}</td>
-  <td>{{ ago(b.created_at) }}</td>
-  <td>{{ b | duration }}</td>
+    {#- One icon: a green build with unfinished or failed effects is not done yet. #}
+    {%- set eff = b.effects_status if b.status == "succeeded" and b.effects_status in ("pending", "running", "failed") else none %}
+    {%- set shown = "failed" if eff == "failed" else "running" if eff else b.status %}
+    {%- if eff %}<span title="effects {{ eff }}">{{ status_icon(shown, labelled=false) }}<span class="visually-hidden">effects {{ eff }}</span></span>
+  {%- else %}{{ status_icon(shown) }}{% endif -%}
+  <a href="{{ build_path(row, b.number) }}">#{{ b.number }}</a>
+</td>
+{% if "project_name" in b %}<td>{{ repo_name(b.owner, b.project_name) }}</td>{% endif %}
+<td>{{ ref_link(row, b) }}</td>
+<td>{{ commit_link(row, b.commit_sha) }}</td>
+<td>{{ ago(b.created_at) }}</td>
+<td>{{ b | duration }}</td>
 </tr>
