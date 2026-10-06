@@ -668,6 +668,7 @@ class _WebhookHandlers:
             raise HTTPException(status_code=403, detail="invalid signature")
         guid = request.headers.get("X-GitHub-Delivery", "")
         if self.deduper.is_duplicate(guid):
+            logger.info("webhook duplicate", extra={"delivery": guid})
             return Response(status_code=202, content="duplicate delivery")
         event = parse_github_event(
             request.headers.get("X-GitHub-Event", ""), parse_webhook_body(request, body)
@@ -700,6 +701,7 @@ class _WebhookHandlers:
             raise HTTPException(status_code=403, detail=forge.auth_error)
         guid = request.headers.get(forge.guid_header, "")
         if self.deduper.is_duplicate(guid):
+            logger.info("webhook duplicate", extra={"delivery": guid})
             return Response(status_code=202, content="duplicate delivery")
         event = forge.parse(request.headers.get(forge.event_header, ""), payload)
         return await self._dispatch(guid, event)
@@ -707,7 +709,21 @@ class _WebhookHandlers:
     async def _dispatch(self, guid: str, event: WebhookEvent | None) -> Response:
         if event is None:
             self.deduper.record(guid)
+            logger.debug("webhook ignored", extra={"delivery": guid})
             return Response(status_code=200, content="ignored")
+        fields: dict[str, Any] = {
+            "delivery": guid,
+            "event": type(event).__name__,
+            "forge": event.forge,
+            "repo_id": event.forge_repo_id,
+        }
+        if isinstance(event, ChangeRequest):
+            fields |= {
+                "branch": event.branch,
+                "sha": event.commit_sha,
+                "pr": event.pr_number,
+            }
+        logger.info("webhook accepted", extra=fields)
         await self._submit(event, guid)
         return Response(status_code=202, content="accepted")
 

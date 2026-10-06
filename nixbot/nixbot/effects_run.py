@@ -60,6 +60,7 @@ async def maybe_run_effects(  # noqa: PLR0913
     its queue item. `only` narrows a rerun to the named effects."""
     fresh = await builds_q.get_build(o.pool, id_=build.id_)
     if fresh is None:
+        logger.warning("effects skipped: build vanished", extra={"build_id": build.id_})
         return
     build = fresh
     allowed = await _effects_allowed(o, event, credentials)
@@ -67,6 +68,14 @@ async def maybe_run_effects(  # noqa: PLR0913
         # A gated ref does not revoke a recorded allowed one.
         event = effects_event_for_build(event.repo, build)
         allowed = await _effects_allowed(o, event, credentials)
+    ctx = {
+        "build_id": build.id_,
+        "sha": event.commit_sha,
+        "branch": event.branch,
+        "pr": event.pr_number,
+        "allowed": allowed,
+        "effects_started": build.effects_started,
+    }
     await builds_q.record_effects_ref(
         o.pool,
         id_=build.id_,
@@ -76,6 +85,8 @@ async def maybe_run_effects(  # noqa: PLR0913
         allowed=allowed,
     )
     if allowed and not await _claim_effects(o, build, only):
+        # Deploys are not idempotent, so a claimed build never re-runs.
+        logger.info("effects not run: already claimed for this build", extra=ctx)
         return
     effects = await discover_effects(o, event, build, worktree_path)
     if only is None:
@@ -87,7 +98,12 @@ async def maybe_run_effects(  # noqa: PLR0913
         )
         await effect_checks.enqueue_checks(o, event, build, checks or [])
     if effects is None:
+        logger.warning("effects not run: discovery failed", extra=ctx)
         return
+    logger.info(
+        "effects discovered" if allowed else "effects discovered but gated",
+        extra={**ctx, "effects": sorted(effects)},
+    )
     # Also drops rows a rerun selected that the flake no longer has.
     await q.drop_removed_effects(o.pool, build_id=build.id_, names=list(effects))
     if only is not None:
