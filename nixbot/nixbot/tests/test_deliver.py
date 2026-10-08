@@ -463,6 +463,26 @@ async def test_build_finished_transitions(env: dict[str, Any]) -> None:
     )
 
 
+async def test_build_finished_names_the_pushed_commit(env: dict[str, Any]) -> None:
+    """build_finished names the pushed commit, not the build's stored one."""
+    svc, pool = env["service"], env["service"].pool
+    env["listings"]["build_finished"]["release"] = EventEffectMeta(
+        when={"branches": ["main"]}
+    )
+    built_by_pr = await insert_build(
+        pool,
+        env["project_id"],
+        number=20,
+        commit_sha="pr-head",
+        tree_hash="r1",
+        status="succeeded",
+    )
+    await _finish(svc, env, built_by_pr)
+    [build] = [p["build"] for _k, n, p, _ in env["ran"] if n == "release"]
+    assert (build["number"], build["rev"]) == (20, env["sha"])
+    assert "pullRequest" not in env["ran"][-1][2]
+
+
 async def test_command_while_running_gets_notice(env: dict[str, Any]) -> None:
     svc, build_id, pool = env["service"], env["build_id"], env["service"].pool
     forge_repo_id = await pool.fetchval(
