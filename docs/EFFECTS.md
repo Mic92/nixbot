@@ -529,7 +529,7 @@ and similar tools execute code from it. Guard such effects with
 | `pull_request`        | a PR head was built green, also on reopen or label change |
 | `comment`             | a PR comment whose first line is `/command args`          |
 | `pull_request_closed` | a PR was closed or merged                                 |
-| `build_finished`      | any build finished                                        |
+| `build_finished`      | any build finished, and each branch push that reused one  |
 
 Bot comments are ignored, and a `/command` for an effect that is still running
 gets a note instead of a second run. Deliveries are queued in the database and
@@ -547,7 +547,7 @@ and, for the common fields, as `NIXBOT_EVENT_KIND`, `NIXBOT_ACTOR`,
 - `pullRequest`: `number`, `title`, `url`, `author` (shaped like `actor`),
   `baseRef`, `headRef`, `headRev`, `labels`, `draft`, `isFork`, `merged`.
 - `build`: `number`, `url`, `status`, `branch`, `rev`. For `build_finished` it
-  also has `previousStatus` and `failedAttrs`.
+  also has `previousStatus` and `failedAttrs`, and `rev` is the pushed commit.
 - `command`, `args`: for `comment`.
 
 ### Conditions

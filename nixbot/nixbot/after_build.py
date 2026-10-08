@@ -84,5 +84,7 @@ async def _deliveries(
 ) -> None:
     refreshed = await q.get_build(o.pool, id_=build.id_)
     if refreshed is not None:
-        # A reused build had its build_finished delivered when it finished.
-        await o.deliver_events(event, refreshed, finished=not reused)
+        # A reused build's build_finished went to the context that built it,
+        # often a PR. A branch push needs its own.
+        finished = not reused or (event.pr_number is None and event.tag is None)
+        await o.deliver_events(event, refreshed, finished=finished)

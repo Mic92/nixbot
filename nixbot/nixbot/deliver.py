@@ -68,7 +68,8 @@ class Delivery:
     args: str | None = None
     previous_status: str | None = None
     failed_attrs: list[str] | None = None
-    # Tag pushes: the tag and the commit it points at.
+    # Tag pushes: the tag and the commit it points at. build_finished: the
+    # pushed commit.
     tag: str | None = None
     rev: str | None = None
 
@@ -484,6 +485,8 @@ async def _payload(
     s: CIService, project: Project, info: RepoInfo, build: BuildRecord, d: Delivery
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {"build": build_payload(s.config.url, info, build)}
+    if d.rev is not None:
+        payload["build"]["rev"] = d.rev
     if d.previous_status is not None:
         payload["build"]["previousStatus"] = d.previous_status
     if d.failed_attrs is not None:
