@@ -90,7 +90,6 @@ in
             server = {
               HTTP_PORT = 3742;
               ROOT_URL = "http://localhost:3742/";
-              DOMAIN = "localhost";
             };
             security.INSTALL_LOCK = true;
             webhook.ALLOWED_HOST_LIST = "localhost";
