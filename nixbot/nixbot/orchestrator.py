@@ -461,6 +461,7 @@ class Orchestrator:
                 {
                     "kind": "build_finished",
                     **base,
+                    "rev": event.commit_sha,
                     "previous_status": previous,
                     "failed_attrs": list(failed),
                 },

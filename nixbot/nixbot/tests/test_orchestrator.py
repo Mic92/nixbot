@@ -2239,6 +2239,59 @@ async def test_reuse_for_default_branch_push_runs_effects(
     assert effect_shas == {main_sha}
 
 
+async def build_finished_deliveries(pool: asyncpg.Pool) -> list[dict[str, object]]:
+    rows = await pool.fetch(
+        "SELECT payload FROM work_queue"
+        " WHERE kind = 'deliver' AND payload->>'kind' = 'build_finished'"
+        " ORDER BY id"
+    )
+    return [json.loads(r["payload"]) for r in rows]
+
+
+async def test_push_reusing_pr_build_delivers_build_finished(
+    pool: asyncpg.Pool, make_env: EnvFactory, upstream: Path
+) -> None:
+    """A branch push reusing a PR's build gets its own build_finished; a
+    PR reusing a build gets none."""
+    pr_sha = add_commit(upstream, "reuse-finished")
+    orchestrator, _, project = await make_env(
+        FakeEvalRunner([mk_job("a")]), FakeExecutor(), name="reuse-finished"
+    )
+    pr_build = await orchestrator.handle_change_event(
+        ChangeEvent(repo=project, branch="main", commit_sha=pr_sha, pr_number=9)
+    )
+    assert pr_build is not None
+    [pr_delivery] = await build_finished_deliveries(pool)
+    assert pr_delivery["pr_number"] == 9
+    await pool.execute("DELETE FROM work_queue WHERE kind = 'deliver'")
+
+    git(upstream, "commit", "--allow-empty", "-m", "reuse-finished-merge")
+    main_sha = git(upstream, "rev-parse", "HEAD")
+    main_build = await orchestrator.handle_change_event(
+        ChangeEvent(repo=project, branch="main", commit_sha=main_sha)
+    )
+    assert main_build is not None
+    assert main_build.id_ == pr_build.id_
+    [main_delivery] = await build_finished_deliveries(pool)
+    assert main_delivery.get("pr_number") is None
+    assert main_delivery["rev"] == main_sha
+    await pool.execute("DELETE FROM work_queue WHERE kind = 'deliver'")
+
+    git(upstream, "commit", "--allow-empty", "-m", "reuse-finished-again")
+    again_sha = git(upstream, "rev-parse", "HEAD")
+    await orchestrator.handle_change_event(
+        ChangeEvent(repo=project, branch="main", commit_sha=again_sha)
+    )
+    [again_delivery] = await build_finished_deliveries(pool)
+    assert again_delivery["rev"] == again_sha
+    await pool.execute("DELETE FROM work_queue WHERE kind = 'deliver'")
+
+    await orchestrator.handle_change_event(
+        ChangeEvent(repo=project, branch="main", commit_sha=again_sha, pr_number=10)
+    )
+    assert await build_finished_deliveries(pool) == []
+
+
 async def tag_deliveries(pool: asyncpg.Pool) -> list[dict[str, object]]:
     rows = await pool.fetch(
         "SELECT payload FROM work_queue"
