@@ -55,6 +55,7 @@ SELECT 'effect', u.dedup_key,
                           'name', u.name)
 FROM (SELECT unnest($3::text[]) AS name,
              unnest($4::text[]) AS dedup_key) AS u
+ORDER BY u.name
 ON CONFLICT (kind, dedup_key, md5(payload::text))
 WHERE status = 'pending'
 DO NOTHING

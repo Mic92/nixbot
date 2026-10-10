@@ -207,7 +207,7 @@ RETURNING id;
 -- name: InsertBuildEffects :exec
 -- The only producer of pending build-owned rows. Restarts delete rows
 -- first, so a conflict means the row belongs to a live or finished run
--- (a gated ref reusing a build) and stays.
+-- (a gated ref reusing a build) and stays; only skipped rows are replaced.
 INSERT INTO effect_runs (project_id, kind, build_id, name, status, deps,
                          changed_inputs, force_run, finished_at)
 SELECT b.project_id, sqlc.arg(kind)::text, b.id, u.name, sqlc.arg(status)::text,
@@ -219,7 +219,13 @@ FROM builds b,
              unnest(sqlc.arg(deps)::text[]) AS deps,
              unnest(sqlc.arg(changed)::text[]) AS changed) AS u
 WHERE b.id = sqlc.arg(build_id)::bigint
-ON CONFLICT (build_id, kind, name) DO NOTHING;
+-- Fixed order avoids deadlocks between concurrent callers.
+ORDER BY u.name
+ON CONFLICT (build_id, kind, name) DO UPDATE
+SET status = EXCLUDED.status, deps = EXCLUDED.deps,
+    changed_inputs = EXCLUDED.changed_inputs, force_run = EXCLUDED.force_run,
+    finished_at = EXCLUDED.finished_at
+WHERE effect_runs.status = 'skipped' AND EXCLUDED.status = 'pending';
 
 -- name: DropRemovedChecks :exec
 DELETE FROM effect_runs

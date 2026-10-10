@@ -126,17 +126,28 @@ WHERE builds.id = $1::bigint
 DROP_EFFECTS_FOR_RERUN: typing.Final[str] = """-- name: DropEffectsForRerun :exec
 WITH flag AS (
     UPDATE builds SET effects_started = FALSE WHERE id = $1::bigint
-), dropped AS (
-    DELETE FROM effect_runs
+), doomed AS (
+    -- Same lock order as the inserts.
+    SELECT id FROM effect_runs
     WHERE build_id = $1::bigint AND owner = 'build'
       AND ($2::text[] IS NULL
            OR (kind = 'push' AND name = ANY($2::text[])))
+    ORDER BY name, kind
+    FOR UPDATE
+), dropped AS (
+    DELETE FROM effect_runs WHERE id IN (SELECT id FROM doomed)
     RETURNING kind, name
 )
 UPDATE work_queue w SET status = 'done', finished_at = now()
 FROM dropped d
-WHERE w.kind = 'effect' AND w.status = 'pending'
-  AND (w.payload->>'build_id')::bigint = $1::bigint
+WHERE w.id IN (
+    SELECT q.id FROM work_queue q
+    WHERE q.kind = 'effect' AND q.status = 'pending'
+      AND (q.payload->>'build_id')::bigint = $1::bigint
+      AND (q.payload->>'kind', q.payload->>'name') IN (SELECT kind, name FROM dropped)
+    ORDER BY q.id
+    FOR UPDATE
+)
   AND w.payload->>'kind' = d.kind AND w.payload->>'name' = d.name
 """
 

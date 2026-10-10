@@ -324,7 +324,12 @@ FROM builds b,
              unnest($5::text[]) AS deps,
              unnest($6::text[]) AS changed) AS u
 WHERE b.id = $7::bigint
-ON CONFLICT (build_id, kind, name) DO NOTHING
+ORDER BY u.name
+ON CONFLICT (build_id, kind, name) DO UPDATE
+SET status = EXCLUDED.status, deps = EXCLUDED.deps,
+    changed_inputs = EXCLUDED.changed_inputs, force_run = EXCLUDED.force_run,
+    finished_at = EXCLUDED.finished_at
+WHERE effect_runs.status = 'skipped' AND EXCLUDED.status = 'pending'
 """
 
 DROP_REMOVED_CHECKS: typing.Final[str] = """-- name: DropRemovedChecks :exec

@@ -50,17 +50,28 @@ WHERE builds.id = sqlc.arg(build_id)::bigint;
 -- cannot leave re-runnable effects behind a set flag.
 WITH flag AS (
     UPDATE builds SET effects_started = FALSE WHERE id = sqlc.arg(build_id)::bigint
-), dropped AS (
-    DELETE FROM effect_runs
+), doomed AS (
+    -- Same lock order as the inserts.
+    SELECT id FROM effect_runs
     WHERE build_id = sqlc.arg(build_id)::bigint AND owner = 'build'
       AND (sqlc.narg(names)::text[] IS NULL
            OR (kind = 'push' AND name = ANY(sqlc.narg(names)::text[])))
+    ORDER BY name, kind
+    FOR UPDATE
+), dropped AS (
+    DELETE FROM effect_runs WHERE id IN (SELECT id FROM doomed)
     RETURNING kind, name
 )
 UPDATE work_queue w SET status = 'done', finished_at = now()
 FROM dropped d
-WHERE w.kind = 'effect' AND w.status = 'pending'
-  AND (w.payload->>'build_id')::bigint = sqlc.arg(build_id)::bigint
+WHERE w.id IN (
+    SELECT q.id FROM work_queue q
+    WHERE q.kind = 'effect' AND q.status = 'pending'
+      AND (q.payload->>'build_id')::bigint = sqlc.arg(build_id)::bigint
+      AND (q.payload->>'kind', q.payload->>'name') IN (SELECT kind, name FROM dropped)
+    ORDER BY q.id
+    FOR UPDATE
+)
   AND w.payload->>'kind' = d.kind AND w.payload->>'name' = d.name;
 
 -- name: CancelEffects :many

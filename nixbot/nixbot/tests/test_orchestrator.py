@@ -1663,6 +1663,39 @@ async def test_effect_rows_roundtrip(pool: asyncpg.Pool, tmp_path: Path) -> None
     assert await claim() is None
 
 
+async def test_pending_effects_replace_skipped_rows(pool: asyncpg.Pool) -> None:
+    """Gated and allowed passes can reuse one build concurrently; the
+    allowed one must end up with pending rows whichever records first."""
+
+    project = await make_project(pool, name="fx-race")
+    build, _ = await db.get_or_create_build(pool, project.id, "tree-r", "sha", "main")
+
+    async def record(status: str) -> None:
+        await builds_q.insert_build_effects(
+            pool,
+            build_id=build.id_,
+            kind="push",
+            status=status,
+            names=["deploy"],
+            deps=["[]"],
+            changed=[""],
+            force_run=False,
+        )
+
+    await record("skipped")
+    await record("pending")
+    assert [
+        e.status for e in await builds_q.effects_for_build(pool, build_id=build.id_)
+    ] == ["pending"]
+    await record("skipped")
+    assert [
+        e.status for e in await builds_q.effects_for_build(pool, build_id=build.id_)
+    ] == ["pending"]
+    assert await builds_q.claim_effect(
+        pool, build_id=build.id_, kind="push", name="deploy", status="running"
+    )
+
+
 async def test_effect_items_resume_only_pending(
     pool: asyncpg.Pool, run_effect_build: EffectBuildRunner, upstream: Path
 ) -> None:
