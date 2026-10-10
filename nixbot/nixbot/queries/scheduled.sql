@@ -1,5 +1,8 @@
 -- Scheduled effects (scheduled.py).
 
+-- name: LockProjectSchedules :exec
+SELECT pg_advisory_xact_lock(hashtextextended('schedules:' || sqlc.arg(project_id)::bigint, 0));
+
 -- name: SchedulesForUpdate :many
 SELECT schedule_name, effect, when_spec, last_run
 FROM scheduled_effects WHERE project_id = $1;

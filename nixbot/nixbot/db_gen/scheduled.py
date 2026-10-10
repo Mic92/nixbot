@@ -15,6 +15,7 @@ __all__: collections.abc.Sequence[str] = (
     "finish_scheduled_run",
     "insert_schedules",
     "latest_scheduled_runs",
+    "lock_project_schedules",
     "mark_schedule_run",
     "project_schedules",
     "schedules_for_update",
@@ -64,8 +65,12 @@ class ProjectSchedulesRow:
     last_run: datetime.datetime | None
 
 
-SCHEDULES_FOR_UPDATE: typing.Final[str] = """-- name: SchedulesForUpdate :many
+LOCK_PROJECT_SCHEDULES: typing.Final[str] = """-- name: LockProjectSchedules :exec
 
+SELECT pg_advisory_xact_lock(hashtextextended('schedules:' || $1::bigint, 0))
+"""
+
+SCHEDULES_FOR_UPDATE: typing.Final[str] = """-- name: SchedulesForUpdate :many
 SELECT schedule_name, effect, when_spec, last_run
 FROM scheduled_effects WHERE project_id = $1
 """
@@ -164,6 +169,10 @@ class QueryResults[T]:
             self._iterator = None
             raise
         return self._decode_hook(record)
+
+
+async def lock_project_schedules(conn: ConnectionLike, *, project_id: int) -> None:
+    await conn.execute(LOCK_PROJECT_SCHEDULES, project_id)
 
 
 def schedules_for_update(conn: ConnectionLike, *, project_id: int) -> QueryResults[SchedulesForUpdateRow]:

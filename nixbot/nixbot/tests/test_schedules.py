@@ -3,6 +3,7 @@
 # ruff: noqa: PLR2004 (test literals, secret_name is a credential id)
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -125,6 +126,34 @@ async def test_replace_schedules_preserves_last_run_for_unchanged_spec(
     )
     await store.replace_schedules(project_id, changed)
     assert len(mine(await store.due_effects(due_time.replace(minute=8)))) == 1
+
+
+async def test_concurrent_replace_schedules_do_not_collide(
+    pool: asyncpg.Pool,
+) -> None:
+    """Concurrent pushes of one project re-discover its schedules."""
+
+    project_id = await insert_project(pool, forge_repo_id="sched-race")
+    store = ScheduledEffectsStore(pool)
+    effects = ["a", "b", "c", "d"]
+
+    def schedules(order: list[str]) -> dict:
+        return parse_schedules_from_json(
+            {"nightly": {"when": {"minute": 7, "hour": 3}, "effects": order}}
+        )
+
+    await asyncio.gather(
+        *(
+            store.replace_schedules(
+                project_id, schedules(effects[i % 4 :] + effects[: i % 4])
+            )
+            for i in range(24)
+        )
+    )
+    rows = await pool.fetch(
+        "SELECT effect FROM scheduled_effects WHERE project_id = $1", project_id
+    )
+    assert sorted(r["effect"] for r in rows) == effects
 
 
 async def test_replace_schedules_tolerates_duplicate_effect_names(

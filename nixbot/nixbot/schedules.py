@@ -160,6 +160,7 @@ class ScheduledEffectsStore:
         Duplicate effect names (repo-controlled) are dropped instead of
         crashing the update on the primary key."""
         async with self.pool.acquire() as conn, conn.transaction():
+            await q.lock_project_schedules(conn, project_id=project_id)
             previous = {
                 (row.schedule_name, row.effect): row
                 for row in await q.schedules_for_update(conn, project_id=project_id)
