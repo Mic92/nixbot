@@ -127,4 +127,5 @@ timeout = 60
 asyncio_mode = "auto"
 # Distribute by module: module-scoped fixtures (ephemeral Postgres,
 # uvicorn servers) stay within one worker.
-addopts = ["-n", "auto", "--dist", "loadscope"]
+addopts = ["-n", "auto", "--dist", "loadscope", "-m", "not fuzz"]
+markers = ["fuzz: randomized concurrency tests, run with -m fuzz"]

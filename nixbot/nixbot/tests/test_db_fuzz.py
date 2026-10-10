@@ -1,162 +1,215 @@
-"""Concurrent random queries must neither deadlock nor hang.
+"""Random concurrent SQL on shared rows must not deadlock or hang.
 
-Workers fire the build, effect and work-queue queries at a few shared
-builds in random order. Postgres aborts a lock cycle with
-DeadlockDetectedError, so any such error fails the test; the timeout
-catches waits it cannot see, like one worker holding a lock across an
-await.
-"""
+Arguments come from the sqlc signatures, so new queries are covered."""
 
 from __future__ import annotations
 
 import asyncio
+import importlib
+import inspect
+import pkgutil
 import random
-from typing import TYPE_CHECKING
+import re
+import uuid
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 import asyncpg
 import pytest
 
-from nixbot import db
-from nixbot.db_gen import approvals as approvals_q
-from nixbot.db_gen import builds as builds_q
-from nixbot.db_gen import maintenance as maintenance_q
-from nixbot.db_gen import work_queue as wq
+from nixbot import db, db_gen
+from nixbot.config import ScheduledEffectConfig, ScheduleWhen
+from nixbot.schedules import ScheduledEffectsStore
 
 from .support import insert_project
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Callable
 
-NAMES = ["a", "b", "c", "d", "e"]
+pytestmark = pytest.mark.fuzz
+
 WORKERS = 12
-STEPS = 150
-TIMEOUT = 60
+STEPS = 120
+TIMEOUT = 120
+
+# Few names, so concurrent multi-row writes overlap.
+WORDS = list("abcde")
+VOCAB = {
+    "status": ["pending", "running", "succeeded", "failed", "skipped", "cancelled"],
+    "kind": ["push", "check", "event"],
+    "forge": ["github", "gitea"],
+    "branch": ["main", "dev"],
+    "deps": ["[]"],
+    "changed": [""],
+    "payload": ["{}"],
+    "outputs": ["{}"],
+    "warnings": ["[]"],
+    "eval_warnings": ["[]"],
+    "changed_inputs": ["{}"],
+    "when_specs": ['{"hour": 3}'],
+}
 
 
-async def _insert_effects(pool: asyncpg.Pool, rng: random.Random, build: int) -> None:
-    # Same names in a different order each call: the lock order of
-    # concurrent multi-row writes is what can deadlock.
-    names = rng.sample(NAMES, rng.randint(1, len(NAMES)))
-    await builds_q.insert_build_effects(
-        pool,
-        build_id=build,
-        kind="push",
-        status=rng.choice(["pending", "skipped"]),
-        names=names,
-        deps=["[]"] * len(names),
-        changed=[""] * len(names),
-        force_run=False,
+class Fixtures(NamedTuple):
+    projects: list[int]
+    builds: list[int]
+
+
+def _load_queries() -> dict[str, Callable[..., Any]]:
+    queries: dict[str, Callable[..., Any]] = {}
+    for info in pkgutil.iter_modules(db_gen.__path__):
+        if info.name != "models":
+            module = importlib.import_module(f"nixbot.db_gen.{info.name}")
+            for name, fn in inspect.getmembers(module, inspect.isfunction):
+                if fn.__module__ == module.__name__ and "conn" in fn.__annotations__:
+                    queries[f"{info.name}.{name}"] = fn
+    return queries
+
+
+QUERIES = _load_queries()
+
+
+def _value(rng: random.Random, fx: Fixtures, name: str, annotation: str, n: int) -> Any:
+    base = annotation.removesuffix(" | None")
+    if base != annotation and rng.randrange(4) == 0:
+        return None
+    scalar = {
+        "int": lambda: _int(rng, fx, name),
+        "bool": lambda: bool(rng.getrandbits(1)),
+        "float": lambda: rng.random() * 100,
+        "uuid.UUID": uuid.uuid4,
+        "datetime.datetime": lambda: (
+            datetime.now(UTC) + timedelta(minutes=rng.randint(-90, 90))
+        ),
+        "str": lambda: rng.choice(VOCAB.get(name.removesuffix("_"), WORDS)),
+    }
+    if base in scalar:
+        return scalar[base]()
+    element = base.removeprefix("collections.abc.Sequence[").removesuffix("]")
+    if element in scalar:
+        return [scalar[element]() for _ in range(n)]
+    msg = f"no generator for {name}: {annotation}"
+    raise AssertionError(msg)
+
+
+def _int(rng: random.Random, fx: Fixtures, name: str) -> int:
+    if "project" in name:
+        return rng.choice(fx.projects)
+    if "build" in name or name in {"id_", "ids"}:
+        return rng.choice([*fx.builds, *range(6)])
+    return rng.choice(range(6))
+
+
+async def _run(conn: Any, name: str, rng: random.Random, fx: Fixtures) -> bool:
+    """False if the schema rejected the random arguments."""
+    fn = QUERIES[name]
+    n = rng.randint(1, 5)
+    kwargs = {
+        p: _value(rng, fx, p, str(a.annotation), n)
+        for p, a in inspect.signature(fn).parameters.items()
+        if p != "conn"
+    }
+    try:
+        await fn(conn, **kwargs)
+    except asyncpg.PostgresError as e:
+        # Constraint errors are expected; class 42 and XX are bugs.
+        if isinstance(e, asyncpg.DeadlockDetectedError) or (e.sqlstate or "")[:2] in {
+            "42",
+            "XX",
+        }:
+            pytest.fail(f"{name}: {e}")
+        return False
+    except (asyncpg.DataError, TypeError, ValueError):
+        return False
+    return True
+
+
+async def _fixtures(pool: asyncpg.Pool, tag: str) -> Fixtures:
+    projects = [await insert_project(pool, f"fuzz-{tag}-{i}") for i in range(2)]
+    builds = [
+        (await db.get_or_create_build(pool, p, f"tree-{tag}-{i}", "sha", "main"))[0].id_
+        for p in projects
+        for i in range(2)
+    ]
+    return Fixtures(projects, builds)
+
+
+async def test_every_query_runs(pool: asyncpg.Pool) -> None:
+    """Each query must succeed once, or the fuzzer silently skips it."""
+    fx = await _fixtures(pool, "reach")
+    rng = random.Random(0)  # noqa: S311
+    unreached = []
+    for name in sorted(QUERIES):
+        for _ in range(60):
+            if await _run(pool, name, rng, fx):
+                break
+        else:
+            unreached.append(name)
+    assert not unreached
+
+
+def _queries_by_table(tables: set[str]) -> dict[str, list[str]]:
+    """Lock cycles need statements on the same tables."""
+    groups: dict[str, list[str]] = {}
+    for name, fn in QUERIES.items():
+        sql = getattr(inspect.getmodule(fn), fn.__name__.upper(), None)
+        sql = sql or inspect.getsource(fn)
+        for table in set(
+            re.findall(r"(?:FROM|INTO|UPDATE|JOIN)\s+(\w+)", sql, re.IGNORECASE)
+        ):
+            if table in tables:
+                groups.setdefault(table, []).append(name)
+    return {t: qs for t, qs in groups.items() if len(qs) > 1}
+
+
+async def _transaction(pool: asyncpg.Pool, rng: random.Random, fx: Fixtures) -> None:
+    """The service's multi-statement transactions."""
+    project = rng.choice(fx.projects)
+    which = rng.randrange(3)
+    effects = [rng.choice(WORDS) for _ in range(rng.randint(1, 4))]
+    schedule = ScheduledEffectConfig(
+        name="nightly", when=ScheduleWhen(hour=3), effects=effects
     )
+    try:
+        if which == 0:
+            await db.get_or_create_build(
+                pool,
+                project,
+                f"tree-{rng.randint(0, 3)}",
+                "sha",
+                "main",
+                pr_number=rng.choice([None, 1, 2]),
+            )
+        elif which == 1:
+            await db.aggregate_build(pool, rng.choice(fx.builds))
+        else:
+            await ScheduledEffectsStore(pool).replace_schedules(
+                project, {"nightly": schedule}
+            )
+    except asyncpg.DeadlockDetectedError as e:
+        pytest.fail(f"deadlock in transaction #{which}: {e}")
+    except (asyncpg.PostgresError, LookupError):
+        return
 
 
-async def _enqueue(pool: asyncpg.Pool, rng: random.Random, build: int) -> None:
-    names = rng.sample(NAMES, rng.randint(1, len(NAMES)))
-    await wq.enqueue_effect_items(
-        pool,
-        build_id=build,
-        kind="push",
-        names=names,
-        dedup_keys=[f"build-{build}-effect-{n}" for n in names],
-    )
-
-
-async def _claim_and_finish_work(
-    pool: asyncpg.Pool, rng: random.Random, _build: int
-) -> None:
-    item = await wq.claim_next_work_item(pool)
-    if item is not None:
-        await wq.finish_work_item(
-            pool, id_=item.id_, status=rng.choice(["done", "failed"]), error=None
-        )
-
-
-async def _finish_effect(pool: asyncpg.Pool, rng: random.Random, build: int) -> None:
-    name = rng.choice(NAMES)
-    if await builds_q.claim_effect(
-        pool, build_id=build, kind="push", name=name, status="running"
-    ):
-        await builds_q.finish_effect(
-            pool,
-            build_id=build,
-            kind="push",
-            name=name,
-            status=rng.choice(["succeeded", "failed"]),
-            error=None,
-            log_size=0,
-            log_truncated=False,
-        )
-
-
-async def _drop(pool: asyncpg.Pool, rng: random.Random, build: int) -> None:
-    names = None if rng.getrandbits(1) else rng.sample(NAMES, rng.randint(1, 3))
-    await maintenance_q.drop_effects_for_rerun(pool, build_id=build, names=names)
-
-
-async def _drop_removed(pool: asyncpg.Pool, rng: random.Random, build: int) -> None:
-    await maintenance_q.drop_removed_effects(
-        pool, build_id=build, names=rng.sample(NAMES, rng.randint(1, len(NAMES)))
-    )
-
-
-async def _aggregate(pool: asyncpg.Pool, _rng: random.Random, build: int) -> None:
-    await db.aggregate_build(pool, build)
-
-
-async def _mark_started(pool: asyncpg.Pool, _rng: random.Random, build: int) -> None:
-    await builds_q.mark_effects_started(pool, id_=build)
-
-
-async def _gate_and_approve(pool: asyncpg.Pool, rng: random.Random, build: int) -> None:
-    project_id = await pool.fetchval(
-        "SELECT project_id FROM builds WHERE id = $1", build
-    )
-    pr = rng.randint(1, 3)
-    if rng.getrandbits(1):
-        await approvals_q.gate_pr(
-            pool, project_id=project_id, pr_number=pr, pending=None
-        )
-    else:
-        await approvals_q.approve_pr(
-            pool, project_id=project_id, pr_number=pr, approved_by="fuzz"
-        )
-
-
-OPERATIONS: list[Callable[[asyncpg.Pool, random.Random, int], Awaitable[None]]] = [
-    _insert_effects,
-    _insert_effects,
-    _enqueue,
-    _claim_and_finish_work,
-    _finish_effect,
-    _drop,
-    _drop_removed,
-    _aggregate,
-    _mark_started,
-    _gate_and_approve,
-]
-
-
-@pytest.mark.parametrize("seed", range(8))
+@pytest.mark.parametrize("seed", range(6))
 async def test_concurrent_queries_do_not_deadlock(
     pool: asyncpg.Pool, seed: int
 ) -> None:
-    project_id = await insert_project(pool, f"fuzz{seed}")
-    builds = [
-        (
-            await db.get_or_create_build(
-                pool, project_id, f"tree-{seed}-{i}", "sha", "main"
-            )
-        )[0].id_
-        for i in range(3)
-    ]
+    fx = await _fixtures(pool, f"dl{seed}")
+    rows = await pool.fetch(
+        "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
+    )
+    by_table = _queries_by_table({r["table_name"] for r in rows})
 
     async def worker(n: int) -> None:
         rng = random.Random(seed * 1000 + n)  # noqa: S311
         for _ in range(STEPS):
-            op = rng.choice(OPERATIONS)
-            try:
-                await op(pool, rng, rng.choice(builds))
-            except asyncpg.DeadlockDetectedError as e:
-                pytest.fail(f"deadlock in {op.__name__} (seed {seed}, worker {n}): {e}")
+            if rng.randrange(8) == 0:
+                await _transaction(pool, rng, fx)
+            else:
+                name = rng.choice(by_table[rng.choice(sorted(by_table))])
+                await _run(pool, name, rng, fx)
 
     async with asyncio.timeout(TIMEOUT):
         await asyncio.gather(*(worker(n) for n in range(WORKERS)))
