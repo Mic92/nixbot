@@ -206,6 +206,9 @@ def _eval_settings(
         netrc_file = credentials.netrc_file
     return EvalSettings(
         gc_roots_dir=o.gcroots_dir(build),
+        command=o.config.eval_command,
+        extra_args=o.config.eval_extra_args,
+        extra_rw_paths=o.config.eval_writable_paths,
         timeout=o.config.eval_timeout,
         worker_count=worker_count,
         max_memory_size_mib=eval_max_memory,
