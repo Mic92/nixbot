@@ -8,7 +8,9 @@ import contextlib
 import json
 import os
 import re
+import shutil
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -291,22 +293,33 @@ def ephemeral_postgres(
 ) -> Iterator[str]:
     """Throwaway Postgres on a unix socket with migrations applied."""
     datadir = tmp_path_factory.mktemp("pgdata")
-    sockdir = tmp_path_factory.mktemp("pgsock")
+    # sun_path holds 103 bytes on darwin; pytest's temp dir is deeper.
+    sockdir = tempfile.mkdtemp(prefix="pg", dir="/tmp")
+    log = datadir.with_name(f"{datadir.name}.log")
     subprocess.run(  # noqa: S603
         ["initdb", "-D", str(datadir), "-U", "test", "--auth=trust"],
         check=True,
         capture_output=True,
     )
-    proc = subprocess.Popen(  # noqa: S603
-        ["postgres", "-D", str(datadir), "-k", str(sockdir), "-c", "listen_addresses="],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+    with log.open("wb") as log_file:
+        proc = subprocess.Popen(  # noqa: S603
+            [
+                "postgres",
+                "-D",
+                str(datadir),
+                "-k",
+                sockdir,
+                "-c",
+                "listen_addresses=",
+            ],
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+        )
     try:
         deadline = time.monotonic() + 30
         while (
             subprocess.run(  # noqa: S603
-                ["pg_isready", "-h", str(sockdir), "-U", "test"],
+                ["pg_isready", "-h", sockdir, "-U", "test"],
                 check=False,
                 capture_output=True,
             ).returncode
@@ -314,12 +327,12 @@ def ephemeral_postgres(
         ):
             # The socket appears before recovery finishes; createdb would
             # fail with "the database system is starting up".
-            if time.monotonic() > deadline:
-                msg = "postgres did not start"
+            if proc.poll() is not None or time.monotonic() > deadline:
+                msg = f"postgres did not start:\n{log.read_text(errors='replace')}"
                 raise RuntimeError(msg)
             time.sleep(0.1)
         subprocess.run(  # noqa: S603
-            ["createdb", "-h", str(sockdir), "-U", "test", dbname],
+            ["createdb", "-h", sockdir, "-U", "test", dbname],
             check=True,
             capture_output=True,
         )
@@ -329,6 +342,7 @@ def ephemeral_postgres(
     finally:
         proc.terminate()
         proc.wait()
+        shutil.rmtree(sockdir, ignore_errors=True)
 
 
 def git(repo: Path, *args: str, env: dict[str, str] | None = None) -> str:
