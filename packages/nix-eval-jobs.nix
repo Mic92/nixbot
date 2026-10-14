@@ -52,11 +52,11 @@ let
     hash = "sha256-D7bHtx6ZWHeCHn66KEXrVO/l5UNkfx4AuZIwQhTJjTo=";
   };
 
-  # All fixed upstream in 2.36.
+  # All three are in 2.35.3, where they no longer apply.
   patchIfNeeded =
     components:
     components.appendPatches (
-      pkgs.lib.optionals (pkgs.lib.versionOlder components.version "2.36") [
+      pkgs.lib.optionals (pkgs.lib.versionOlder components.version "2.35.3") [
         srcToStoreCachePatch
         prefetchInputsDedupPatch
         prefetchInputsRelativePatch
