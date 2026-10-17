@@ -204,6 +204,12 @@ class NixbotClient:
             "POST", f"/api/repos/{repo}/builds/{number}/effects/{action}", params
         )
 
+    def run_schedule(self, repo: RepoRef, schedule: str, effect: str) -> dict:
+        """Start an onSchedule effect now; the result carries its run_id."""
+        return self._json(
+            "POST", f"/api/repos/{repo}/schedules/{schedule}/effects/{effect}/run"
+        )
+
     # --- logs ----------------------------------------------------------
 
     def log_toc(self, repo: RepoRef, number: int, attr: str) -> dict:

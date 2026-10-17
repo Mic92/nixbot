@@ -74,6 +74,11 @@ async def postgres_dsn(postgres_dsn: str) -> str:
             "VALUES ((SELECT project_id FROM builds WHERE id = $1), 'push', $1, 'deploy', 'failed'), ((SELECT project_id FROM builds WHERE id = $1), 'push', $1, 'notify', 'dependency_failed')",
             failed,
         )
+        await pool.execute(
+            "INSERT INTO scheduled_effects (project_id, schedule_name, effect, when_spec)"
+            " VALUES ($1, 'flake-update', 'update', '{}')",
+            project_id,
+        )
     return postgres_dsn
 
 
@@ -764,6 +769,48 @@ def test_follow_effect_exit_code_waits_for_the_final_status(
     )
     assert cli.cmd_log(_client(handler), args) == cli.EXIT_BUILD_FAILED
     assert capsys.readouterr().out == "boom\n"
+
+
+def test_schedule_run(api: NixbotClient, capsys: pytest.CaptureFixture[str]) -> None:
+    assert (
+        run_cli(api, "schedule", "run", "flake-update", "update", "-R", str(REPO))
+        == cli.EXIT_OK
+    )
+    run_id = len(BACKEND.scheduled_runs)
+    assert BACKEND.scheduled_runs[-1][1:3] == ("flake-update", "update")
+    out = capsys.readouterr().out
+    assert out == f"started flake-update.update: effect run {run_id}\n"
+
+
+def test_schedule_run_follow_exits_with_the_runs_status(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """--follow streams the new run's log and exits like `nbo log -f`."""
+    statuses = iter(["running", "failed"])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            assert request.url.path == (
+                "/api/repos/github/acme/widget/schedules/flake-update/effects/update/run"
+            )
+            return httpx.Response(
+                200,
+                json={"run_id": 9, "action": "run"},
+            )
+        assert "/effects/runs/9" in request.url.path
+        if request.url.path.endswith("/stream"):
+            return httpx.Response(
+                200,
+                content='event: text\ndata: {"text":"updating\\n"}\n\nevent: done\ndata: {}\n\n',
+                headers={"content-type": "text/event-stream"},
+            )
+        return httpx.Response(200, json={"id": 9, "status": next(statuses)})
+
+    args = cli.build_parser().parse_args(
+        ["schedule", "run", "flake-update", "update", "-f", "-R", "github/acme/widget"]
+    )
+    assert cli.cmd_schedule_run(_client(handler), args) == cli.EXIT_BUILD_FAILED
+    assert capsys.readouterr().out.endswith("updating\n")
 
 
 def test_log_effect_without_log_says_why(

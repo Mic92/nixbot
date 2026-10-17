@@ -143,6 +143,16 @@ For `onEvent` effects, `--event KIND` plus flags describing the event (`--pr`,
 `--actor`, `--permission`, `--label`, `--modified`, `--command`, ...) stand in
 for a real delivery, and `list` then shows why each effect would be skipped.
 
+## Schedules
+
+`nbo schedule run` starts a scheduled effect now, like the run-now button on the
+repository's effects page. It needs a token with admin rights on the repository.
+
+```console
+nbo schedule run flake-update update      # prints the effect run id
+nbo schedule run flake-update update -f   # stream its log, exit 1 if it fails
+```
+
 ## Exit codes
 
 | code | meaning                              |
