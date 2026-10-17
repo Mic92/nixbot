@@ -559,7 +559,7 @@ class CIService:
 
     async def run_scheduled_now(
         self, project_id: int, schedule_name: str, effect: str, when_spec: str
-    ) -> None:
+    ) -> int:
         """Manually trigger an onSchedule effect from the UI.
 
         The run row is created synchronously so the UI shows it running
@@ -585,6 +585,7 @@ class CIService:
                 "run_id": run_id,
             },
         )
+        return run_id
 
     async def enqueue_work(
         self, kind: str, dedup_key: str, payload: dict[str, Any], *, delay: float = 0

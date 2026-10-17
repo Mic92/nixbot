@@ -56,11 +56,16 @@ class ControlBackend(Protocol):
 
     async def run_scheduled_now(
         self, project_id: int, schedule_name: str, effect: str, when_spec: str
-    ) -> None: ...
+    ) -> int: ...
 
     async def approve_pr(
         self, project_id: int, pr_number: int, actor: str | None
     ) -> None: ...
+
+
+class ScheduleRunResult(BaseModel):
+    run_id: int
+    action: str
 
 
 class ApproveResult(BaseModel):
@@ -421,9 +426,23 @@ class _ControlRoutes:
         schedule: Annotated[str, Form()],
         effect: Annotated[str, Form()],
     ) -> RedirectResponse:
-        """Trigger an onSchedule effect on demand. Repo admins only. The
-        schedule must already exist so form input cannot run arbitrary
-        effects."""
+        """Trigger an onSchedule effect on demand from the effects page."""
+        await self.api_run_schedule(request, forge, owner, name, schedule, effect)
+        return RedirectResponse(
+            f"/repos/{forge}/{owner}/{name}/effects", status_code=303
+        )
+
+    async def api_run_schedule(  # noqa: PLR0913
+        self,
+        request: Request,
+        forge: str,
+        owner: str,
+        name: str,
+        schedule: str,
+        effect: str,
+    ) -> dict:
+        """Trigger an onSchedule effect on demand. Repo admins only; the
+        schedule must already exist so input cannot run arbitrary effects."""
         project = await self.ctx.repo_or_404(forge, owner, name, request)
         await self._require_repo_admin(request, project["id"])
         store = ScheduledEffectsStore(self.ctx.pool)
@@ -437,12 +456,10 @@ class _ControlRoutes:
         )
         if match is None:
             raise HTTPException(status_code=404, detail="unknown schedule")
-        await self.backend.run_scheduled_now(
+        run_id = await self.backend.run_scheduled_now(
             project["id"], schedule, effect, match["when_spec"]
         )
-        return RedirectResponse(
-            f"/repos/{forge}/{owner}/{name}/effects", status_code=303
-        )
+        return {"run_id": run_id, "action": "run"}
 
     async def regenerate_webhook_secret(
         self, request: Request, project_id: int
@@ -519,6 +536,10 @@ def create_control_api_router(
     router.post(
         f"{base}/builds/{{number}}/effects/cancel", response_model=ControlAction
     )(routes.api_cancel_effects)
+    router.post(
+        f"{base}/schedules/{{schedule}}/effects/{{effect}}/run",
+        response_model=ScheduleRunResult,
+    )(routes.api_run_schedule)
     router.post(f"{base}/enable", response_model=EnableResult)(routes.api_set_enabled)
     router.post(f"{base}/disable", response_model=EnableResult)(routes.api_set_enabled)
     router.post(f"{base}/pulls/{{pr_number}}/approve", response_model=ApproveResult)(

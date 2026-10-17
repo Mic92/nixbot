@@ -107,8 +107,9 @@ class FakeBackend:
 
     async def run_scheduled_now(
         self, project_id: int, schedule_name: str, effect: str, when_spec: str
-    ) -> None:
+    ) -> int:
         self.scheduled_runs.append((project_id, schedule_name, effect, when_spec))
+        return len(self.scheduled_runs)
 
 
 @pytest.fixture(scope="module")
@@ -448,6 +449,24 @@ def test_run_schedule(harness: WebHarness) -> None:
 
     # Cross-origin rejected.
     assert harness.post(url, ROOT, data=data, origin="http://evil").status_code == 403
+
+
+def test_api_run_schedule(harness: WebHarness) -> None:
+    """The JSON twin of the run-now button, with the same rules."""
+    url = "/api/repos/github/acme/widget/schedules/nightly/effects/deploy/run"
+    before = len(BACKEND.scheduled_runs)
+    assert harness.post(url).status_code == 403
+    assert harness.post(url, ALICE).status_code == 403
+    assert len(BACKEND.scheduled_runs) == before
+
+    response = harness.post(url, ROOT)
+    assert response.status_code == 200
+    assert response.json() == {"run_id": before + 1, "action": "run"}
+    assert BACKEND.scheduled_runs[-1] == (1, "nightly", "deploy", "{}")
+
+    unknown = "/api/repos/github/acme/widget/schedules/nightly/effects/nope/run"
+    assert harness.post(unknown, ROOT).status_code == 404
+    assert len(BACKEND.scheduled_runs) == before + 1
 
 
 def test_schedules_are_listed_on_the_effects_page(harness: WebHarness) -> None:
