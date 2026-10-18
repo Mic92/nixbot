@@ -23,7 +23,10 @@ buildPythonPackage {
   # `nbo effects run` sandboxes the effect with bwrap. The sandbox only
   # exists on Linux and bubblewrap does not evaluate on Darwin.
   makeWrapperArgs = lib.optionals stdenv.hostPlatform.isLinux [
-    "--prefix PATH : ${lib.makeBinPath [ bubblewrap ]}"
+    "--prefix"
+    "PATH"
+    ":"
+    "${lib.makeBinPath [ bubblewrap ]}"
   ];
 
   # Ship the agent skill definition alongside the CLI so tools like
