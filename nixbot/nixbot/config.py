@@ -410,6 +410,9 @@ class Config(BaseModel):
     effects_mountables_file: Path | None = None
     # nix options for the effect's private daemon, e.g. allowed-uris.
     effects_extra_nix_options: dict[str, str] = {}
+    # Locked flake URL whose herculesCI.onEvent every project gets below
+    # its own onEvent, e.g. a /review comment command for all of them.
+    effects_default_event_effects: str | None = None
     show_trace_on_failure: bool = False
     pr_approval: PrApprovalConfig = Field(default_factory=PrApprovalConfig)
     cache_failed_builds: bool = False

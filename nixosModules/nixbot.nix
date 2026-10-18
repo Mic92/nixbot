@@ -167,6 +167,7 @@ let
         else
           pkgs.writeText "effects-mountables.json" (builtins.toJSON cfg.effects.mountables);
       effects_extra_nix_options = cfg.effects.extraNixOptions;
+      effects_default_event_effects = cfg.effects.defaultEventEffects;
       show_trace_on_failure = cfg.showTrace;
       cache_failed_builds = cfg.cacheFailedBuilds;
       pr_approval = {
@@ -904,6 +905,18 @@ in
         description = ''
           Per-repository or per-organization JSON secrets files for effects.
           Keys: "github:org/*", "gitea:org/*" or exact "github:owner/repo".
+        '';
+      };
+
+      defaultEventEffects = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "path:/nix/store/...-source?narHash=sha256-...";
+        description = ''
+          Locked flake reference whose `herculesCI.onEvent` effects every
+          project gets in addition to its own, e.g. a `/review` comment
+          command for all repositories. A project's own effect of the same
+          kind and name wins. Effect checks on builds skip these.
         '';
       };
 

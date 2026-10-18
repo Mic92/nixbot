@@ -12,6 +12,7 @@ from nixbot_effects.eval import (
     check_event_effect,
     instantiate_event_effect,
     list_all_event_effects,
+    list_effects,
     list_event_effects,
 )
 from nixbot_effects.match import event_payload, expand_lock, payload_env, skip_reason
@@ -85,6 +86,68 @@ async def test_list_event_effects(tmp_path: Path) -> None:
     await check_event_effect(opts, "pull_request", "env.notify")
     with pytest.raises(EffectError):
         await check_event_effect(opts, "pull_request", "missing")
+
+
+DEFAULTS_FLAKE_NIX = """\
+{
+  outputs = { self, ... }:
+    let
+      effect = attrs: derivation {
+        name = "default-effect";
+        system = builtins.currentSystem;
+        builder = "/bin/sh";
+        args = [ "-c" "echo > $out" ];
+        isEffect = true;
+      } // attrs;
+    in {
+      herculesCI = { primaryRepo, ... }: {
+        onEvent.comment.review = effect {
+          when.commands = [ "review" ];
+          lock = primaryRepo.name;
+        };
+        onEvent.pull_request.plan = effect { lock = "from-default"; };
+        # Only onEvent is shared.
+        onPush.default.outputs.effects.deploy = effect { };
+      };
+    };
+}
+"""
+
+
+async def test_default_event_effects(tmp_path: Path) -> None:
+    (tmp_path / "repo").mkdir()
+    repo, _ = init_repo(
+        tmp_path / "repo",
+        {"flake.nix": FLAKE_NIX.replace("when.typo = 1;", "")},
+    )
+    (tmp_path / "defaults").mkdir()
+    defaults_repo, defaults_rev = init_repo(
+        tmp_path / "defaults", {"flake.nix": DEFAULTS_FLAKE_NIX}
+    )
+    defaults = f"git+file://{defaults_repo}?rev={defaults_rev}"
+    opts = EffectsOptions(path=repo, repo="acme/widget", default_event_effects=defaults)
+    listing = await list_all_event_effects(opts)
+    # Server defaults appear next to the repository's own effects, called
+    # with the repository's herculesCI arguments.
+    assert listing["comment"] == {
+        "bad": EventEffectMeta(),
+        "review": EventEffectMeta(when={"commands": ["review"]}, lock="widget"),
+    }
+    # On a name clash the repository's definition wins.
+    assert listing["pull_request"]["plan"].lock == "infra-{pr}"
+    assert await list_effects(opts) == {}
+    drv, _ = await instantiate_event_effect(
+        "comment", "review", opts, tmp_path / "gcroot"
+    )
+    assert drv.endswith("-default-effect.drv")
+    # A repository without any herculesCI output still gets the defaults.
+    (tmp_path / "bare").mkdir()
+    bare, _ = init_repo(tmp_path / "bare", {"flake.nix": "{ outputs = _: { }; }"})
+    listing = await list_all_event_effects(
+        EffectsOptions(path=bare, repo="acme/bare", default_event_effects=defaults)
+    )
+    assert set(listing["comment"]) == {"review"}
+    assert listing["comment"]["review"].lock == "bare"
 
 
 PR = {

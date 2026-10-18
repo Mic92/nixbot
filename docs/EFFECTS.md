@@ -549,6 +549,20 @@ request the event is about. A pull request cannot change what runs by editing
 `effects_on_pull_requests` in nixbot.toml, which is about a pull request's own
 `onPush` effects.
 
+An instance can give every project the same event effects, e.g. a `/review`
+command, with `services.nixbot.effects.defaultEventEffects`: a locked flake
+reference whose `herculesCI.onEvent` is merged below each project's own. It is
+called with the project's herculesCI arguments, and a project's effect of the
+same kind and name replaces the default. Builds do not check these effects.
+
+```nix
+services.nixbot.effects.defaultEventEffects =
+  "github:my-org/ci-effects/0123456789abcdef0123456789abcdef01234567";
+```
+
+To serve them from the flake that configures the instance, pass
+`"path:${self}?narHash=${self.narHash}"`.
+
 With `checkout = true` the **PR head** is cloned to `/build/checkout`. That
 clone has no push credentials and its content is untrusted, because `tofu plan`
 and similar tools execute code from it. Guard such effects with
