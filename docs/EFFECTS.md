@@ -529,7 +529,7 @@ and similar tools execute code from it. Guard such effects with
 | `pull_request`        | a PR head was built green, also on reopen or label change |
 | `comment`             | a PR comment whose first line is `/command args`          |
 | `pull_request_closed` | a PR was closed or merged                                 |
-| `build_finished`      | any build finished, and each branch push that reused one  |
+| `build_finished`      | any build finished, and each branch push that shared one  |
 
 Bot comments are ignored, and a `/command` for an effect that is still running
 gets a note instead of a second run. Deliveries are queued in the database and
