@@ -34,6 +34,43 @@ DO NOTHING;
 -- a build's locked effects all finish before the next build's start.
 -- Effect items are additionally held back until every declared
 -- dependency settled; the runner then decides between run and skip.
+-- A pull request based on another one's head branch waits for that
+-- PR's queued or running change items, whatever their outcome: its
+-- merge with the base contains the base PR's tree, so the store then
+-- holds most of what it needs. Fork heads and the default branch never
+-- hold, and neither does a cycle of PRs based on each other.
+WITH RECURSIVE pulls AS (
+    SELECT id, payload->>'forge' AS forge, payload->>'forge_repo_id' AS repo,
+           payload->>'branch' AS base, payload->>'head_ref' AS head,
+           (payload->>'head_in_base_repo')::boolean AS in_repo
+    FROM work_queue
+    WHERE kind = 'change' AND status IN ('pending', 'running')
+      AND payload->>'pr_number' IS NOT NULL
+),
+-- Each PR's base branch, and the bases of the PRs below it.
+below (id, forge, repo, branch) AS (
+    SELECT id, forge, repo, base FROM pulls
+    UNION
+    SELECT below.id, below.forge, below.repo, p.base FROM below
+    JOIN pulls p ON p.forge = below.forge AND p.repo = below.repo
+        AND p.in_repo AND p.head = below.branch
+),
+held AS (
+    SELECT p.id FROM pulls p
+    WHERE EXISTS (
+        SELECT 1 FROM pulls b
+        WHERE b.forge = p.forge AND b.repo = p.repo
+          AND b.in_repo AND b.head = p.base
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM projects j
+        WHERE j.forge = p.forge AND j.forge_repo_id = p.repo
+          AND j.default_branch = p.base
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM below WHERE below.id = p.id AND below.branch = p.head
+      )
+)
 UPDATE work_queue SET status = 'running', claimed_at = now()
 WHERE id = (
     SELECT id FROM work_queue w
@@ -55,6 +92,7 @@ WHERE id = (
           AND e.name = w.payload->>'name'
           AND d.status IN ('pending', 'running')
       ))
+      AND w.id NOT IN (SELECT id FROM held)
     ORDER BY w.created_at, w.id
     FOR UPDATE SKIP LOCKED
     LIMIT 1

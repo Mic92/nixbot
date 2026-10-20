@@ -61,6 +61,10 @@ Nixbot automatically triggers builds for your project under these conditions:
 - When a pull request is opened.
 - When a commit is pushed to the default git branch.
 
+Stacked pull requests build bottom-up: a pull request whose base is another pull
+request's branch in the same repository waits until that one's queued or running
+builds finish, passed or failed, and then reuses what they built.
+
 It evaluates the `.#checks` attribute of your project's flake in parallel; each
 attribute results in a separate build step (named
 `default.checks.<system>.<name>`). You can test these builds locally using

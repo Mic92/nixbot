@@ -140,6 +140,8 @@ class ChangeRequest:
     author_association: str | None = None
     # PR head branch lives in the base repository (not a fork).
     head_in_base_repo: bool = False
+    # PR head branch. PRs based on it build after it, see ClaimNextWorkItem.
+    head_ref: str | None = None
     # Tag pushes: the tag name, also in `branch` so the build gets its
     # own context. commit_sha may be an annotated tag object until the
     # service peels it.
@@ -324,6 +326,7 @@ def _parse_pr_event(
         actor=_actor(forge, payload),
         author_association=pr.get("author_association"),
         head_in_base_repo=head_repo_id is not None and str(head_repo_id) == repo_id,
+        head_ref=head.get("ref"),
     )
 
 
