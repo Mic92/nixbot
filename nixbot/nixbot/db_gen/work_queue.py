@@ -62,6 +62,37 @@ DO NOTHING
 """
 
 CLAIM_NEXT_WORK_ITEM: typing.Final[str] = """-- name: ClaimNextWorkItem :one
+WITH RECURSIVE pulls AS (
+    SELECT id, payload->>'forge' AS forge, payload->>'forge_repo_id' AS repo,
+           payload->>'branch' AS base, payload->>'head_ref' AS head,
+           (payload->>'head_in_base_repo')::boolean AS in_repo
+    FROM work_queue
+    WHERE kind = 'change' AND status IN ('pending', 'running')
+      AND payload->>'pr_number' IS NOT NULL
+),
+below (id, forge, repo, branch) AS (
+    SELECT id, forge, repo, base FROM pulls
+    UNION
+    SELECT below.id, below.forge, below.repo, p.base FROM below
+    JOIN pulls p ON p.forge = below.forge AND p.repo = below.repo
+        AND p.in_repo AND p.head = below.branch
+),
+held AS (
+    SELECT p.id FROM pulls p
+    WHERE EXISTS (
+        SELECT 1 FROM pulls b
+        WHERE b.forge = p.forge AND b.repo = p.repo
+          AND b.in_repo AND b.head = p.base
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM projects j
+        WHERE j.forge = p.forge AND j.forge_repo_id = p.repo
+          AND j.default_branch = p.base
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM below WHERE below.id = p.id AND below.branch = p.head
+      )
+)
 UPDATE work_queue SET status = 'running', claimed_at = now()
 WHERE id = (
     SELECT id FROM work_queue w
@@ -83,6 +114,7 @@ WHERE id = (
           AND e.name = w.payload->>'name'
           AND d.status IN ('pending', 'running')
       ))
+      AND w.id NOT IN (SELECT id FROM held)
     ORDER BY w.created_at, w.id
     FOR UPDATE SKIP LOCKED
     LIMIT 1
