@@ -83,6 +83,22 @@ WHERE id = (
           AND e.name = w.payload->>'name'
           AND d.status IN ('pending', 'running')
       ))
+      AND NOT EXISTS (
+        SELECT 1 FROM work_queue b
+        WHERE b.kind = 'change' AND w.kind = 'change'
+          AND b.status IN ('pending', 'running')
+          AND b.payload->>'forge' = w.payload->>'forge'
+          AND b.payload->>'forge_repo_id' = w.payload->>'forge_repo_id'
+          AND (b.payload->>'head_in_base_repo')::boolean
+          AND b.payload->>'head_ref' = w.payload->>'branch'
+          AND (b.payload->>'pr_number')::int < (w.payload->>'pr_number')::int
+          AND NOT EXISTS (
+            SELECT 1 FROM projects j
+            WHERE j.forge = w.payload->>'forge'
+              AND j.forge_repo_id = w.payload->>'forge_repo_id'
+              AND j.default_branch = w.payload->>'branch'
+          )
+      )
     ORDER BY w.created_at, w.id
     FOR UPDATE SKIP LOCKED
     LIMIT 1

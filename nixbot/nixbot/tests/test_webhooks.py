@@ -315,6 +315,7 @@ def test_parse_github_pr_from_app_in_base_repo_is_trusted() -> None:
     event = parse_github_event("pull_request", payload)
     assert isinstance(event, ChangeRequest)
     assert event.head_in_base_repo is True
+    assert event.head_ref == "update-flake"
 
     payload["pull_request"]["author_association"] = "FIRST_TIME_CONTRIBUTOR"
     payload["pull_request"]["user"] = {"login": "T2an", "type": "User"}
