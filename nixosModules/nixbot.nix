@@ -43,6 +43,9 @@ let
       private_repo_viewers = cfg.privateRepoViewers;
       eval_max_memory_size = cfg.evalMaxMemorySize;
       eval_worker_count = cfg.evalWorkerCount;
+      eval_command = cfg.evalCommand;
+      eval_extra_args = cfg.evalExtraArgs;
+      eval_writable_paths = cfg.evalWritablePaths;
       build_concurrency = cfg.buildConcurrency;
       build_store =
         if cfg.buildStore.url == null then
@@ -334,6 +337,37 @@ in
       type = lib.types.nullOr lib.types.int;
       default = null;
       description = "Number of nix-eval-jobs worker processes; null uses the core count.";
+    };
+
+    evalCommand = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ "nix-eval-jobs" ];
+      example = lib.literalExpression ''[ "''${pkgs.iets}/bin/nix-eval-jobs" ]'';
+      description = ''
+        The evaluator to run, as an argv prefix. Any program that takes
+        nix-eval-jobs's flags and prints its JSON lines fits. A bare name
+        is looked up in the service's PATH.
+      '';
+    };
+
+    evalExtraArgs = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      example = [
+        "--cache-dir"
+        "/var/lib/nixbot/eval-cache"
+      ];
+      description = "Extra arguments appended to every evaluator invocation.";
+    };
+
+    evalWritablePaths = lib.mkOption {
+      type = lib.types.listOf lib.types.path;
+      default = [ ];
+      example = [ "/var/lib/nixbot/eval-cache" ];
+      description = ''
+        Directories bound read-write into the evaluation sandbox, for an
+        evaluator that keeps a cache across runs. Created on first use.
+      '';
     };
 
     showTrace = lib.mkOption {

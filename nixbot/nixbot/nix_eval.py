@@ -71,6 +71,10 @@ class EvalOOMError(EvalError):
 @dataclass
 class EvalSettings:
     gc_roots_dir: Path
+    # The evaluator to run, argv-style. Any program that takes
+    # nix-eval-jobs's flags and prints its JSON lines fits, e.g.
+    # ["iets", "eval-jobs"].
+    command: list[str] = field(default_factory=lambda: ["nix-eval-jobs"])
     # Overall wall-clock limit for one evaluation. A hung evaluator
     # would otherwise hold the global eval semaphore forever and wedge
     # CI for every project.
@@ -91,6 +95,9 @@ class EvalSettings:
     netrc_file: Path | None = None
     nix_daemon_socket: Path = Path("/nix/var/nix/daemon-socket/socket")
     extra_ro_paths: list[Path] = field(default_factory=list)
+    # Writable in the sandbox, for an evaluator that keeps its own cache
+    # across runs. Created before the evaluator starts.
+    extra_rw_paths: list[Path] = field(default_factory=list)
     # Extra nix-eval-jobs arguments, e.g. --option overrides.
     extra_args: list[str] = field(default_factory=list)
     # Instance systems limit which per-system outputs are evaluated.
@@ -179,7 +186,7 @@ def build_eval_command(
         APPLY_EXPR,
     ]
     return [
-        "nix-eval-jobs",
+        *settings.command,
         # The service drives nix entirely through flakes. On hosts where
         # the system nix.conf hasn't enabled them (single-user installs,
         # containers) the eval would crash on the first --flake.
@@ -283,6 +290,8 @@ def build_sandbox_command(worktree_path: Path, settings: EvalSettings) -> list[s
             settings.build_store_credential_env,
             token,
         ]
+    for path in settings.extra_rw_paths:
+        cmd += ["--bind", str(path), str(path)]
     cmd += [
         "--bind",
         str(settings.gc_roots_dir),
@@ -578,6 +587,8 @@ class EvalRunner:
         on_stderr_line: StderrLineCallback | None = None,
     ) -> EvalResult:
         settings.gc_roots_dir.mkdir(parents=True, exist_ok=True)
+        for path in settings.extra_rw_paths:
+            path.mkdir(parents=True, exist_ok=True)
 
         # Prefer the delegated cgroup over a systemd-run scope: same
         # kernel-enforced tree-wide limit without needing polkit.
@@ -687,7 +698,7 @@ class EvalRunner:
                     f"evaluation memory usage:\n{tail}"
                 )
                 raise EvalOOMError(msg)
-            msg = f"nix-eval-jobs failed with exit code {returncode}:\n{tail}"
+            msg = f"{settings.command[0]} failed with exit code {returncode}:\n{tail}"
             raise EvalError(msg)
         if parse_errors:
             msg = "; ".join(parse_errors)
