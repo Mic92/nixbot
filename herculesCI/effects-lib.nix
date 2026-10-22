@@ -202,4 +202,10 @@ lib.fix (effects: {
           buildDependenciesOnly = true;
         };
       };
+
+  # hercules-ci-effects' flakeUpdate, see ./flake-update.nix.
+  flakeUpdate = import ./flake-update.nix {
+    inherit pkgs lib;
+    inherit (effects) mkEffect;
+  };
 })
