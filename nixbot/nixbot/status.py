@@ -15,7 +15,8 @@ attributes, capped by failedBuildReportLimit (default 47).
 
 The last status posted per (project, sha, context) is stored in
 commit_statuses: GitHub runs are PATCHed by their stored id, and a
-later build of the commit flips stored failures to success. Status posts carry the
+later build of the commit flips stored failures to success, including
+those of attributes it no longer builds. Status posts carry the
 build's monotonic generation; stale posts (lower generation than the
 last one sent for that build) are dropped.
 
@@ -678,7 +679,12 @@ class ForgeStatusReporter:
             else {r.attr: r.status.value for r in results}
         )
         counts = await self._post_attribute_statuses(
-            event, build, statuses, detail, result.attr_prefix
+            event,
+            build,
+            statuses,
+            detail,
+            result.attr_prefix,
+            complete=attr_statuses is not None,
         )
         await self._post_summary(event, build, result.status, counts, statuses)
 
@@ -721,13 +727,15 @@ class ForgeStatusReporter:
             force_new=True,
         )
 
-    async def _post_attribute_statuses(
+    async def _post_attribute_statuses(  # noqa: PLR0913
         self,
         event: ChangeEvent,
         build: BuildRecord,
         statuses: dict[str, str],
         detail: dict[str, AttributeResult],
         attr_prefix: str,
+        *,
+        complete: bool,
     ) -> dict[str, int]:
         """Per-attribute failure statuses and success flips over the
         whole build. Returns failed/succeeded/cancelled counts."""
@@ -745,6 +753,7 @@ class ForgeStatusReporter:
                 context_prefix=self.context_prefix,
             )
             was_failed = context in previously_failed
+            previously_failed.pop(context, None)
             if status in FAILED_STATUS_STATES:
                 result = detail.get(attr)
                 if was_failed and result is None:
@@ -775,6 +784,18 @@ class ForgeStatusReporter:
             elif was_failed:
                 await self._post(
                     event, build, context, StatusState.success, "succeeded", attr=attr
+                )
+        if complete:
+            # Failures of attributes this build of the commit no longer
+            # has, e.g. after the PR's base dropped them.
+            for context, dropped in previously_failed.items():
+                await self._post(
+                    event,
+                    build,
+                    context,
+                    StatusState.success,
+                    "not part of this build",
+                    attr=dropped,
                 )
         return counts
 

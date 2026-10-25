@@ -942,3 +942,38 @@ async def test_eval_after_gate_creates_a_new_check_run() -> None:
     await reporter.approval_required(PROJECT, "sha1", 7)
     await reporter.build_started(EVENT, BUILD)
     assert calls == [("POST", None), ("POST", "action_required"), ("POST", None)]
+
+
+async def test_failure_of_an_attribute_no_longer_built_is_resolved() -> None:
+    """A rebuild of the same commit without the attribute, e.g. after
+    the PR's base dropped it, must not leave its failure behind."""
+    reporter, poster, statuses = make_reporter()
+    await reporter.build_finished(
+        EVENT,
+        BUILD,
+        BuildResult(
+            "failed",
+            1,
+            [
+                attr_result("x", AttributeStatus.failed, "boom"),
+                attr_result("gone", AttributeStatus.failed, "boom"),
+            ],
+            attr_statuses={"x": "failed", "gone": "failed"},
+        ),
+    )
+    poster.posts.clear()
+    await reporter.build_finished(
+        EVENT,
+        replace(BUILD, id_=11),
+        BuildResult("succeeded", 1, [], attr_statuses={"x": "succeeded"}),
+    )
+    resolved = {
+        p.context.rsplit("#", 1)[1]: (p.state, p.description)
+        for p in poster.posts
+        if "#" in p.context
+    }
+    assert resolved == {
+        "checks.x": (StatusState.success, "succeeded"),
+        "checks.gone": (StatusState.success, "not part of this build"),
+    }
+    assert await statuses.failed(1, "sha1") == {}
