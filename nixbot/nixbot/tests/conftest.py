@@ -4,6 +4,7 @@ upstream git repo, and work-queue isolation."""
 from __future__ import annotations
 
 import shutil
+import subprocess
 from typing import TYPE_CHECKING
 
 import pytest
@@ -21,6 +22,32 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     import asyncpg
+
+
+@pytest.fixture(scope="session")
+def scratch_nix(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
+    """A daemon-less Nix store, config and HOME per xdist worker. Workers
+    sharing one store and cache crashed nix-eval-jobs with SIGBUS."""
+    if shutil.which("nix-store") is None:
+        pytest.skip("nix not available")
+    root = tmp_path_factory.mktemp("nix")
+    conf = root / "etc"
+    conf.mkdir()
+    (root / "home").mkdir()
+    # The sandboxed build has no network, so no substituters either.
+    (conf / "nix.conf").write_text(
+        "experimental-features = nix-command flakes\nsandbox = false\nsubstituters =\n"
+    )
+    with pytest.MonkeyPatch.context() as mp:
+        mp.delenv("NIX_REMOTE", raising=False)
+        mp.setenv("HOME", str(root / "home"))
+        mp.setenv("NIX_STORE_DIR", str(root / "store"))
+        mp.setenv("NIX_STATE_DIR", str(root / "var"))
+        # Compiled in separately from NIX_STATE_DIR.
+        mp.setenv("NIX_LOG_DIR", str(root / "var/log/nix"))
+        mp.setenv("NIX_CONF_DIR", str(conf))
+        subprocess.run(["nix-store", "--init"], check=True)
+        yield
 
 
 @pytest.fixture(scope="module")

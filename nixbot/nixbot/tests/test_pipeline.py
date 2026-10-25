@@ -31,10 +31,13 @@ if TYPE_CHECKING:
 
     from nixbot.models import NixEvalJobSuccess
 
-pytestmark = pytest.mark.skipif(
-    shutil.which("nix-eval-jobs") is None or shutil.which("nix") is None,
-    reason="nix tooling not available",
-)
+pytestmark = [
+    pytest.mark.skipif(
+        shutil.which("nix-eval-jobs") is None or shutil.which("nix") is None,
+        reason="nix tooling not available",
+    ),
+    pytest.mark.usefixtures("scratch_nix"),
+]
 
 
 @functools.cache

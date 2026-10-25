@@ -99,6 +99,7 @@ def _nix_flake_lock(repo: Path) -> None:
 
 
 @needs_nix
+@pytest.mark.usefixtures("scratch_nix")
 async def test_prefetch_integration(tmp_path: Path) -> None:
     """A locked git input is copied to the store and gc-rooted; after
     the input's source repo is gone, evaluation still succeeds purely
@@ -149,6 +150,7 @@ async def test_prefetch_integration(tmp_path: Path) -> None:
 
 
 @needs_nix
+@pytest.mark.usefixtures("scratch_nix")
 async def test_prefetch_failure_raises(tmp_path: Path) -> None:
     repo = init_upstream(
         tmp_path / "repo",

@@ -41,6 +41,7 @@ pytestmark = [
         shutil.which("nix-eval-jobs") is None or shutil.which("nix") is None,
         reason="nix tooling not available",
     ),
+    pytest.mark.usefixtures("scratch_nix"),
 ]
 
 NUM_ATTRS = int(os.environ.get("BENCH_ATTRS", "200"))

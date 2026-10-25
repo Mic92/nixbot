@@ -276,6 +276,7 @@ def test_calculate_eval_workers() -> None:
     shutil.which("nix-eval-jobs") is None or shutil.which("nix") is None,
     reason="nix-eval-jobs not available",
 )
+@pytest.mark.usefixtures("scratch_nix")
 async def test_eval_runner_integration(tmp_path: Path) -> None:
     flake = tmp_path / "repo"
     flake.mkdir()
@@ -333,6 +334,7 @@ async def test_eval_runner_integration(tmp_path: Path) -> None:
     shutil.which("nix-eval-jobs") is None or shutil.which("nix") is None,
     reason="nix-eval-jobs not available",
 )
+@pytest.mark.usefixtures("scratch_nix")
 async def test_eval_runner_ignores_hercules_ci_outputs(tmp_path: Path) -> None:
     """Only the configured attribute is built, filtered by
     eval_systems. herculesCI outputs (onPush jobs, ciSystems) are not
@@ -402,6 +404,7 @@ async def test_eval_runner_ignores_hercules_ci_outputs(tmp_path: Path) -> None:
     shutil.which("nix-eval-jobs") is None or shutil.which("nix") is None,
     reason="nix-eval-jobs not available",
 )
+@pytest.mark.usefixtures("scratch_nix")
 @pytest.mark.parametrize(
     ("eval_systems", "expected_attrs"),
     [
@@ -456,6 +459,7 @@ async def test_eval_runner_filters_configured_eval_systems(
     shutil.which("nix-eval-jobs") is None or shutil.which("nix") is None,
     reason="nix-eval-jobs not available",
 )
+@pytest.mark.usefixtures("scratch_nix")
 async def test_eval_runner_legacy_attr_prefix(tmp_path: Path) -> None:
     """legacy_attr_prefix keeps the historic default. job prefix so
     existing deployments retain attribute names and status contexts."""

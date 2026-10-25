@@ -85,24 +85,10 @@ buildPythonPackage {
 
       # Browser tests run headless Chromium from the pinned playwright
       # driver; the version matches the python playwright package.
-      # Chromium refuses to start with the unwritable default HOME.
       preCheck = ''
+        # Chromium refuses to start with the unwritable default HOME.
+        # conftest.py gives each worker its own nix store and HOME.
         export HOME=$(mktemp -d)
-        # Daemon-less scratch nix store for the eval/prefetch integration
-        # tests; the real /nix/store is read-only inside the build sandbox.
-        export NIX_STORE_DIR=$TMPDIR/nix/store
-        export NIX_STATE_DIR=$TMPDIR/nix/var
-        # Compiled in separately from NIX_STATE_DIR.
-        export NIX_LOG_DIR=$TMPDIR/nix/var/log/nix
-        export NIX_CONF_DIR=$TMPDIR/nix/etc
-        # The scratch config dir is empty; the tests run bare nix and need flakes.
-        mkdir -p "$NIX_CONF_DIR"
-        echo 'experimental-features = nix-command flakes' > "$NIX_CONF_DIR/nix.conf"
-        # nix refuses a store under its sandbox build dir (/build); this
-        # build is sandboxed already.
-        echo 'sandbox = false' >> "$NIX_CONF_DIR/nix.conf"
-        # Concurrent Nix processes will fail to create the store if it doesn't already exist
-        nix-store --init
         # Use internal Nix escape hatch to avoid nested sandboxing on macOS
         export _NIX_TEST_NO_SANDBOX=1
         # On huge builders more workers only add scheduling overhead and postgres connection pressure.
