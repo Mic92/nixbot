@@ -13,13 +13,11 @@ Per-attribute failure statuses (`nixbot/nix-build
 <forge>:<owner>/<repo>#checks.<attr>`) cover failing/cancelled
 attributes, capped by failedBuildReportLimit (default 47).
 
-Failed per-attribute statuses are persisted per revision
-(failed_statuses table, port of db/failed_status.py) so a later
-rebuild flips them to success — including force-running already-built
-attributes (the orchestrator feeds them to the scheduler as
-force_attrs). Status posts carry the build's monotonic generation;
-stale posts (lower generation than the last one sent for that build)
-are dropped.
+The last status posted per (project, sha, context) is stored in
+commit_statuses: GitHub runs are PATCHed by their stored id, and a
+later build of the commit flips stored failures to success. Status posts carry the
+build's monotonic generation; stale posts (lower generation than the
+last one sent for that build) are dropped.
 
 Target URLs point at the service's own URL scheme
 (/repos/<forge>/<owner>/<name>/builds/<number>), independent of the frontend tasks.
@@ -30,7 +28,7 @@ from __future__ import annotations
 import logging
 import re
 from collections import OrderedDict
-from datetime import UTC, datetime
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, ClassVar, Protocol
 from urllib.parse import quote
@@ -38,10 +36,11 @@ from urllib.parse import quote
 import httpx
 
 from .ansi import strip_ansi
-from .db_gen import failed as q
+from .db_gen import statuses as q
 from .fmt import format_duration
 from .forge import ForgeError
 from .forge.retry import retry_after_seconds
+from .webhooks import APPROVE_ACTION, APPROVE_EXTERNAL_PREFIX
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -50,7 +49,7 @@ if TYPE_CHECKING:
 
     from .build_scheduler import AttributeResult
     from .db import BuildRecord
-    from .events import BuildResult, ChangeEvent, EvalReport
+    from .events import BuildResult, ChangeEvent, EvalReport, RepoInfo
     from .forge import GiteaClient, GitHubAppClient, GitlabClient
 
 # GitHub caps output.text at 65535 chars.
@@ -78,6 +77,8 @@ class StatusState(StrEnum):
     success = "success"
     failure = "failure"
     error = "error"
+    # GitHub only: a check run with an approve button (approval.py).
+    action_required = "action_required"
 
 
 class StatusPostError(Exception):
@@ -111,46 +112,68 @@ class CommitStatusPoster(Protocol):
         description: str,
         target_url: str,
         *,
-        project_id: int = 0,
-        build_id: int = 0,
-        attr: str | None = None,
+        external_id: str = "",
         text: str | None = None,
-        force_new: bool = False,
-    ) -> None: ...
+        run_id: int | None = None,
+    ) -> int | None:
+        """Post or update a status. run_id is the GitHub run to PATCH.
+        Returns the run id of a GitHub check run, else None."""
+        ...
 
 
-class CheckRunIds(Protocol):
-    async def get(self, project_id: int, sha: str, name: str) -> int | None: ...
+@dataclass(frozen=True)
+class PostedStatus:
+    state: StatusState
+    attr: str | None = None
+    run_id: int | None = None
+
+
+class CommitStatuses(Protocol):
+    async def get(
+        self, project_id: int, sha: str, context: str
+    ) -> PostedStatus | None: ...
 
     async def set(
-        self, project_id: int, sha: str, name: str, attr: str | None, external_id: int
+        self, project_id: int, sha: str, context: str, status: PostedStatus
     ) -> None: ...
 
+    async def failed(self, project_id: int, sha: str) -> dict[str, str | None]:
+        """Failed contexts of the commit, with their attribute."""
+        ...
 
-class CheckRunStore:
-    """(project, sha, name) → GitHub check-run id. Lets the poster
-    PATCH the existing run instead of stacking duplicates on a SHA."""
+
+class CommitStatusStore:
+    """The last status posted per (project, sha, context). Keyed by sha,
+    not build: GitHub does not dedupe check runs by name, and one commit
+    often has several builds (branch push and PR, build reuse)."""
 
     def __init__(self, pool: asyncpg.Pool) -> None:
         self.pool = pool
 
-    async def get(self, project_id: int, sha: str, name: str) -> int | None:
-        return await q.get_check_run_id(
-            self.pool, project_id=project_id, sha=sha, name=name
+    async def get(self, project_id: int, sha: str, context: str) -> PostedStatus | None:
+        row = await q.get_commit_status(
+            self.pool, project_id=project_id, sha=sha, context=context
         )
+        if row is None:
+            return None
+        return PostedStatus(StatusState(row.state), row.attr, row.run_id)
 
     async def set(
-        self, project_id: int, sha: str, name: str, attr: str | None, external_id: int
+        self, project_id: int, sha: str, context: str, status: PostedStatus
     ) -> None:
-        await q.upsert_check_run(
+        await q.upsert_commit_status(
             self.pool,
             project_id=project_id,
             sha=sha,
-            name=name,
-            attr=attr,
-            external_id=external_id,
-            timestamp=datetime.now(tz=UTC).timestamp(),
+            context=context,
+            state=status.state.value,
+            attr=status.attr,
+            run_id=status.run_id,
         )
+
+    async def failed(self, project_id: int, sha: str) -> dict[str, str | None]:
+        rows = await q.failed_commit_statuses(self.pool, project_id=project_id, sha=sha)
+        return {row.context: row.attr for row in rows}
 
 
 # StatusState → (status, conclusion). "error" becomes cancelled so
@@ -160,6 +183,7 @@ _CHECK_RUN_FIELDS: dict[StatusState, tuple[str, str | None]] = {
     StatusState.success: ("completed", "success"),
     StatusState.failure: ("completed", "failure"),
     StatusState.error: ("completed", "cancelled"),
+    StatusState.action_required: ("completed", "action_required"),
 }
 
 
@@ -184,12 +208,11 @@ def _raise_for_check_run(response: httpx.Response, repo: str) -> None:
 
 
 class GitHubCheckRunPoster:
-    """Upserts GitHub check runs. external_id is set to our build id
-    so a check_run rerequested webhook hands it straight back."""
+    """Creates or PATCHes GitHub check runs. external_id carries our
+    build id, so a check_run rerequested webhook hands it straight back."""
 
-    def __init__(self, client: GitHubAppClient, store: CheckRunIds) -> None:
+    def __init__(self, client: GitHubAppClient) -> None:
         self.client = client
-        self.store = store
 
     async def post(  # noqa: PLR0913
         self,
@@ -201,16 +224,14 @@ class GitHubCheckRunPoster:
         description: str,
         target_url: str,
         *,
-        project_id: int = 0,
-        build_id: int = 0,
-        attr: str | None = None,
+        external_id: str = "",
         text: str | None = None,
-        force_new: bool = False,
-    ) -> None:
+        run_id: int | None = None,
+    ) -> int | None:
         installation_id = await self.client.installation_for_repo(f"{owner}/{repo}")
         if installation_id is None:
             # installation_for_repo already logged the failed lookup.
-            return
+            return None
         token = await self.client.installation_token(installation_id)
         headers = {
             "Authorization": f"Bearer {token}",
@@ -220,33 +241,38 @@ class GitHubCheckRunPoster:
         body: dict[str, object] = {
             "name": context,
             "status": status,
-            "external_id": str(build_id),
+            "external_id": external_id,
             "details_url": target_url,
             "output": _check_run_output(context, description, text),
         }
         if conclusion is not None:
             body["conclusion"] = conclusion
+        if state is StatusState.action_required:
+            # The merge box shows the title, so make it say what is needed.
+            body["output"] = {"title": description, "summary": text or description}
+            body["actions"] = [
+                {
+                    "label": "Approve CI",
+                    "description": "Build this PR and later pushes to it",
+                    "identifier": APPROVE_ACTION,
+                }
+            ]
 
         base = f"{self.client.api_url}/repos/{owner}/{repo}/check-runs"
-        # GitHub only renders a check as re-running for a *new* run of
-        # the same name, so a restart creates one instead of patching
-        # (community discussion 38288).
-        run_id = None if force_new else await self.store.get(project_id, sha, context)
         if run_id is not None:
             response = await self.client.http.patch(
                 f"{base}/{run_id}", headers=headers, json=body
             )
-            # The DB row can outlive the GitHub run. Recreate instead
+            # The stored id can outlive the GitHub run. Recreate instead
             # of retrying the terminal summary forever.
             if response.status_code not in (httpx.codes.NOT_FOUND, httpx.codes.GONE):
                 _raise_for_check_run(response, f"{owner}/{repo}")
-                await self.store.set(project_id, sha, context, attr, run_id)
-                return
+                return run_id
         response = await self.client.http.post(
             base, headers=headers, json=body | {"head_sha": sha}
         )
         _raise_for_check_run(response, f"{owner}/{repo}")
-        await self.store.set(project_id, sha, context, attr, int(response.json()["id"]))
+        return int(response.json()["id"])
 
 
 class GiteaStatusPoster:
@@ -268,7 +294,10 @@ class GiteaStatusPoster:
             f"{self.client.instance_url}/api/v1/repos/{owner}/{repo}/statuses/{sha}",
             headers=self.client.auth_headers(),
             json={
-                "state": state.value,
+                # Gitea has no action_required. The gate is GitHub only.
+                "state": "pending"
+                if state is StatusState.action_required
+                else state.value,
                 "context": context,
                 "description": description[:255],
                 "target_url": target_url,
@@ -284,6 +313,7 @@ class GitlabStatusPoster:
         StatusState.success: "success",
         StatusState.failure: "failed",
         StatusState.error: "failed",
+        StatusState.action_required: "pending",
     }
 
     def __init__(self, client: GitlabClient) -> None:
@@ -311,37 +341,6 @@ class GitlabStatusPoster:
             },
         )
         _raise_for_status(response, f"{owner}/{repo}")
-
-
-class FailedStatusStorage(Protocol):
-    async def mark_failed(self, revision: str, status_name: str) -> None: ...
-
-    async def get_failed(self, revision: str) -> set[str]: ...
-
-    async def clear(self, revision: str, status_name: str) -> None: ...
-
-
-class FailedStatusStore:
-    """Port of db/failed_status.py onto the service schema."""
-
-    def __init__(self, pool: asyncpg.Pool) -> None:
-        self.pool = pool
-
-    async def mark_failed(self, revision: str, status_name: str) -> None:
-        await q.upsert_failed_status(
-            self.pool,
-            revision=revision,
-            status_name=status_name,
-            timestamp=datetime.now(tz=UTC).timestamp(),
-        )
-
-    async def get_failed(self, revision: str) -> set[str]:
-        return set(await q.failed_status_names(self.pool, revision=revision))
-
-    async def clear(self, revision: str, status_name: str) -> None:
-        await q.clear_failed_status(
-            self.pool, revision=revision, status_name=status_name
-        )
 
 
 def _count_key(status: str) -> str:
@@ -404,7 +403,7 @@ class ForgeStatusReporter:
     def __init__(
         self,
         posters: dict[str, CommitStatusPoster],
-        failed_statuses: FailedStatusStorage,
+        statuses: CommitStatuses,
         base_url: str,
         failed_build_report_limit: int = 47,
         context_prefix: str = "nixbot",
@@ -412,7 +411,7 @@ class ForgeStatusReporter:
         # Keyed by forge so mixed GitHub+Gitea deployments post to the
         # right API.
         self.posters = posters
-        self.failed_statuses = failed_statuses
+        self.statuses = statuses
         self.base_url = base_url.rstrip("/")
         self.failed_build_report_limit = failed_build_report_limit
         self.context_prefix = context_prefix
@@ -423,6 +422,72 @@ class ForgeStatusReporter:
 
     def build_url(self, event: ChangeEvent, build: BuildRecord) -> str:
         return f"{self.base_url}/repos/{event.repo.forge}/{event.repo.name}/builds/{build.number}"
+
+    async def _send(  # noqa: PLR0913
+        self,
+        repo: RepoInfo,
+        sha: str,
+        context: str,
+        state: StatusState,
+        description: str,
+        target_url: str,
+        *,
+        external_id: str,
+        attr: str | None = None,
+        text: str | None = None,
+        propagate: bool = False,
+        force_new: bool = False,
+    ) -> None:
+        poster = self.posters.get(repo.forge)
+        if poster is None:
+            return
+        previous = await self.statuses.get(repo.id, sha, context)
+        run_id = None
+        # A PATCHed action_required run stays on GitHub's PR view, and
+        # GitHub only renders a restart for a new run (community
+        # discussion 38288). Both need a new run.
+        if (
+            previous is not None
+            and not force_new
+            and previous.state is not StatusState.action_required
+        ):
+            run_id = previous.run_id
+        try:
+            run_id = await poster.post(
+                repo.owner,
+                repo.repo,
+                sha,
+                context,
+                state,
+                # Descriptions may carry failure excerpts with raw ANSI
+                # colors (kept for the web UI). Forges show them verbatim.
+                strip_ansi(description),
+                target_url,
+                external_id=external_id,
+                text=text,
+                run_id=run_id,
+            )
+        except CheckPermissionError:
+            # Per-org and not transient: log the hint and move on, never
+            # latch off posting for the whole forge.
+            logger.exception(
+                "failed to post commit status", extra={"forge": repo.forge}
+            )
+            return
+        except (httpx.HTTPError, ForgeError, StatusPostError):
+            # Transient failures must not propagate into the
+            # orchestrator task and leave builds stuck — except the
+            # terminal summary, whose failure drives the queued retry.
+            if propagate:
+                raise
+            logger.exception(
+                "failed to post commit status",
+                extra={"repo": repo.name, "sha": sha, "context": context},
+            )
+            return
+        await self.statuses.set(
+            repo.id, sha, context, PostedStatus(state, attr, run_id)
+        )
 
     async def _post(  # noqa: PLR0913
         self,
@@ -437,43 +502,37 @@ class ForgeStatusReporter:
         propagate: bool = False,
         force_new: bool = False,
     ) -> None:
-        poster = self.posters.get(event.repo.forge)
-        if poster is None:
-            return
-        try:
-            await poster.post(
-                event.repo.owner,
-                event.repo.repo,
-                event.commit_sha,
-                context,
-                state,
-                # Descriptions may carry failure excerpts with raw ANSI
-                # colors (kept for the web UI). Forges show them verbatim.
-                strip_ansi(description),
-                self.build_url(event, build),
-                project_id=event.repo.id,
-                build_id=build.id_,
-                attr=attr,
-                text=text,
-                force_new=force_new,
-            )
-        except CheckPermissionError:
-            # Per-org and not transient: log the hint and move on, never
-            # latch off posting for the whole forge.
-            logger.exception(
-                "failed to post commit status",
-                extra={"forge": event.repo.forge},
-            )
-        except (httpx.HTTPError, ForgeError, StatusPostError):
-            # Transient failures must not propagate into the
-            # orchestrator task and leave builds stuck — except the
-            # terminal summary, whose failure drives the queued retry.
-            if propagate:
-                raise
-            logger.exception(
-                "failed to post commit status",
-                extra={"build_id": build.id_, "context": context},
-            )
+        await self._send(
+            event.repo,
+            event.commit_sha,
+            context,
+            state,
+            description,
+            self.build_url(event, build),
+            external_id=str(build.id_),
+            attr=attr,
+            text=text,
+            propagate=propagate,
+            force_new=force_new,
+        )
+
+    async def approval_required(self, repo: RepoInfo, sha: str, pr_number: int) -> None:
+        """The approval gate on nix-eval. The approve button's click
+        comes back as check_run.requested_action (webhooks.py)."""
+        await self._send(
+            repo,
+            sha,
+            f"{self.context_prefix}/nix-eval",
+            StatusState.action_required,
+            "Waiting for maintainer approval",
+            f"{self.base_url}/repos/{repo.forge}/{repo.name}",
+            external_id=f"{APPROVE_EXTERNAL_PREFIX}{pr_number}",
+            text=(
+                "This pull request is from an outside contributor. "
+                "A maintainer must approve CI for it."
+            ),
+            force_new=True,
+        )
 
     async def build_started(self, event: ChangeEvent, build: BuildRecord) -> None:
         await self._post(
@@ -672,8 +731,7 @@ class ForgeStatusReporter:
     ) -> dict[str, int]:
         """Per-attribute failure statuses and success flips over the
         whole build. Returns failed/succeeded/cancelled counts."""
-        revision = event.commit_sha
-        previously_failed = await self.failed_statuses.get_failed(revision)
+        previously_failed = await self.statuses.failed(event.repo.id, event.commit_sha)
 
         counts = {"failed": 0, "succeeded": 0, "cancelled": 0}
         reported = 0
@@ -686,19 +744,19 @@ class ForgeStatusReporter:
                 attr_prefix,
                 context_prefix=self.context_prefix,
             )
+            was_failed = context in previously_failed
             if status in FAILED_STATUS_STATES:
                 result = detail.get(attr)
-                if context in previously_failed and result is None:
+                if was_failed and result is None:
                     # Already posted with error detail.
                     continue
-                if context not in previously_failed:
+                if not was_failed:
                     # Only new failures consume the report budget;
                     # previously-failed contexts always re-post so they
                     # can later flip to success.
                     if reported >= self.failed_build_report_limit:
                         continue
                     reported += 1
-                await self.failed_statuses.mark_failed(revision, context)
                 error = result.error if result else None
                 headline = (
                     result.failure.headline()
@@ -714,9 +772,7 @@ class ForgeStatusReporter:
                     attr=attr,
                     text=_fence(error) if error else None,
                 )
-            elif context in previously_failed:
-                # Success-flip for a previously failed status.
-                await self.failed_statuses.clear(revision, context)
+            elif was_failed:
                 await self._post(
                     event, build, context, StatusState.success, "succeeded", attr=attr
                 )

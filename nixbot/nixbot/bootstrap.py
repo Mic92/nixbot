@@ -17,7 +17,6 @@ import httpx
 import uvicorn
 
 from .api_tokens import ApiTokenStore
-from .approval import GitHubGatePoster
 from .auth import (
     AuthzConfig,
     OAuthProvider,
@@ -57,9 +56,8 @@ from .orchestrator import Orchestrator
 from .polling import PolledRepository, PollingService
 from .repos import RepoStore
 from .status import (
-    CheckRunStore,
     CommitStatusPoster,
-    FailedStatusStore,
+    CommitStatusStore,
     ForgeStatusReporter,
     GiteaStatusPoster,
     GitHubCheckRunPoster,
@@ -222,7 +220,7 @@ def _netrc_credentials(
     )
 
 
-def _forge_clients(config: Config, pool: asyncpg.Pool) -> _ForgeClients:
+def _forge_clients(config: Config) -> _ForgeClients:
     clients = _ForgeClients()
     if config.github is not None:
         clients.github = GitHubAppClient(
@@ -233,9 +231,7 @@ def _forge_clients(config: Config, pool: asyncpg.Pool) -> _ForgeClients:
         clients.credentials_providers["github"] = GitHubFetchCredentialsProvider(
             clients.github
         )
-        clients.posters["github"] = GitHubCheckRunPoster(
-            clients.github, CheckRunStore(pool)
-        )
+        clients.posters["github"] = GitHubCheckRunPoster(clients.github)
     if config.gitea is not None:
         clients.gitea = GiteaClient(config.gitea.instance_url, config.gitea.token)
         clients.credentials_providers["gitea"] = _netrc_credentials(config.gitea)
@@ -255,7 +251,7 @@ async def build_service(config: Config) -> tuple[CIService, FastAPI]:
     await apply_migrations(dsn)
     pool = await asyncpg.create_pool(dsn)
 
-    forges = _forge_clients(config, pool)
+    forges = _forge_clients(config)
     github, gitea, gitlab = forges.github, forges.gitea, forges.gitlab
     credentials_providers = forges.credentials_providers
     posters = forges.posters
@@ -268,7 +264,7 @@ async def build_service(config: Config) -> tuple[CIService, FastAPI]:
     if posters:
         reporter = ForgeStatusReporter(
             posters,
-            FailedStatusStore(pool),
+            CommitStatusStore(pool),
             config.url,
             config.failed_build_report_limit,
             context_prefix=config.status_context_prefix,
@@ -320,11 +316,7 @@ async def build_service(config: Config) -> tuple[CIService, FastAPI]:
         gitea=gitea,
         gitlab=gitlab,
         credentials_providers=credentials_providers,
-        gate_poster=(
-            GitHubGatePoster(github, config.status_context_prefix)
-            if github is not None
-            else None
-        ),
+        gate_poster=reporter if github is not None else None,
         # DB clock, not app clock: the crash sweep compares it against
         # started_at columns set by now() in SQL.
         _started_at=await pool.fetchval("SELECT now()"),

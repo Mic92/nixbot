@@ -22,8 +22,8 @@ from .db import BuildStatus
 from .db_gen import approvals as approvals_q
 from .db_gen import builds as builds_q
 from .db_gen import events as ev_q
-from .db_gen import failed as failed_q
 from .db_gen import maintenance as q
+from .db_gen import statuses as statuses_q
 from .deliver import Delivery, EventListingCache, deliver
 from .event_effects import restart_event_effect
 from .events import (
@@ -338,14 +338,17 @@ class CIService:
             if build is None or build.project_id != project.id_:
                 build_id = None
         if build_id is None:
-            build_id = await failed_q.latest_build_for_sha(
+            build_id = await statuses_q.latest_build_for_sha(
                 self.pool, project_id=project.id_, commit_sha=event.head_sha
             )
         if build_id is None:
             return
         if event.name is not None:
-            row = await failed_q.check_run_attr(
-                self.pool, project_id=project.id_, sha=event.head_sha, name=event.name
+            row = await statuses_q.get_commit_status(
+                self.pool,
+                project_id=project.id_,
+                sha=event.head_sha,
+                context=event.name,
             )
             if row is not None and row.attr is not None:
                 await self.restart_attribute(build_id, row.attr)
@@ -404,13 +407,7 @@ class CIService:
             },
         )
         if self.gate_poster is not None:
-            await self.gate_poster.post_gate(
-                info.owner,
-                info.repo,
-                change.commit_sha,
-                pr_number,
-                f"{self.config.url.rstrip('/')}/repos/{info.forge}/{info.name}",
-            )
+            await self.gate_poster.approval_required(info, change.commit_sha, pr_number)
         return True
 
     async def _process_change(

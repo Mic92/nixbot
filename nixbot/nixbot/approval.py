@@ -13,19 +13,16 @@ from __future__ import annotations
 
 import dataclasses
 import json
-import logging
 from typing import TYPE_CHECKING, Protocol
 
 from .db_gen import approvals as q
-from .webhooks import APPROVE_ACTION, APPROVE_EXTERNAL_PREFIX, ChangeRequest
+from .webhooks import ChangeRequest
 
 if TYPE_CHECKING:
     import asyncpg
 
     from .config import PrApprovalConfig
-    from .forge import GitHubAppClient
-
-logger = logging.getLogger(__name__)
+    from .events import RepoInfo
 
 
 def untrusted(config: PrApprovalConfig, change: ChangeRequest) -> bool:
@@ -61,62 +58,9 @@ async def approve(
 
 
 class GatePoster(Protocol):
-    async def post_gate(
-        self, owner: str, repo: str, sha: str, pr_number: int, details_url: str
+    """Posts the gate. ForgeStatusReporter, so later builds of the
+    commit know to replace it."""
+
+    async def approval_required(
+        self, repo: RepoInfo, sha: str, pr_number: int
     ) -> None: ...
-
-
-class GitHubGatePoster:
-    def __init__(self, client: GitHubAppClient, context_prefix: str) -> None:
-        self.client = client
-        self.name = f"{context_prefix}/nix-eval"
-
-    async def post_gate(
-        self, owner: str, repo: str, sha: str, pr_number: int, details_url: str
-    ) -> None:
-        installation_id = await self.client.installation_for_repo(f"{owner}/{repo}")
-        if installation_id is None:
-            return
-        token = await self.client.installation_token(installation_id)
-        # Same name as the eval status: the approved build creates a
-        # fresh run of that name which supersedes this one. (PATCHing
-        # it instead leaves GitHub's PR view showing action_required.)
-        body = {
-            "name": self.name,
-            "head_sha": sha,
-            "status": "completed",
-            "conclusion": "action_required",
-            "external_id": f"{APPROVE_EXTERNAL_PREFIX}{pr_number}",
-            "details_url": details_url,
-            "output": {
-                "title": "Waiting for maintainer approval",
-                "summary": (
-                    "This pull request is from an outside contributor. "
-                    "A maintainer must approve CI for it."
-                ),
-            },
-            "actions": [
-                {
-                    "label": "Approve CI",
-                    "description": "Build this PR and later pushes to it",
-                    "identifier": APPROVE_ACTION,
-                }
-            ],
-        }
-        response = await self.client.http.post(
-            f"{self.client.api_url}/repos/{owner}/{repo}/check-runs",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Accept": "application/vnd.github+json",
-            },
-            json=body,
-        )
-        if response.status_code >= 400:  # noqa: PLR2004
-            logger.error(
-                "failed to post approval gate",
-                extra={
-                    "repo": f"{owner}/{repo}",
-                    "status": response.status_code,
-                    "body": response.text[:500],
-                },
-            )

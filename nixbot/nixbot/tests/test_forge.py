@@ -42,7 +42,6 @@ from nixbot.status import (
     GitHubCheckRunPoster,
     StatusState,
 )
-from nixbot.tests.test_status import _MemoryCheckRunIds
 
 from .support import (
     FakeGitea,
@@ -874,7 +873,7 @@ async def test_github_check_run_post(github_client: GitHubAppClient) -> None:
     )
 
     await github_client.discover_repos()
-    poster = GitHubCheckRunPoster(github_client, _MemoryCheckRunIds())
+    poster = GitHubCheckRunPoster(github_client)
     await poster.post(
         "acme",
         "repo11",
@@ -883,8 +882,7 @@ async def test_github_check_run_post(github_client: GitHubAppClient) -> None:
         StatusState.success,
         "evaluation succeeded",
         "https://ci.test/repos/acme/repo11/builds/1",
-        project_id=1,
-        build_id=1,
+        external_id="1",
     )
     assert posted == [
         {

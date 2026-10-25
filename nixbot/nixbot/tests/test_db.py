@@ -20,7 +20,7 @@ from nixbot.db_gen import maintenance as maintenance_q
 from nixbot.failed_builds import PostgresFailedBuildCache
 from nixbot.migrations import apply_migrations, load_migrations
 from nixbot.models import CacheStatus, EvalStats, NixEvalJobError
-from nixbot.status import CheckRunStore, FailedStatusStore
+from nixbot.status import CommitStatusStore, PostedStatus, StatusState
 
 from .support import attribute_statuses, db_pool, insert_build, insert_project, mk_job
 
@@ -209,31 +209,26 @@ async def test_schema_constraints(postgres_dsn: str) -> None:
         await conn.close()
 
 
-async def test_check_run_store_round_trip(pool: asyncpg.Pool) -> None:
-    project_id = await insert_project(pool, forge_repo_id="check-run-store")
-    store = CheckRunStore(pool)
+async def test_commit_status_store(pool: asyncpg.Pool) -> None:
+    project_id = await insert_project(pool, forge_repo_id="commit-status-store")
+    store = CommitStatusStore(pool)
     assert await store.get(project_id, "sha", "ctx") is None
-    await store.set(project_id, "sha", "ctx", "flaky", 555)
-    assert await store.get(project_id, "sha", "ctx") == 555
-    # Upsert overwrites (later build on the same sha takes over).
-    await store.set(project_id, "sha", "ctx", None, 777)
-    assert await store.get(project_id, "sha", "ctx") == 777
-
-
-async def test_failed_status_store_component(pool: asyncpg.Pool) -> None:
-    """FailedStatusStore is the only consumer of failed_statuses. Its
-    mark/upsert/get/clear cycle covers the table semantics."""
-
-    store = FailedStatusStore(pool)
-    assert await store.get_failed("abc") == set()
-    await store.mark_failed("abc", "nix-build")
-    # Re-marking upserts instead of violating the primary key.
-    await store.mark_failed("abc", "nix-build")
-    await store.mark_failed("abc", "nix-eval")
-    assert await store.get_failed("abc") == {"nix-build", "nix-eval"}
-    await store.clear("abc", "nix-build")
-    assert await store.get_failed("abc") == {"nix-eval"}
-    await store.clear("abc", "nix-eval")
+    await store.set(
+        project_id, "sha", "ctx", PostedStatus(StatusState.failure, "flaky", 555)
+    )
+    await store.set(project_id, "sha", "eval", PostedStatus(StatusState.success))
+    assert await store.get(project_id, "sha", "ctx") == PostedStatus(
+        StatusState.failure, "flaky", 555
+    )
+    assert await store.failed(project_id, "sha") == {"ctx": "flaky"}
+    # A later post on the commit takes over.
+    await store.set(
+        project_id, "sha", "ctx", PostedStatus(StatusState.success, None, 777)
+    )
+    assert await store.failed(project_id, "sha") == {}
+    assert await store.get(project_id, "sha", "ctx") == PostedStatus(
+        StatusState.success, None, 777
+    )
 
 
 async def test_failed_build_cache_component(pool: asyncpg.Pool) -> None:

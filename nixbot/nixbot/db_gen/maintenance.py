@@ -243,15 +243,10 @@ WITH del_builds AS (
       AND finished_at < now() - make_interval(days => $1::int)
     RETURNING effect_runs.id
 ), pruned_statuses AS (
-    DELETE FROM failed_statuses
-    WHERE to_timestamp(timestamp)
-        < now() - make_interval(days => $1::int)
+    DELETE FROM commit_statuses
+    WHERE updated_at < now() - make_interval(days => $1::int)
 ), pruned_failures AS (
     DELETE FROM failed_builds
-    WHERE to_timestamp(timestamp)
-        < now() - make_interval(days => $1::int)
-), pruned_check_runs AS (
-    DELETE FROM check_runs
     WHERE to_timestamp(timestamp)
         < now() - make_interval(days => $1::int)
 )

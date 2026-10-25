@@ -199,11 +199,14 @@ async def test_retention_ages_out_failed_caches(
     pool: asyncpg.Pool, tmp_path: Path
 ) -> None:
     old_ts = time.time() - 100 * 86400
+    status_project = await insert_project(
+        pool, "status-age", forge_repo_id="status-age"
+    )
     await pool.execute(
-        "INSERT INTO failed_statuses (revision, status_name, timestamp) "
-        "VALUES ('old-rev', 'ctx', $1), ('new-rev', 'ctx', $2)",
-        old_ts,
-        time.time(),
+        "INSERT INTO commit_statuses (project_id, sha, context, state, updated_at) "
+        "VALUES ($1, 'old-rev', 'ctx', 'failure', now() - interval '100 days'), "
+        "($1, 'new-rev', 'ctx', 'failure', now())",
+        status_project,
     )
     cache_project = await insert_project(pool, "cache-age", forge_repo_id="cache-age")
     await pool.execute(
@@ -215,9 +218,7 @@ async def test_retention_ages_out_failed_caches(
         cache_project,
     )
     await cleanup_old_builds(pool, tmp_path, 90)
-    revisions = {
-        r["revision"] for r in await pool.fetch("SELECT revision FROM failed_statuses")
-    }
+    revisions = {r["sha"] for r in await pool.fetch("SELECT sha FROM commit_statuses")}
     assert "old-rev" not in revisions
     assert "new-rev" in revisions
     drvs = {

@@ -33,6 +33,7 @@ from nixbot.status import (
     ForgeStatusReporter,
     GitHubCheckRunPoster,
     GitlabStatusPoster,
+    PostedStatus,
     StatusState,
     _build_plan,
     _check_run_output,
@@ -72,18 +73,25 @@ class FakePoster:
         self.extras.append(extra)
 
 
-class MemoryFailedStatuses:
+class MemoryCommitStatuses:
     def __init__(self) -> None:
-        self.failed: dict[str, set[str]] = {}
+        self.rows: dict[tuple[int, str, str], PostedStatus] = {}
 
-    async def mark_failed(self, revision: str, status_name: str) -> None:
-        self.failed.setdefault(revision, set()).add(status_name)
+    async def get(self, project_id: int, sha: str, context: str) -> PostedStatus | None:
+        return self.rows.get((project_id, sha, context))
 
-    async def get_failed(self, revision: str) -> set[str]:
-        return set(self.failed.get(revision, set()))
+    async def set(
+        self, project_id: int, sha: str, context: str, status: PostedStatus
+    ) -> None:
+        self.rows[(project_id, sha, context)] = status
 
-    async def clear(self, revision: str, status_name: str) -> None:
-        self.failed.get(revision, set()).discard(status_name)
+    async def failed(self, project_id: int, sha: str) -> dict[str, str | None]:
+        return {
+            context: status.attr
+            for (project, head, context), status in self.rows.items()
+            if (project, head) == (project_id, sha)
+            and status.state is StatusState.failure
+        }
 
 
 PROJECT = RepoInfo(
@@ -143,9 +151,9 @@ def attr_result(
 
 def make_reporter(
     limit: int = 47,
-) -> tuple[ForgeStatusReporter, FakePoster, MemoryFailedStatuses]:
+) -> tuple[ForgeStatusReporter, FakePoster, MemoryCommitStatuses]:
     poster = FakePoster()
-    store = MemoryFailedStatuses()
+    store = MemoryCommitStatuses()
     reporter = ForgeStatusReporter(
         {"github": poster, "gitea": poster},
         store,
@@ -197,7 +205,7 @@ async def test_context_prefix_configurable() -> None:
     poster = FakePoster()
     reporter = ForgeStatusReporter(
         {"github": poster},
-        MemoryFailedStatuses(),
+        MemoryCommitStatuses(),
         "https://ci.test",
         context_prefix="buildbot",
     )
@@ -216,7 +224,12 @@ async def test_context_prefix_configurable() -> None:
 async def test_build_restarted_posts_pending_new_runs() -> None:
     """Re-run must flip the checks to pending immediately and, on
     GitHub, force a new check run so it renders as re-running."""
-    reporter, poster, _ = make_reporter()
+    reporter, poster, store = make_reporter()
+    for context in (
+        "nixbot/nix-build github:acme/widget#checks.x86_64-linux.foo",
+        "nixbot/nix-build",
+    ):
+        await store.set(1, "sha1", context, PostedStatus(StatusState.failure, run_id=5))
 
     await reporter.build_restarted(EVENT, BUILD, "x86_64-linux.foo")
     contexts = [(p.context, p.state) for p in poster.posts]
@@ -227,7 +240,7 @@ async def test_build_restarted_posts_pending_new_runs() -> None:
         ),
         ("nixbot/nix-build", StatusState.pending),
     ]
-    assert all(extra["force_new"] for extra in poster.extras)
+    assert all(extra["run_id"] is None for extra in poster.extras)
 
     poster.posts.clear()
     await reporter.build_restarted(EVENT, BUILD, None)
@@ -474,14 +487,14 @@ async def test_success_flip_on_rebuild() -> None:
         BUILD,
         BuildResult("failed", 1, [attr_result("flaky", AttributeStatus.failed)]),
     )
-    assert context in await store.get_failed("sha1")
+    assert context in await store.failed(1, "sha1")
     # Rebuild succeeds: status flipped, record cleared.
     await reporter.build_finished(
         EVENT,
         BUILD,
         BuildResult("succeeded", 2, [attr_result("flaky", AttributeStatus.succeeded)]),
     )
-    assert context not in await store.get_failed("sha1")
+    assert context not in await store.failed(1, "sha1")
     flip = [p for p in poster.posts if p.context == context]
     assert [p.state for p in flip] == [StatusState.failure, StatusState.success]
 
@@ -496,7 +509,7 @@ async def test_stale_generation_dropped() -> None:
     assert len(poster.posts) == posts_before
 
 
-async def test_cancelled_attributes_recorded_as_failed_statuses() -> None:
+async def test_cancelled_attributes_are_recorded_as_failures() -> None:
     reporter, poster, store = make_reporter()
     await reporter.build_finished(
         EVENT,
@@ -504,7 +517,7 @@ async def test_cancelled_attributes_recorded_as_failed_statuses() -> None:
         BuildResult("cancelled", 1, [attr_result("a", AttributeStatus.cancelled)]),
     )
     context = attr_status_context("github", "acme/widget", "a")
-    assert context in await store.get_failed("sha1")
+    assert context in await store.failed(1, "sha1")
     combined = next(p for p in poster.posts if p.context == "nixbot/nix-build")
     assert combined.state == StatusState.error
 
@@ -618,7 +631,7 @@ async def test_success_flip_for_attributes_outside_the_rerun_subset() -> None:
     """results is a rerun subset. Earlier successes must still flip."""
     reporter, poster, store = make_reporter()
     context = attr_status_context("github", "acme/widget", "a")
-    await store.mark_failed("sha1", context)
+    await store.set(1, "sha1", context, PostedStatus(StatusState.failure, "a"))
     await reporter.build_finished(
         EVENT,
         BUILD,
@@ -629,7 +642,7 @@ async def test_success_flip_for_attributes_outside_the_rerun_subset() -> None:
             attr_statuses={"a": "succeeded", "b": "succeeded"},
         ),
     )
-    assert context not in await store.get_failed("sha1")
+    assert context not in await store.failed(1, "sha1")
     assert [p.state for p in poster.posts if p.context == context] == [
         StatusState.success
     ]
@@ -697,7 +710,7 @@ async def test_poster_network_errors_do_not_propagate() -> None:
             msg = "forge unreachable"
             raise httpx.ConnectError(msg)
 
-    store = MemoryFailedStatuses()
+    store = MemoryCommitStatuses()
     reporter = ForgeStatusReporter({"github": ExplodingPoster()}, store, "https://ci")
 
     await reporter.build_started(EVENT, BUILD)  # must not raise
@@ -706,18 +719,17 @@ async def test_poster_network_errors_do_not_propagate() -> None:
 
 
 async def test_reporter_forwards_attr_and_text() -> None:
-    """Per-attr posts carry the attr (so the check-run store records
-    it for rerequested) and the full error as markdown text. The eval
-    run carries the warnings."""
-    reporter, poster, _ = make_reporter()
+    """Posts carry the build id as external_id, per-attr posts the full
+    error as markdown text, and the store records their attr for
+    rerequested. The eval run carries the warnings."""
+    reporter, poster, store = make_reporter()
 
     await reporter.eval_finished(
         EVENT, BUILD, EvalReport(success=True, warnings=["w1", "w2"])
     )
     eval_extra = poster.extras[0]
     assert eval_extra["text"] == "```\nw1\nw2\n```"
-    assert eval_extra["project_id"] == PROJECT.id
-    assert eval_extra["build_id"] == BUILD.id_
+    assert eval_extra["external_id"] == str(BUILD.id_)
 
     poster.posts.clear()
     poster.extras.clear()
@@ -735,7 +747,7 @@ async def test_reporter_forwards_attr_and_text() -> None:
         for i, p in enumerate(poster.posts)
         if p.context.startswith("nixbot/nix-build ")
     )
-    assert poster.extras[attr_idx]["attr"] == "flaky"
+    assert store.rows[(1, "sha1", poster.posts[attr_idx].context)].attr == "flaky"
     assert poster.extras[attr_idx]["text"] == "```\nlog line 1\nline 2\n```"
 
 
@@ -752,7 +764,7 @@ async def test_check_permission_error_does_not_disable_forge() -> None:
             raise CheckPermissionError(msg)
 
     reporter = ForgeStatusReporter(
-        {"github": ForbiddenPoster()}, MemoryFailedStatuses(), "https://ci"
+        {"github": ForbiddenPoster()}, MemoryCommitStatuses(), "https://ci"
     )
     await reporter.build_started(EVENT, BUILD)
     await reporter.build_finished(EVENT, BUILD, BuildResult("succeeded", 1, []))
@@ -783,20 +795,6 @@ def test_build_plan_truncation_stays_within_check_run_budget() -> None:
 # --- GitHub check-run poster -----------------------------------------------
 
 
-class _MemoryCheckRunIds:
-    def __init__(self) -> None:
-        self.ids: dict[tuple[int, str, str], tuple[str | None, int]] = {}
-
-    async def get(self, project_id: int, sha: str, name: str) -> int | None:
-        entry = self.ids.get((project_id, sha, name))
-        return entry[1] if entry else None
-
-    async def set(
-        self, project_id: int, sha: str, name: str, attr: str | None, external_id: int
-    ) -> None:
-        self.ids[(project_id, sha, name)] = (attr, external_id)
-
-
 class _StubGitHub:
     """Just enough GitHubAppClient for GitHubCheckRunPoster."""
 
@@ -812,13 +810,11 @@ class _StubGitHub:
         return "ghs_token"
 
 
-def _check_run_poster(
-    handler: httpx.MockTransport, store: _MemoryCheckRunIds
-) -> GitHubCheckRunPoster:
-    return GitHubCheckRunPoster(cast("GitHubAppClient", _StubGitHub(handler)), store)
+def _check_run_poster(handler: httpx.MockTransport) -> GitHubCheckRunPoster:
+    return GitHubCheckRunPoster(cast("GitHubAppClient", _StubGitHub(handler)))
 
 
-async def test_github_check_run_poster_upsert() -> None:
+async def test_github_check_run_poster_creates_then_patches() -> None:
     requests: list[tuple[str, str, dict]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -830,30 +826,15 @@ async def test_github_check_run_poster_upsert() -> None:
             200, json={"id": int(request.url.path.rsplit("/", 1)[-1])}
         )
 
-    store = _MemoryCheckRunIds()
-    poster = _check_run_poster(httpx.MockTransport(handler), store)
-
-    await poster.post(
-        "acme",
-        "widget",
-        "sha1",
-        "nixbot/nix-eval",
-        StatusState.pending,
-        "d",
-        "u",
-        project_id=1,
-        build_id=10,
-    )
-    await poster.post(
-        "acme",
-        "widget",
-        "sha1",
-        "nixbot/nix-eval",
-        StatusState.error,
-        "d",
-        "u",
-        project_id=1,
-        build_id=10,
+    poster = _check_run_poster(httpx.MockTransport(handler))
+    args = ("acme", "widget", "sha1", "nixbot/nix-eval")
+    run_id = await poster.post(*args, StatusState.pending, "d", "u", external_id="10")
+    assert run_id == 555
+    assert (
+        await poster.post(
+            *args, StatusState.error, "d", "u", external_id="10", run_id=run_id
+        )
+        == 555
     )
     assert [r[0] for r in requests] == ["POST", "PATCH"]
     assert requests[0][1] == "/repos/acme/widget/check-runs"
@@ -866,11 +847,10 @@ async def test_github_check_run_poster_upsert() -> None:
     patch = requests[1][2]
     assert patch["status"] == "completed"
     assert patch["conclusion"] == "cancelled"
-    assert store.ids[(1, "sha1", "nixbot/nix-eval")] == (None, 555)
 
 
 async def test_github_check_run_patch_404_recreates() -> None:
-    """The DB row outlives the GitHub run. Without the fallback the
+    """The stored id outlives the GitHub run. Without the fallback the
     terminal summary would retry forever via the report work item."""
     methods: list[str] = []
 
@@ -880,70 +860,39 @@ async def test_github_check_run_patch_404_recreates() -> None:
             return httpx.Response(404, json={})
         return httpx.Response(201, json={"id": 777})
 
-    store = _MemoryCheckRunIds()
-    store.ids[(1, "sha1", "ctx")] = (None, 1)  # stale
-    poster = _check_run_poster(httpx.MockTransport(handler), store)
-
-    await poster.post(
-        "acme",
-        "widget",
-        "sha1",
-        "ctx",
-        StatusState.success,
-        "d",
-        "u",
-        project_id=1,
-        build_id=10,
+    poster = _check_run_poster(httpx.MockTransport(handler))
+    run_id = await poster.post(
+        "acme", "widget", "sha1", "ctx", StatusState.success, "d", "u", run_id=1
     )
     assert methods == ["PATCH", "POST"]
-    assert store.ids[(1, "sha1", "ctx")] == (None, 777)
+    assert run_id == 777
 
 
-async def test_github_check_run_force_new_ignores_stored_id() -> None:
+async def test_restart_creates_a_new_check_run() -> None:
     """A restart must create a fresh run so GitHub renders it as
     re-running, even though a run id for the context is stored."""
     methods: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         methods.append(request.method)
-        return httpx.Response(201, json={"id": 999})
+        return httpx.Response(201, json={"id": len(methods)})
 
-    store = _MemoryCheckRunIds()
-    store.ids[(1, "sha1", "ctx")] = (None, 1)
-    poster = _check_run_poster(httpx.MockTransport(handler), store)
-
-    await poster.post(
-        "acme",
-        "widget",
-        "sha1",
-        "ctx",
-        StatusState.pending,
-        "d",
-        "u",
-        project_id=1,
-        build_id=10,
-        force_new=True,
+    poster = _check_run_poster(httpx.MockTransport(handler))
+    reporter = ForgeStatusReporter(
+        {"github": poster}, MemoryCommitStatuses(), "https://ci.test"
     )
-    assert methods == ["POST"]
-    assert store.ids[(1, "sha1", "ctx")] == (None, 999)
+    await reporter.build_started(EVENT, BUILD)
+    await reporter.build_restarted(EVENT, BUILD, None)
+    assert methods == ["POST", "POST", "POST"]
 
 
 async def test_github_check_run_403_is_permission_error() -> None:
     poster = _check_run_poster(
-        httpx.MockTransport(lambda _r: httpx.Response(403, json={})),
-        _MemoryCheckRunIds(),
+        httpx.MockTransport(lambda _r: httpx.Response(403, json={}))
     )
     with pytest.raises(CheckPermissionError):
         await poster.post(
-            "acme",
-            "widget",
-            "sha1",
-            "ctx",
-            StatusState.pending,
-            "d",
-            "u",
-            project_id=1,
-            build_id=10,
+            "acme", "widget", "sha1", "ctx", StatusState.pending, "d", "u"
         )
 
 
@@ -972,3 +921,24 @@ async def test_gitlab_status_states() -> None:
         )
     assert [p["state"] for p in posted] == ["pending", "failed"]
     assert len(posted[0]["description"]) == 255
+
+
+async def test_eval_after_gate_creates_a_new_check_run() -> None:
+    """GitHub keeps showing a PATCHed action_required run, so the eval
+    after a gate needs a new run, even when the commit had one before."""
+    calls: list[tuple[str, str | None]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, json.loads(request.content).get("conclusion")))
+        return httpx.Response(201, json={"id": len(calls)})
+
+    poster = GitHubCheckRunPoster(
+        cast("GitHubAppClient", _StubGitHub(httpx.MockTransport(handler)))
+    )
+    reporter = ForgeStatusReporter(
+        {"github": poster}, MemoryCommitStatuses(), "https://ci.test"
+    )
+    await reporter.build_started(EVENT, BUILD)
+    await reporter.approval_required(PROJECT, "sha1", 7)
+    await reporter.build_started(EVENT, BUILD)
+    assert calls == [("POST", None), ("POST", "action_required"), ("POST", None)]

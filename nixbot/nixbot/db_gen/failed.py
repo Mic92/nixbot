@@ -6,32 +6,17 @@
 from __future__ import annotations
 
 __all__: collections.abc.Sequence[str] = (
-    "CheckRunAttrRow",
     "FailedBuildByDrvRow",
-    "QueryResults",
-    "check_run_attr",
-    "clear_failed_status",
     "failed_build_by_drv",
-    "failed_status_names",
-    "get_check_run_id",
-    "latest_build_for_sha",
-    "prune_old_failed_builds",
-    "prune_old_failed_statuses",
-    "upsert_check_run",
     "upsert_failed_build",
-    "upsert_failed_status",
 )
 
 import dataclasses
-import operator
 import typing
 
 if typing.TYPE_CHECKING:
     import asyncpg
-    import asyncpg.cursor
     import collections.abc
-
-    type QueryResultsArgsType = int | float | str | memoryview | collections.abc.Sequence[QueryResultsArgsType] | None
 
     type ConnectionLike = asyncpg.Connection[asyncpg.Record] | asyncpg.pool.PoolConnectionProxy[asyncpg.Record]
 
@@ -41,12 +26,6 @@ class FailedBuildByDrvRow:
     derivation: str
     timestamp: float
     url: str
-
-
-@dataclasses.dataclass()
-class CheckRunAttrRow:
-    found: str
-    attr: str | None
 
 
 FAILED_BUILD_BY_DRV: typing.Final[str] = """-- name: FailedBuildByDrv :one
@@ -62,96 +41,6 @@ ON CONFLICT (project_id, derivation)
 DO UPDATE SET timestamp = EXCLUDED.timestamp, url = EXCLUDED.url
 """
 
-UPSERT_FAILED_STATUS: typing.Final[str] = """-- name: UpsertFailedStatus :exec
-INSERT INTO failed_statuses (revision, status_name, timestamp)
-VALUES ($1, $2, $3)
-ON CONFLICT (revision, status_name)
-DO UPDATE SET timestamp = EXCLUDED.timestamp
-"""
-
-FAILED_STATUS_NAMES: typing.Final[str] = """-- name: FailedStatusNames :many
-SELECT status_name FROM failed_statuses WHERE revision = $1
-"""
-
-CLEAR_FAILED_STATUS: typing.Final[str] = """-- name: ClearFailedStatus :exec
-DELETE FROM failed_statuses WHERE revision = $1 AND status_name = $2
-"""
-
-PRUNE_OLD_FAILED_STATUSES: typing.Final[str] = """-- name: PruneOldFailedStatuses :exec
-DELETE FROM failed_statuses
-WHERE to_timestamp(timestamp) < now() - make_interval(days => $1::int)
-"""
-
-PRUNE_OLD_FAILED_BUILDS: typing.Final[str] = """-- name: PruneOldFailedBuilds :exec
-DELETE FROM failed_builds
-WHERE to_timestamp(timestamp) < now() - make_interval(days => $1::int)
-"""
-
-GET_CHECK_RUN_ID: typing.Final[str] = """-- name: GetCheckRunId :one
-SELECT external_id FROM check_runs
-WHERE project_id = $1 AND sha = $2 AND name = $3
-"""
-
-CHECK_RUN_ATTR: typing.Final[str] = """-- name: CheckRunAttr :one
-SELECT '' AS found, attr FROM check_runs
-WHERE project_id = $1 AND sha = $2 AND name = $3
-"""
-
-UPSERT_CHECK_RUN: typing.Final[str] = """-- name: UpsertCheckRun :exec
-INSERT INTO check_runs (project_id, sha, name, attr, external_id, timestamp)
-VALUES ($1, $2, $3, $4, $5, $6)
-ON CONFLICT (project_id, sha, name)
-DO UPDATE SET attr = EXCLUDED.attr, external_id = EXCLUDED.external_id,
-              timestamp = EXCLUDED.timestamp
-"""
-
-LATEST_BUILD_FOR_SHA: typing.Final[str] = """-- name: LatestBuildForSha :one
-SELECT id FROM builds WHERE project_id = $1 AND commit_sha = $2
-ORDER BY id DESC LIMIT 1
-"""
-
-
-class QueryResults[T]:
-    __slots__ = ("_args", "_conn", "_cursor", "_decode_hook", "_iterator", "_sql")
-
-    def __init__(
-        self,
-        conn: ConnectionLike,
-        sql: str,
-        decode_hook: collections.abc.Callable[[asyncpg.Record], T],
-        *args: QueryResultsArgsType,
-    ) -> None:
-        self._conn = conn
-        self._sql = sql
-        self._decode_hook = decode_hook
-        self._args = args
-        self._cursor: asyncpg.cursor.CursorFactory[asyncpg.Record] | None = None
-        self._iterator: asyncpg.cursor.CursorIterator[asyncpg.Record] | None = None
-
-    def __aiter__(self) -> QueryResults[T]:
-        return self
-
-    def __await__(
-        self,
-    ) -> collections.abc.Generator[None, None, collections.abc.Sequence[T]]:
-        async def _wrapper() -> collections.abc.Sequence[T]:
-            result = await self._conn.fetch(self._sql, *self._args)
-            return [self._decode_hook(row) for row in result]
-
-        return _wrapper().__await__()
-
-    async def __anext__(self) -> T:
-        if self._cursor is None or self._iterator is None:
-            self._cursor = self._conn.cursor(self._sql, *self._args)
-            self._iterator = self._cursor.__aiter__()
-        try:
-            record = await self._iterator.__anext__()
-        except StopAsyncIteration:
-            self._cursor = None
-            self._iterator = None
-            raise
-        return self._decode_hook(record)
-
 
 async def failed_build_by_drv(conn: ConnectionLike, *, project_id: int, derivation: str) -> FailedBuildByDrvRow | None:
     row = await conn.fetchrow(FAILED_BUILD_BY_DRV, project_id, derivation)
@@ -162,48 +51,3 @@ async def failed_build_by_drv(conn: ConnectionLike, *, project_id: int, derivati
 
 async def upsert_failed_build(conn: ConnectionLike, *, project_id: int, derivation: str, timestamp: float, url: str) -> None:
     await conn.execute(UPSERT_FAILED_BUILD, project_id, derivation, timestamp, url)
-
-
-async def upsert_failed_status(conn: ConnectionLike, *, revision: str, status_name: str, timestamp: float) -> None:
-    await conn.execute(UPSERT_FAILED_STATUS, revision, status_name, timestamp)
-
-
-def failed_status_names(conn: ConnectionLike, *, revision: str) -> QueryResults[str]:
-    return QueryResults(conn, FAILED_STATUS_NAMES, operator.itemgetter(0), revision)
-
-
-async def clear_failed_status(conn: ConnectionLike, *, revision: str, status_name: str) -> None:
-    await conn.execute(CLEAR_FAILED_STATUS, revision, status_name)
-
-
-async def prune_old_failed_statuses(conn: ConnectionLike, *, retention_days: int) -> None:
-    await conn.execute(PRUNE_OLD_FAILED_STATUSES, retention_days)
-
-
-async def prune_old_failed_builds(conn: ConnectionLike, *, retention_days: int) -> None:
-    await conn.execute(PRUNE_OLD_FAILED_BUILDS, retention_days)
-
-
-async def get_check_run_id(conn: ConnectionLike, *, project_id: int, sha: str, name: str) -> int | None:
-    row = await conn.fetchrow(GET_CHECK_RUN_ID, project_id, sha, name)
-    if row is None:
-        return None
-    return row[0]
-
-
-async def check_run_attr(conn: ConnectionLike, *, project_id: int, sha: str, name: str) -> CheckRunAttrRow | None:
-    row = await conn.fetchrow(CHECK_RUN_ATTR, project_id, sha, name)
-    if row is None:
-        return None
-    return CheckRunAttrRow(found=row[0], attr=row[1])
-
-
-async def upsert_check_run(conn: ConnectionLike, *, project_id: int, sha: str, name: str, attr: str | None, external_id: int, timestamp: float) -> None:
-    await conn.execute(UPSERT_CHECK_RUN, project_id, sha, name, attr, external_id, timestamp)
-
-
-async def latest_build_for_sha(conn: ConnectionLike, *, project_id: int, commit_sha: str) -> int | None:
-    row = await conn.fetchrow(LATEST_BUILD_FOR_SHA, project_id, commit_sha)
-    if row is None:
-        return None
-    return row[0]
