@@ -47,6 +47,7 @@ class Build:
     eval_duration_ms: int | None
     actor: str | None
     merged_pr_number: int | None
+    external: bool
 
 
 @dataclasses.dataclass()

@@ -148,6 +148,19 @@ instance admins (`POST /api/repos/github/<owner>/<repo>/pulls/<n>/approve`).
 Approval unlocks the whole pull request: the held head builds immediately and
 later pushes build without asking again. Gitea and GitLab are unaffected.
 
+With or without the gate, the same pull requests are **external** builds, and an
+approval does not change that:
+
+- Their ID tokens carry `trust = external`
+  ([WORKLOAD_IDENTITY.md](WORKLOAD_IDENTITY.md)).
+- With `services.nixbot.externalBuildStore` they build in that store and not in
+  `buildStore`.
+- A later change by one of your own (the merge to the default branch) never
+  reuses an external build of the same tree. It builds again.
+
+`CONTRIBUTOR` is anyone with one merged pull request. Remove it from
+`trustedAssociations` if only members and collaborators count as your own.
+
 ## Troubleshooting
 
 - **Projects not appearing**: Check that:

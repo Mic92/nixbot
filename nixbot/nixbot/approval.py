@@ -28,14 +28,20 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def untrusted(config: PrApprovalConfig, change: ChangeRequest) -> bool:
-    if not config.enable or change.forge != "github" or change.pr_number is None:
+def external(config: PrApprovalConfig, change: ChangeRequest) -> bool:
+    """A pull request from an outside contributor. Does not depend on
+    `enable`: the gate is optional, the trust class of the build is not."""
+    if change.forge != "github" or change.pr_number is None:
         return False
     # Pushing the head branch to the base repo already needed write
     # access. Covers GitHub Apps/bots, which always report NONE.
     if change.head_in_base_repo:
         return False
     return (change.author_association or "NONE") not in config.trusted_associations
+
+
+def untrusted(config: PrApprovalConfig, change: ChangeRequest) -> bool:
+    return config.enable and external(config, change)
 
 
 async def gate(

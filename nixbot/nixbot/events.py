@@ -50,6 +50,10 @@ class ChangeEvent:
     # Tag pushes: the tag, also held in `branch`. Its onPush effects run
     # as a delivery of their own, see deliver.py.
     tag: str | None = None
+    # A pull request from an outside contributor (approval.external).
+    # Decides the trust class of a build this event creates; a build
+    # keeps its own class afterwards.
+    external: bool = False
 
 
 def event_for_build(repo: RepoInfo, build: BuildRecord) -> ChangeEvent:
@@ -61,6 +65,7 @@ def event_for_build(repo: RepoInfo, build: BuildRecord) -> ChangeEvent:
         commit_sha=build.commit_sha,
         pr_number=build.pr_number,
         actor=build.actor,
+        external=build.external,
     )
 
 

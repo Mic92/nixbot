@@ -360,7 +360,13 @@ class BuildSettings:
     # Extra `nix build` arguments, e.g. --option overrides.
     extra_args: list[str] = field(default_factory=list)
     store: BuildStoreConfig | None = None
+    external_store: BuildStoreConfig | None = None
     issuer: IdentityIssuer | None = None
+
+    def store_for(self, identity: EffectIdentity | None) -> BuildStoreConfig | None:
+        if identity is not None and identity.trust == "external":
+            return self.external_store or self.store
+        return self.store
 
 
 def build_installables(job: NixEvalJobSuccess) -> list[str]:
@@ -373,7 +379,10 @@ def build_installables(job: NixEvalJobSuccess) -> list[str]:
 
 
 def build_nix_command(
-    job: NixEvalJobSuccess, settings: BuildSettings, out_link: Path
+    job: NixEvalJobSuccess,
+    settings: BuildSettings,
+    out_link: Path,
+    store: BuildStoreConfig | None = None,
 ) -> list[str]:
     return [
         "nix",
@@ -399,8 +408,8 @@ def build_nix_command(
         "--accept-flake-config",
         *settings.extra_args,
         *(
-            ["--store", settings.store.url, "--eval-store", "auto"]
-            if settings.store
+            ["--store", store.url, "--eval-store", "auto"]
+            if store
             else ["--out-link", str(out_link)]
         ),
         *build_installables(job),
@@ -876,7 +885,7 @@ class NixBuildExecutor:
         self, identity: EffectIdentity | None
     ) -> AsyncIterator[dict[str, str] | None]:
         """Environment pointing nix at a token file that is kept fresh."""
-        store, issuer = self.settings.store, self.settings.issuer
+        store, issuer = self.settings.store_for(identity), self.settings.issuer
         if store is None or store.oidc_audience is None:
             yield None
             return
@@ -898,7 +907,9 @@ class NixBuildExecutor:
         if cancel_event.is_set():
             return BuildOutcome.cancelled, False
         out_link = cwd / f"result-{safe_attr_filename(job.attr)}"
-        cmd = build_nix_command(job, self.settings, out_link)
+        cmd = build_nix_command(
+            job, self.settings, out_link, self.settings.store_for(identity)
+        )
         async with self._store_env(identity) as env:
             return await self._run_nix(
                 cmd, env, job, log_writer, cwd, cancel_event, on_built

@@ -6,9 +6,14 @@
 SELECT pg_advisory_xact_lock(hashtextextended(sqlc.arg(key)::text, 0));
 
 -- name: FindReusableBuild :one
--- A cancelled build carries no verdict; never reuse it.
-SELECT * FROM builds WHERE project_id = $1 AND tree_hash = $2
-AND status <> 'cancelled' ORDER BY id DESC LIMIT 1;
+-- A cancelled build carries no verdict; never reuse it. An internal
+-- change never reuses an external build: its outputs were built where
+-- external code runs, and they are in no cache.
+SELECT * FROM builds WHERE project_id = sqlc.arg(project_id)::bigint
+AND tree_hash = sqlc.arg(tree_hash)::text
+AND status <> 'cancelled'
+AND (NOT external OR sqlc.arg(external)::boolean)
+ORDER BY id DESC LIMIT 1;
 
 -- name: DetachBuildFromPr :one
 -- Reused in another context (another PR, or the default branch after
@@ -36,11 +41,11 @@ WITH n AS (
     RETURNING next_build_number - 1 AS number
 )
 INSERT INTO builds (project_id, number, tree_hash, commit_sha,
-                    branch, pr_number, pr_author, actor)
+                    branch, pr_number, pr_author, actor, external)
 SELECT sqlc.arg(project_id)::bigint, n.number, sqlc.narg(tree_hash)::text,
        sqlc.arg(commit_sha)::text, sqlc.arg(branch)::text,
        sqlc.narg(pr_number)::bigint, sqlc.narg(pr_author)::text,
-       sqlc.narg(actor)::text
+       sqlc.narg(actor)::text, sqlc.arg(external)::boolean
 FROM n
 RETURNING *;
 

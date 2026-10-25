@@ -67,8 +67,8 @@ according to the repository's effects gating.
 ## Claims
 
 Common claims: `iss` (the nixbot URL), `aud` (one requested audience per token),
-`sub`, `event`, `forge`, `repository`, `repository_owner`, `effect`, plus
-`iat`/`nbf`/`exp`/`jti`.
+`sub`, `event`, `forge`, `repository`, `repository_owner`, `effect`, `trust`,
+plus `iat`/`nbf`/`exp`/`jti`.
 
 | event        | `sub`                                                 | extra claims                               |
 | ------------ | ----------------------------------------------------- | ------------------------------------------ |
@@ -78,6 +78,12 @@ Common claims: `iss` (the nixbot URL), `aud` (one requested audience per token),
 
 Pull-request tokens carry no `ref` claim: branch-based conditions (e.g. "only
 refs/heads/main may deploy") therefore never match a PR run.
+
+`trust` is `external` for the build of a pull request from an outside
+contributor (see "Approving outside contributors" in [GITHUB.md](GITHUB.md)),
+and `internal` otherwise. The `sub` of a pull request is the same for both, so a
+relying party that must not serve outside code binds `trust = internal`. An
+approval does not change the claim.
 
 ## Relying-party configuration
 

@@ -102,7 +102,7 @@ RETURNING id, lock
 """
 
 LATEST_BUILD_FOR_PR: typing.Final[str] = """-- name: LatestBuildForPr :one
-SELECT id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms, actor, merged_pr_number FROM builds
+SELECT id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms, actor, merged_pr_number, external FROM builds
 WHERE project_id = $1
   AND $2::bigint IN (pr_number, merged_pr_number)
 ORDER BY number DESC LIMIT 1
@@ -216,6 +216,7 @@ async def latest_build_for_pr(conn: ConnectionLike, *, project_id: int, pr_numbe
         eval_duration_ms=row[20],
         actor=row[21],
         merged_pr_number=row[22],
+        external=row[23],
     )
 
 

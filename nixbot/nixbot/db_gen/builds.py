@@ -112,8 +112,11 @@ SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))
 """
 
 FIND_REUSABLE_BUILD: typing.Final[str] = """-- name: FindReusableBuild :one
-SELECT id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms, actor, merged_pr_number FROM builds WHERE project_id = $1 AND tree_hash = $2
-AND status <> 'cancelled' ORDER BY id DESC LIMIT 1
+SELECT id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms, actor, merged_pr_number, external FROM builds WHERE project_id = $1::bigint
+AND tree_hash = $2::text
+AND status <> 'cancelled'
+AND (NOT external OR $3::boolean)
+ORDER BY id DESC LIMIT 1
 """
 
 DETACH_BUILD_FROM_PR: typing.Final[str] = """-- name: DetachBuildFromPr :one
@@ -122,15 +125,15 @@ UPDATE builds SET pr_number = NULL, pr_author = NULL,
              THEN builds.pr_number ELSE NULL END,
     branch = CASE WHEN $2::bigint IS NULL
              THEN $3 ELSE branch END
-WHERE id = $1 RETURNING id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms, actor, merged_pr_number
+WHERE id = $1 RETURNING id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms, actor, merged_pr_number, external
 """
 
 ATTACH_BUILD_TO_PR: typing.Final[str] = """-- name: AttachBuildToPr :one
-UPDATE builds SET pr_number = $2, pr_author = $3 WHERE id = $1 RETURNING id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms, actor, merged_pr_number
+UPDATE builds SET pr_number = $2, pr_author = $3 WHERE id = $1 RETURNING id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms, actor, merged_pr_number, external
 """
 
 BACKFILL_PR_AUTHOR: typing.Final[str] = """-- name: BackfillPrAuthor :one
-UPDATE builds SET pr_author = $2 WHERE id = $1 RETURNING id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms, actor, merged_pr_number
+UPDATE builds SET pr_author = $2 WHERE id = $1 RETURNING id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms, actor, merged_pr_number, external
 """
 
 CREATE_BUILD: typing.Final[str] = """-- name: CreateBuild :one
@@ -140,13 +143,13 @@ WITH n AS (
     RETURNING next_build_number - 1 AS number
 )
 INSERT INTO builds (project_id, number, tree_hash, commit_sha,
-                    branch, pr_number, pr_author, actor)
+                    branch, pr_number, pr_author, actor, external)
 SELECT $1::bigint, n.number, $2::text,
        $3::text, $4::text,
        $5::bigint, $6::text,
-       $7::text
+       $7::text, $8::boolean
 FROM n
-RETURNING id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms, actor, merged_pr_number
+RETURNING id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms, actor, merged_pr_number, external
 """
 
 CREATE_FAILED_BUILD: typing.Final[str] = """-- name: CreateFailedBuild :one
@@ -161,7 +164,7 @@ SELECT $1::bigint, n.number, $2::text,
        $3::text, $4::bigint,
        $5::text, 'failed', $6::text, now()
 FROM n
-RETURNING id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms, actor, merged_pr_number
+RETURNING id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms, actor, merged_pr_number, external
 """
 
 RECORD_ATTRIBUTES: typing.Final[str] = """-- name: RecordAttributes :exec
@@ -235,7 +238,7 @@ WHERE build_id = $1
 """
 
 GET_BUILD: typing.Final[str] = """-- name: GetBuild :one
-SELECT id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms, actor, merged_pr_number FROM builds WHERE id = $1
+SELECT id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms, actor, merged_pr_number, external FROM builds WHERE id = $1
 """
 
 RECORD_EFFECTS_REF: typing.Final[str] = """-- name: RecordEffectsRef :exec
@@ -486,8 +489,8 @@ async def lock_build_identity(conn: ConnectionLike, *, key: str) -> None:
     await conn.execute(LOCK_BUILD_IDENTITY, key)
 
 
-async def find_reusable_build(conn: ConnectionLike, *, project_id: int, tree_hash: str | None) -> models.Build | None:
-    row = await conn.fetchrow(FIND_REUSABLE_BUILD, project_id, tree_hash)
+async def find_reusable_build(conn: ConnectionLike, *, project_id: int, tree_hash: str, external: bool) -> models.Build | None:
+    row = await conn.fetchrow(FIND_REUSABLE_BUILD, project_id, tree_hash, external)
     if row is None:
         return None
     return models.Build(
@@ -514,6 +517,7 @@ async def find_reusable_build(conn: ConnectionLike, *, project_id: int, tree_has
         eval_duration_ms=row[20],
         actor=row[21],
         merged_pr_number=row[22],
+        external=row[23],
     )
 
 
@@ -545,6 +549,7 @@ async def detach_build_from_pr(conn: ConnectionLike, *, id_: int, pr_number: int
         eval_duration_ms=row[20],
         actor=row[21],
         merged_pr_number=row[22],
+        external=row[23],
     )
 
 
@@ -576,6 +581,7 @@ async def attach_build_to_pr(conn: ConnectionLike, *, id_: int, pr_number: int |
         eval_duration_ms=row[20],
         actor=row[21],
         merged_pr_number=row[22],
+        external=row[23],
     )
 
 
@@ -607,11 +613,12 @@ async def backfill_pr_author(conn: ConnectionLike, *, id_: int, pr_author: str |
         eval_duration_ms=row[20],
         actor=row[21],
         merged_pr_number=row[22],
+        external=row[23],
     )
 
 
-async def create_build(conn: ConnectionLike, *, project_id: int, tree_hash: str | None, commit_sha: str, branch: str, pr_number: int | None, pr_author: str | None, actor: str | None) -> models.Build | None:
-    row = await conn.fetchrow(CREATE_BUILD, project_id, tree_hash, commit_sha, branch, pr_number, pr_author, actor)
+async def create_build(conn: ConnectionLike, *, project_id: int, tree_hash: str | None, commit_sha: str, branch: str, pr_number: int | None, pr_author: str | None, actor: str | None, external: bool) -> models.Build | None:
+    row = await conn.fetchrow(CREATE_BUILD, project_id, tree_hash, commit_sha, branch, pr_number, pr_author, actor, external)
     if row is None:
         return None
     return models.Build(
@@ -638,6 +645,7 @@ async def create_build(conn: ConnectionLike, *, project_id: int, tree_hash: str 
         eval_duration_ms=row[20],
         actor=row[21],
         merged_pr_number=row[22],
+        external=row[23],
     )
 
 
@@ -669,6 +677,7 @@ async def create_failed_build(conn: ConnectionLike, *, project_id: int, commit_s
         eval_duration_ms=row[20],
         actor=row[21],
         merged_pr_number=row[22],
+        external=row[23],
     )
 
 
@@ -737,6 +746,7 @@ async def get_build(conn: ConnectionLike, *, id_: int) -> models.Build | None:
         eval_duration_ms=row[20],
         actor=row[21],
         merged_pr_number=row[22],
+        external=row[23],
     )
 
 

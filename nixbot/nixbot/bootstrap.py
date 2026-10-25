@@ -296,6 +296,7 @@ async def build_service(config: Config) -> tuple[CIService, FastAPI]:
             show_trace=config.show_trace_on_failure,
             log_size_limit=config.log_size_limit,
             store=config.build_store,
+            external_store=config.external_build_store,
             issuer=identity_issuer,
         ),
     )

@@ -61,12 +61,14 @@ async def get_or_create_build(  # noqa: PLR0913
     pr_number: int | None = None,
     pr_author: str | None = None,
     actor: str | None = None,
+    *,
+    external: bool = False,
 ) -> tuple[BuildRecord, bool]:
     """Reuse keyed on post-merge tree hash across contexts."""
     async with pool.acquire() as conn, conn.transaction():
         await q.lock_build_identity(conn, key=f"{project_id}:{tree_hash}")
         row = await q.find_reusable_build(
-            conn, project_id=project_id, tree_hash=tree_hash
+            conn, project_id=project_id, tree_hash=tree_hash, external=external
         )
         if row is not None:
             if pr_number != row.pr_number:
@@ -100,6 +102,7 @@ async def get_or_create_build(  # noqa: PLR0913
             pr_number=pr_number,
             pr_author=pr_author,
             actor=actor,
+            external=external,
         )
         return expect(row), True
 

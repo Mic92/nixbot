@@ -370,7 +370,8 @@ async def _claimed_effect_item(
         # (see effects_event_for_build).
         event = effects_event_for_build(worktree_event.repo, build)
         task_token = o.task_tokens.issue(
-            build.project_id, identity_from_event(event, name, build.id_)
+            build.project_id,
+            identity_from_event(event, name, build.id_, external=build.external),
         )
         try:
             async with effect_checkout(

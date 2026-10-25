@@ -382,7 +382,7 @@ async def _with_build_store(
     stack: contextlib.AsyncExitStack,
 ) -> EvalSettings:
     """Send IFD builds to the build store, authenticated like attribute builds."""
-    store = o.config.build_store
+    store = o.config.store_for(external=build.external)
     if store is None:
         return settings
     settings = dataclasses.replace(
@@ -396,7 +396,7 @@ async def _with_build_store(
     token_file = await stack.enter_async_context(
         store_token_file(
             issuer,
-            identity_from_event(event, "build", build.id_),
+            identity_from_event(event, "build", build.id_, external=build.external),
             store.oidc_audience,
         )
     )
@@ -748,7 +748,10 @@ class _OrchestratorExecutor:
                     on_start=mark_building,
                     on_built=on_built if self.o.uploaders else None,
                     identity=identity_from_event(
-                        self.event, "build", self.build_record.id_
+                        self.event,
+                        "build",
+                        self.build_record.id_,
+                        external=self.build_record.external,
                     ),
                 )
                 if outcome == BuildOutcome.success:
