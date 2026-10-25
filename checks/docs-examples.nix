@@ -74,6 +74,7 @@ let
 
   primaryRepo = tag: {
     rev = "0123456789abcdef";
+    forgeType = "github";
     branch = if tag == null then "main" else null;
     inherit tag;
   };
