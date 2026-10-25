@@ -380,6 +380,10 @@ class Config(BaseModel):
     # Global cap on concurrent attribute builds; None = derive from CPU count.
     build_concurrency: int | None = None
     build_store: BuildStoreConfig | None = None
+    # Where builds of outside contributors' pull requests run instead of
+    # build_store, so that their code never reaches the builders that
+    # internal builds share.
+    external_build_store: BuildStoreConfig | None = None
 
     gitea: GiteaConfig | None = None
     gitlab: GitlabConfig | None = None
@@ -438,6 +442,18 @@ class Config(BaseModel):
     # Also bind the TCP port when a unix socket is configured. Off by
     # default because the TCP listener would bypass the TLS proxy.
     http_listen: bool = False
+
+    def store_for(self, *, external: bool) -> BuildStoreConfig | None:
+        if external and self.external_build_store is not None:
+            return self.external_build_store
+        return self.build_store
+
+    @model_validator(mode="after")
+    def _external_store_replaces_a_store(self) -> Config:
+        if self.external_build_store is not None and self.build_store is None:
+            msg = "external_build_store needs build_store"
+            raise ValueError(msg)
+        return self
 
     @model_validator(mode="after")
     def _uploaders_need_local_outputs(self) -> Config:

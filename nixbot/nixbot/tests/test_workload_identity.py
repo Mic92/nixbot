@@ -172,8 +172,9 @@ def change_event(pr_number: int | None = None) -> ChangeEvent:
 
 
 def test_identity_from_push_event() -> None:
-    identity = identity_from_event(change_event(), "default.deploy", 42)
+    identity = identity_from_event(change_event(), "default.deploy", 42, external=False)
     assert identity.sub == "repo:github:acme/widgets:ref:refs/heads/main"
+    assert identity.claims()["trust"] == "internal"
     assert identity.event == "push"
     assert identity.sha == "a" * 40
     assert identity.allowed_audiences == ()
@@ -182,11 +183,24 @@ def test_identity_from_push_event() -> None:
 def test_identity_from_pull_request_event() -> None:
     # ChangeEvent.branch of a PR is the base branch: it must appear as
     # base_ref, never as ref/branch.
-    identity = identity_from_event(change_event(pr_number=7), "default.deploy", 42)
+    identity = identity_from_event(
+        change_event(pr_number=7), "default.deploy", 42, external=False
+    )
     assert identity.sub == "repo:github:acme/widgets:pull_request"
+    assert identity.claims()["trust"] == "internal"
     assert identity.branch is None
     assert identity.base_ref == "refs/heads/main"
     assert identity.pr_number == 7  # noqa: PLR2004
+
+
+def test_external_build_is_named_in_the_token() -> None:
+    # The sub of a pull request is the same for insiders and outsiders:
+    # a relying party tells them apart by this claim.
+    identity = identity_from_event(
+        change_event(pr_number=7), "build", 42, external=True
+    )
+    assert identity.sub == "repo:github:acme/widgets:pull_request"
+    assert identity.claims()["trust"] == "external"
 
 
 def test_task_tokens_bind_audiences() -> None:
@@ -197,7 +211,9 @@ def test_task_tokens_bind_audiences() -> None:
     assert claim is not None
     assert claim.identity is None  # discovery runs never gain an identity
 
-    run_token = tokens.issue(1, identity_from_event(change_event(), "e", 1))
+    run_token = tokens.issue(
+        1, identity_from_event(change_event(), "e", 1, external=False)
+    )
     tokens.bind_audiences(run_token, ["https://cache.example.com"])
     claim = tokens.claim_for(run_token)
     assert claim is not None

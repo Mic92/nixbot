@@ -331,6 +331,37 @@ async def test_cancelled_build_not_reused(pool: asyncpg.Pool) -> None:
     assert second.id_ != first.id_
 
 
+async def test_internal_change_does_not_reuse_external_build(
+    pool: asyncpg.Pool,
+) -> None:
+    # An outside pull request built this tree where external code runs.
+    # The merge to main has the same tree and must build again.
+    project_id = await insert_project(pool, "external-reuse")
+    first, created = await db.get_or_create_build(
+        pool, project_id, "tree-x", "sha", "main", pr_number=7, external=True
+    )
+    assert created
+    assert first.external
+    again, created = await db.get_or_create_build(
+        pool, project_id, "tree-x", "sha", "main", pr_number=7, external=True
+    )
+    assert not created
+    assert again.id_ == first.id_
+    merged, created = await db.get_or_create_build(
+        pool, project_id, "tree-x", "sha2", "main"
+    )
+    assert created
+    assert not merged.external
+    # The other way is fine: the tree was already built as ours, and the
+    # build keeps its class.
+    reused, created = await db.get_or_create_build(
+        pool, project_id, "tree-x", "sha3", "main", pr_number=8, external=True
+    )
+    assert not created
+    assert reused.id_ == merged.id_
+    assert not reused.external
+
+
 async def test_reuse_backfills_pr_fields(pool: asyncpg.Pool) -> None:
     # Branch push creates the build first. The PR event for the same
     # tree must backfill pr_number/pr_author so the PR author keeps

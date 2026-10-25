@@ -141,6 +141,7 @@ class WebRecentBuildsRow:
     eval_duration_ms: int | None
     actor: str | None
     merged_pr_number: int | None
+    external: bool
     owner: str
     project_name: str
     forge: str
@@ -173,6 +174,7 @@ class WebBuildsForRepoRow:
     eval_duration_ms: int | None
     actor: str | None
     merged_pr_number: int | None
+    external: bool
     effects_status: str
 
 
@@ -259,6 +261,7 @@ class WebQueueRow:
     eval_duration_ms: int | None
     actor: str | None
     merged_pr_number: int | None
+    external: bool
     owner: str
     project_name: str
     forge: str
@@ -416,7 +419,7 @@ SELECT p.id, p.forge, p.forge_repo_id, p.owner, p.name, p.default_branch, p.url,
        h.history, m.median_secs, m.pass_rate
 FROM projects p
 LEFT JOIN LATERAL (
-    SELECT id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms, actor, merged_pr_number FROM builds b WHERE b.project_id = p.id
+    SELECT id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms, actor, merged_pr_number, external FROM builds b WHERE b.project_id = p.id
       AND b.pr_number IS NULL AND b.branch = p.default_branch
     ORDER BY b.number DESC LIMIT 1
 ) lb ON true
@@ -462,7 +465,7 @@ ORDER BY p.owner, p.name
 """
 
 WEB_RECENT_BUILDS: typing.Final[str] = """-- name: WebRecentBuilds :many
-SELECT b.id, b.project_id, b.number, b.tree_hash, b.commit_sha, b.branch, b.pr_number, b.pr_author, b.status, b.status_generation, b.effects_started, b.error, b.created_at, b.started_at, b.finished_at, b.eval_warnings, b.eval_completed, b.effects_commit_sha, b.effects_branch, b.effects_pr_number, b.eval_duration_ms, b.actor, b.merged_pr_number, p.owner, p.name AS project_name, p.forge, p.url,
+SELECT b.id, b.project_id, b.number, b.tree_hash, b.commit_sha, b.branch, b.pr_number, b.pr_author, b.status, b.status_generation, b.effects_started, b.error, b.created_at, b.started_at, b.finished_at, b.eval_warnings, b.eval_completed, b.effects_commit_sha, b.effects_branch, b.effects_pr_number, b.eval_duration_ms, b.actor, b.merged_pr_number, b.external, p.owner, p.name AS project_name, p.forge, p.url,
        (SELECT CASE
             WHEN bool_or(r.status = 'running')
               OR (bool_or(r.status = 'pending') AND NOT bool_and(r.status = 'pending'))
@@ -479,7 +482,7 @@ ORDER BY b.id DESC LIMIT $3::bigint
 """
 
 WEB_BUILDS_FOR_REPO: typing.Final[str] = """-- name: WebBuildsForRepo :many
-SELECT b.id, b.project_id, b.number, b.tree_hash, b.commit_sha, b.branch, b.pr_number, b.pr_author, b.status, b.status_generation, b.effects_started, b.error, b.created_at, b.started_at, b.finished_at, b.eval_warnings, b.eval_completed, b.effects_commit_sha, b.effects_branch, b.effects_pr_number, b.eval_duration_ms, b.actor, b.merged_pr_number,
+SELECT b.id, b.project_id, b.number, b.tree_hash, b.commit_sha, b.branch, b.pr_number, b.pr_author, b.status, b.status_generation, b.effects_started, b.error, b.created_at, b.started_at, b.finished_at, b.eval_warnings, b.eval_completed, b.effects_commit_sha, b.effects_branch, b.effects_pr_number, b.eval_duration_ms, b.actor, b.merged_pr_number, b.external,
        (SELECT CASE
             WHEN bool_or(r.status = 'running')
               OR (bool_or(r.status = 'pending') AND NOT bool_and(r.status = 'pending'))
@@ -501,7 +504,7 @@ ORDER BY b.number DESC LIMIT $8 OFFSET $7
 """
 
 WEB_BUILD_BY_NUMBER: typing.Final[str] = """-- name: WebBuildByNumber :one
-SELECT id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms, actor, merged_pr_number FROM builds WHERE project_id = $1 AND number = $2
+SELECT id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms, actor, merged_pr_number, external FROM builds WHERE project_id = $1 AND number = $2
 """
 
 WEB_NEIGHBOR_NUMBERS: typing.Final[str] = """-- name: WebNeighborNumbers :one
@@ -585,7 +588,7 @@ WHERE b.project_id = $1 AND a.attr = $2
 """
 
 WEB_QUEUE: typing.Final[str] = """-- name: WebQueue :many
-SELECT b.id, b.project_id, b.number, b.tree_hash, b.commit_sha, b.branch, b.pr_number, b.pr_author, b.status, b.status_generation, b.effects_started, b.error, b.created_at, b.started_at, b.finished_at, b.eval_warnings, b.eval_completed, b.effects_commit_sha, b.effects_branch, b.effects_pr_number, b.eval_duration_ms, b.actor, b.merged_pr_number, p.owner, p.name AS project_name, p.forge, p.url,
+SELECT b.id, b.project_id, b.number, b.tree_hash, b.commit_sha, b.branch, b.pr_number, b.pr_author, b.status, b.status_generation, b.effects_started, b.error, b.created_at, b.started_at, b.finished_at, b.eval_warnings, b.eval_completed, b.effects_commit_sha, b.effects_branch, b.effects_pr_number, b.eval_duration_ms, b.actor, b.merged_pr_number, b.external, p.owner, p.name AS project_name, p.forge, p.url,
        q.queue_position
 FROM builds b
 JOIN projects p ON p.id = b.project_id
@@ -862,11 +865,12 @@ def web_recent_builds(conn: ConnectionLike, *, project_ids: collections.abc.Sequ
             eval_duration_ms=row[20],
             actor=row[21],
             merged_pr_number=row[22],
-            owner=row[23],
-            project_name=row[24],
-            forge=row[25],
-            url=row[26],
-            effects_status=row[27],
+            external=row[23],
+            owner=row[24],
+            project_name=row[25],
+            forge=row[26],
+            url=row[27],
+            effects_status=row[28],
         )
 
     return QueryResults(conn, WEB_RECENT_BUILDS, _decode_hook, project_ids, before, limit_)
@@ -898,7 +902,8 @@ def web_builds_for_repo(conn: ConnectionLike, *, project_id: int, status: str | 
             eval_duration_ms=row[20],
             actor=row[21],
             merged_pr_number=row[22],
-            effects_status=row[23],
+            external=row[23],
+            effects_status=row[24],
         )
 
     return QueryResults(conn, WEB_BUILDS_FOR_REPO, _decode_hook, project_id, status, branch, pr_number, commit_prefix, before, offset, limit)
@@ -932,6 +937,7 @@ async def web_build_by_number(conn: ConnectionLike, *, project_id: int, number: 
         eval_duration_ms=row[20],
         actor=row[21],
         merged_pr_number=row[22],
+        external=row[23],
     )
 
 
@@ -1126,11 +1132,12 @@ def web_queue(conn: ConnectionLike, *, project_ids: collections.abc.Sequence[int
             eval_duration_ms=row[20],
             actor=row[21],
             merged_pr_number=row[22],
-            owner=row[23],
-            project_name=row[24],
-            forge=row[25],
-            url=row[26],
-            queue_position=row[27],
+            external=row[23],
+            owner=row[24],
+            project_name=row[25],
+            forge=row[26],
+            url=row[27],
+            queue_position=row[28],
         )
 
     return QueryResults(conn, WEB_QUEUE, _decode_hook, project_ids)

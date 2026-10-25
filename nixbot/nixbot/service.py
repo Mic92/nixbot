@@ -465,6 +465,7 @@ class CIService:
             commit_message=change.commit_message,
             actor=change.actor,
             tag=change.tag,
+            external=approval.external(self.config.pr_approval, change),
         )
         await self.orchestrator.handle_change_event(event, credentials)
 
@@ -489,7 +490,7 @@ class CIService:
             info.key, f"{commit}^{{tree}}"
         )
         build = await builds_q.find_reusable_build(
-            self.pool, project_id=project_id, tree_hash=tree_hash
+            self.pool, project_id=project_id, tree_hash=tree_hash, external=True
         )
         return build is not None
 

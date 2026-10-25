@@ -324,6 +324,7 @@ class Orchestrator:
                 pr_number=event.pr_number,
                 pr_author=event.pr_author,
                 actor=event.actor,
+                external=event.external,
             )
             await self._dispatch_build(
                 event,
