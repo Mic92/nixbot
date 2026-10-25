@@ -51,6 +51,7 @@ async def attach_linked_event(
             o.linked_events[build.id_].remove(event)
         await replay_terminal_status(o, event, current)
         await o.deliver_tag(event, current, current.status)
+        await deliver_branch_push(o, event, current)
 
 
 async def replay_terminal_status(
@@ -110,6 +111,19 @@ async def finish_linked(
             await o.reporter.eval_cancelled(linked, build)
         await o.reporter.build_finished(linked, build, result)
         await o.deliver_tag(linked, build, result.status)
+        await deliver_branch_push(o, linked, build)
+
+
+async def deliver_branch_push(
+    o: Orchestrator, event: ChangeEvent, build: BuildRecord
+) -> None:
+    """The build's build_finished went to the context that started it,
+    often a PR. A branch push needs its own."""
+    if event.pr_number is not None or event.tag is not None:
+        return
+    refreshed = await builds_q.get_build(o.pool, id_=build.id_)
+    if refreshed is not None:
+        await o.deliver_events(event, refreshed)
 
 
 async def is_ancestor(

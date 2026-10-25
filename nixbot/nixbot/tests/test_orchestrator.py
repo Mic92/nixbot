@@ -2292,6 +2292,46 @@ async def test_push_reusing_pr_build_delivers_build_finished(
     assert await build_finished_deliveries(pool) == []
 
 
+async def test_push_linking_running_pr_build_delivers_build_finished(
+    pool: asyncpg.Pool, make_env: EnvFactory, upstream: Path
+) -> None:
+    """A branch push that links to a PR's still running build gets its own
+    build_finished when it finishes. A PR linking to it gets none."""
+    pr_sha = add_commit(upstream, "link-running")
+    executor = FakeExecutor(gate=asyncio.Event())
+    orchestrator, _, project = await make_env(
+        FakeEvalRunner([mk_job("a")]), executor, name="link-running"
+    )
+    pr_task = asyncio.create_task(
+        orchestrator.handle_change_event(
+            ChangeEvent(repo=project, branch="main", commit_sha=pr_sha, pr_number=9)
+        )
+    )
+    await asyncio.wait_for(executor.started.wait(), timeout=10)
+
+    git(upstream, "commit", "--allow-empty", "-m", "link-running-merge")
+    main_sha = git(upstream, "rev-parse", "HEAD")
+    main_build = await orchestrator.handle_change_event(
+        ChangeEvent(repo=project, branch="main", commit_sha=main_sha)
+    )
+    pr_build = await orchestrator.handle_change_event(
+        ChangeEvent(repo=project, branch="main", commit_sha=main_sha, pr_number=10)
+    )
+    assert executor.gate is not None
+    executor.gate.set()
+    built = await asyncio.wait_for(pr_task, timeout=10)
+    assert built is not None
+    assert main_build is not None
+    assert pr_build is not None
+    assert main_build.id_ == pr_build.id_ == built.id_
+
+    deliveries = await build_finished_deliveries(pool)
+    assert sorted((d.get("pr_number") or 0, d["rev"]) for d in deliveries) == [
+        (0, main_sha),
+        (9, pr_sha),
+    ]
+
+
 async def tag_deliveries(pool: asyncpg.Pool) -> list[dict[str, object]]:
     rows = await pool.fetch(
         "SELECT payload FROM work_queue"
