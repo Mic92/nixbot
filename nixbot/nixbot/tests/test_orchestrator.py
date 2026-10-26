@@ -2604,6 +2604,14 @@ async def test_reuse_replays_effect_statuses_to_new_commit(
     )
     assert first is not None
     await drain_effect_items(orchestrator, project, pool)
+    # An onEvent effect of the build failed too. Delivered effects post
+    # no status when they run, so none may be replayed for them.
+    await pool.execute(
+        "INSERT INTO effect_runs (project_id, kind, build_id, name, status, payload)"
+        " VALUES ($1, 'pull_request', $2, 'preview', 'failed', '{}')",
+        project.id,
+        first.id_,
+    )
 
     # A second commit with an identical tree reuses the build. Its
     # effects do not re-run, so the statuses must be replayed.
@@ -2617,6 +2625,7 @@ async def test_reuse_replays_effect_statuses_to_new_commit(
     assert reused.id_ == first.id_
     replayed = [e for e in reporter.events if e[0].startswith("effect")]
     assert ("effect-finished", first.id_, "deploy", False) in replayed
+    assert not any(e[:3] == ("effect-finished", first.id_, "preview") for e in replayed)
     assert any(e[:4] == ("effects-finished", first.id_, 1, 0) for e in replayed)
 
 
