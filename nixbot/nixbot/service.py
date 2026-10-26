@@ -358,7 +358,16 @@ class CIService:
     async def _submit_change(self, change: ChangeRequest) -> None:
         """Enqueue only. The dispatcher runs _process_change. The key
         serializes deliveries of one commit, not of one branch:
-        supersede needs newer commits to run concurrently."""
+        supersede needs newer commits to run concurrently. A PR's
+        queued, unclaimed pushes are superseded by this one, as a running
+        build is: their commits are no longer the PR's head."""
+        if change.pr_number is not None:
+            await q.supersede_pending_changes(
+                self.pool,
+                forge=change.forge,
+                forge_repo_id=change.forge_repo_id,
+                pr_number=change.pr_number,
+            )
         await self.enqueue_work(
             "change",
             f"change-{change.forge}-{change.forge_repo_id}-{change.commit_sha}",
