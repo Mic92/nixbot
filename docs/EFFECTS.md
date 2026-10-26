@@ -467,6 +467,33 @@ With `perInput = true`, each input gets its own branch and pull request, like
 Dependabot. Runs where an input did not move leave its branch alone, so CI does
 not run again. `excludeInputs` names inputs to skip.
 
+Some files have to change together with the lock. A vendor hash goes stale when
+nixpkgs changes its fetcher. A `deps.nix` generated from `mix.lock` falls behind
+because Hex packages are not flake inputs. `postUpdate` runs bash in the
+checkout after `nix flake update`, so the same pull request carries those files
+and CI tests them with the new lock. It commits what it changes. Changes left
+uncommitted, untracked files included, fail the effect. Upstream does this
+through `module` by extending `git.update.script`.
+
+```nix
+herculesCI = { primaryRepo, ... }: {
+  onSchedule.flake-update = {
+    when.dayOfWeek = [ "Sun" ];
+    outputs.effects.update = (nixbot.lib.effects { inherit pkgs; }).flakeUpdate {
+      inherit (primaryRepo) forgeType;
+      # Hex packages with the new nixpkgs' Elixir; deps_nix's mix alias
+      # regenerates deps.nix.
+      postUpdate = ''
+        export PATH=${lib.makeBinPath [ pkgs.beamPackages.elixir pkgs.git ]}:$PATH
+        mix deps.update --all
+        git add mix.lock deps.nix
+        git diff --cached --quiet || git commit -m "mix.lock: Update"
+      '';
+    };
+  };
+};
+```
+
 ## Tag pushes
 
 Pushing a tag runs the tagged commit's `onPush` effects with `primaryRepo.tag`
