@@ -242,6 +242,12 @@ def nix_flake_update(nix: str, path: str, inputs: list[str], summary: str) -> No
     subprocess.run(command, cwd=path, input="n\n" * 100, text=True, check=True)
 
 
+def post_update(config: dict) -> None:
+    if config["postUpdate"]:
+        print("Running postUpdate...", file=sys.stderr)
+        subprocess.run([config["postUpdate"]], check=True)
+
+
 def flake_inputs(rev: str, path: str, flake: dict) -> list[str]:
     """The inputs to update: those named, or the lock file's direct
     inputs, less the excluded ones."""
@@ -294,8 +300,9 @@ def merge_base(update_branch: str, base: str, method: str | None) -> None:
 
 def push(update_branch: str, before: str, force: str | None) -> bool:
     """Push the update branch if the update committed anything."""
-    if git("diff", "HEAD", "--stat"):
-        raise Failed("the update left uncommitted changes")
+    # Untracked files too: a file postUpdate generates but does not add.
+    if changes := git("status", "--porcelain"):
+        raise Failed(f"the update left uncommitted changes:\n{changes}")
     if git("rev-parse", "HEAD") == before:
         print(f"No updates to push to {update_branch}.")
         return False
@@ -310,15 +317,28 @@ def push(update_branch: str, before: str, force: str | None) -> bool:
     return True
 
 
+def commit_bodies(before: str) -> str:
+    """The bodies of the commits since `before`, oldest first: the lock
+    file's, and those postUpdate made."""
+    bodies = git("log", "--reverse", "--format=%b%x00", f"{before}..HEAD")
+    return "\n\n".join(b.strip() for b in bodies.split("\0") if b.strip())
+
+
 def open_pull_request(
-    forge: Forge, config: dict, update_branch: str, base: str, title: str
+    forge: Forge,
+    config: dict,
+    update_branch: str,
+    base: str,
+    title: str,
+    body: str,
 ) -> None:
     update = f"refs/remotes/origin/{update_branch}"
     # Too many pull requests beats too few: make sure one is open.
     if not config["createPullRequest"] or not has_ref(update):
         return
-    body = config["pullRequestBody"]
-    if body is None:
+    if config["pullRequestBody"] is not None:
+        body = config["pullRequestBody"]
+    elif not body:
         body = git("log", "-1", "--format=%b", update)
     pr = forge.open_pull_request(update_branch, base, title, body)
     method = config["autoMergeMethod"]
@@ -352,11 +372,13 @@ def update_together(forge: Forge, config: dict, default_branch: str, nix: str) -
         where = "" if list(flakes) == ["."] else f" in '{path}'"
         print(f"Running nix flake update{where}...", file=sys.stderr)
         nix_flake_update(nix, path, inputs, flake.get("commitSummary", ""))
+    post_update(config)
     # Rebase rewrites the branch, and reset starts it over.
     force = {"rebase": "force-with-lease", "reset": "force"}.get(method or "")
     push(branch, before, force)
     title = config["pullRequestTitle"] or f"{title_for(list(flakes))}: Update"
-    open_pull_request(forge, config, branch, default_branch, title)
+    body = commit_bodies(before)
+    open_pull_request(forge, config, branch, default_branch, title, body)
 
 
 def update_each(forge: Forge, config: dict, default_branch: str, nix: str) -> None:
@@ -376,6 +398,7 @@ def update_each(forge: Forge, config: dict, default_branch: str, nix: str) -> No
                 git("checkout", "--quiet", "-B", branch, base)
                 before = git("rev-parse", "HEAD")
                 nix_flake_update(nix, path, [name], summary)
+                post_update(config)
                 if not push(branch, before, "force") and has_ref(
                     f"refs/remotes/origin/{branch}"
                 ):
@@ -388,6 +411,7 @@ def update_each(forge: Forge, config: dict, default_branch: str, nix: str) -> No
                     branch,
                     default_branch,
                     config["pullRequestTitle"] or summary,
+                    commit_bodies(before),
                 )
             except ERRORS as e:
                 print(f"{summary} failed: {e}", file=sys.stderr)

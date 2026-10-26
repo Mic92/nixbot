@@ -53,6 +53,12 @@ passedArgs@{
   # Not upstream: a branch `<updateBranch>-<input>` and pull request per
   # input (of `inputs`, or all), each started afresh from the base.
   perInput ? false,
+  # Not upstream, where `module` extends `git.update.script`: bash run in
+  # the checkout's root after the lock files are updated, before the
+  # push, for files that have to change with them (a vendor hash, a
+  # generated deps.nix). It commits what it changes; uncommitted changes
+  # fail the effect. With perInput it runs once per input.
+  postUpdate ? null,
   nix ? pkgs.nix,
 }:
 assert lib.assertOneOf "forgeType" forgeType [
@@ -95,6 +101,14 @@ let
         perInput
         ;
       nix = lib.getExe nix;
+      postUpdate =
+        if postUpdate == null then
+          null
+        else
+          pkgs.writeShellScript "flake-update-post-update" ''
+            set -euo pipefail
+            ${postUpdate}
+          '';
     }
   );
 in
