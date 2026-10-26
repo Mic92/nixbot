@@ -233,6 +233,48 @@ async def test_pr_close_discards_queued_changes(service: CIService) -> None:
     assert status == "done"
 
 
+async def test_a_newer_push_to_a_pr_supersedes_its_queued_ones(
+    service: CIService,
+) -> None:
+    """A PR pushed again while its earlier pushes wait builds only the
+    newest: a restack force-pushes every branch of a stack, again and
+    again, and each older commit is gone from the PR."""
+
+    pool = service.pool
+    project_id = await seed_project(pool, "http://x")
+    forge_repo_id = await pool.fetchval(
+        "SELECT forge_repo_id FROM projects WHERE id = $1", project_id
+    )
+    for commit in ["c1", "c2", "c3"]:
+        await service.submit(
+            ChangeRequest(
+                forge="github",
+                forge_repo_id=forge_repo_id,
+                branch="main",
+                commit_sha=commit,
+                pr_number=12,
+            )
+        )
+    # Another PR's queued push is its own.
+    await service.submit(
+        ChangeRequest(
+            forge="github",
+            forge_repo_id=forge_repo_id,
+            branch="main",
+            commit_sha="d1",
+            pr_number=13,
+        )
+    )
+    handled: list[tuple[int | None, str]] = []
+
+    async def fake_handle(event: Any, credentials: Any = None) -> None:
+        handled.append((event.pr_number, event.commit_sha))
+
+    service.orchestrator.handle_change_event = fake_handle  # type: ignore[method-assign]
+    await service.drain_work()
+    assert sorted(handled) == [(12, "c3"), (13, "d1")]
+
+
 async def test_build_branches_gates_branch_pushes(
     service: CIService, git_repo: tuple[Path, str]
 ) -> None:
@@ -403,7 +445,8 @@ async def test_pr_approval_gate(
     await service.submit(pr(6, "c2", "FIRST_TIME_CONTRIBUTOR"))
     await service.drain_work()
     assert handled == [(5, sha)]
-    assert gates == [("c1", 6), ("c2", 6)]
+    # PR 6's second push superseded its first while both were queued.
+    assert gates == [("c2", 6)]
     pending = await approvals_q.pending_approvals(pool, project_id=project_id)
     assert [(p.pr_number, p.commit_sha) for p in pending] == [(6, "c2")]
 
@@ -421,7 +464,8 @@ async def test_pr_approval_gate(
     await service.submit(pr(6, "c3", "FIRST_TIME_CONTRIBUTOR"))
     await service.drain_work()
     assert handled[-1] == (6, "c3")
-    assert len(gates) == 2
+    # Approved, its later push posts no gate.
+    assert gates == [("c2", 6)]
 
     # Pre-approval (no held change yet) still unlocks the PR.
     await service.approve_pr(project_id, 8, "github:maint")
