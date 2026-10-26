@@ -34,8 +34,24 @@ DO NOTHING;
 -- a build's locked effects all finish before the next build's start.
 -- Effect items are additionally held back until every declared
 -- dependency settled; the runner then decides between run and skip.
--- A pull request based on a lower-numbered PR's head branch waits for
--- that PR's queued or running change items, so a stack builds bottom-up.
+-- A pull request based on another PR's head branch waits for that PR's
+-- queued or running change items, so a stack builds bottom-up. Where PRs
+-- are based on each other round a cycle, only the higher number waits,
+-- so one of them goes first.
+WITH RECURSIVE bases (id, branch) AS (
+    -- Each queued or running PR change item's base, and the bases below
+    -- it through the other queued PRs.
+    SELECT q.id, q.payload->>'branch'
+    FROM work_queue q
+    WHERE q.kind = 'change' AND q.status IN ('pending', 'running')
+      AND (q.payload->>'head_in_base_repo')::boolean
+    UNION
+    SELECT bases.id, c.payload->>'branch'
+    FROM bases
+    JOIN work_queue c ON c.payload->>'head_ref' = bases.branch
+    WHERE c.kind = 'change' AND c.status IN ('pending', 'running')
+      AND (c.payload->>'head_in_base_repo')::boolean
+)
 UPDATE work_queue SET status = 'running', claimed_at = now()
 WHERE id = (
     SELECT id FROM work_queue w
@@ -65,7 +81,15 @@ WHERE id = (
           AND b.payload->>'forge_repo_id' = w.payload->>'forge_repo_id'
           AND (b.payload->>'head_in_base_repo')::boolean
           AND b.payload->>'head_ref' = w.payload->>'branch'
-          AND (b.payload->>'pr_number')::int < (w.payload->>'pr_number')::int
+          AND (b.payload->>'pr_number')::int <> (w.payload->>'pr_number')::int
+          AND (
+            (b.payload->>'pr_number')::int < (w.payload->>'pr_number')::int
+            -- A higher-numbered base holds w unless w is below it too.
+            OR NOT EXISTS (
+              SELECT 1 FROM bases
+              WHERE bases.id = b.id AND bases.branch = w.payload->>'head_ref'
+            )
+          )
           AND NOT EXISTS (
             SELECT 1 FROM projects j
             WHERE j.forge = w.payload->>'forge'

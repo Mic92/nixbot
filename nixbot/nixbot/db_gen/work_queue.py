@@ -62,6 +62,20 @@ DO NOTHING
 """
 
 CLAIM_NEXT_WORK_ITEM: typing.Final[str] = """-- name: ClaimNextWorkItem :one
+WITH RECURSIVE bases (id, branch) AS (
+    -- Each queued or running PR change item's base, and the bases below
+    -- it through the other queued PRs.
+    SELECT q.id, q.payload->>'branch'
+    FROM work_queue q
+    WHERE q.kind = 'change' AND q.status IN ('pending', 'running')
+      AND (q.payload->>'head_in_base_repo')::boolean
+    UNION
+    SELECT bases.id, c.payload->>'branch'
+    FROM bases
+    JOIN work_queue c ON c.payload->>'head_ref' = bases.branch
+    WHERE c.kind = 'change' AND c.status IN ('pending', 'running')
+      AND (c.payload->>'head_in_base_repo')::boolean
+)
 UPDATE work_queue SET status = 'running', claimed_at = now()
 WHERE id = (
     SELECT id FROM work_queue w
@@ -91,7 +105,15 @@ WHERE id = (
           AND b.payload->>'forge_repo_id' = w.payload->>'forge_repo_id'
           AND (b.payload->>'head_in_base_repo')::boolean
           AND b.payload->>'head_ref' = w.payload->>'branch'
-          AND (b.payload->>'pr_number')::int < (w.payload->>'pr_number')::int
+          AND (b.payload->>'pr_number')::int <> (w.payload->>'pr_number')::int
+          AND (
+            (b.payload->>'pr_number')::int < (w.payload->>'pr_number')::int
+            -- A higher-numbered base holds w unless w is below it too.
+            OR NOT EXISTS (
+              SELECT 1 FROM bases
+              WHERE bases.id = b.id AND bases.branch = w.payload->>'head_ref'
+            )
+          )
           AND NOT EXISTS (
             SELECT 1 FROM projects j
             WHERE j.forge = w.payload->>'forge'
