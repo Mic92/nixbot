@@ -113,6 +113,7 @@ def effects_context(  # noqa: PLR0913
     git_token: str | None,
     task_token: str | None,
     tag: str | None = None,
+    with_default_event_effects: bool = True,
 ) -> EffectsContext:
     """Context with the service-level configuration filled in. Shared
     by push and scheduled effect runs. A tag push has no branch."""
@@ -136,6 +137,9 @@ def effects_context(  # noqa: PLR0913
         project_id=str(info.id),
         mountables_file=config.effects_mountables_file,
         extra_nix_options=list(config.effects_extra_nix_options.items()),
+        default_event_effects=config.effects_default_event_effects
+        if with_default_event_effects
+        else None,
     )
 
 
