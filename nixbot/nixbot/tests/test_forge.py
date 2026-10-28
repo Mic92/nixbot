@@ -38,8 +38,10 @@ from nixbot.reconcile import (
 )
 from nixbot.repos import RepoStore
 from nixbot.status import (
+    CommitStatusStore,
     GiteaStatusPoster,
     GitHubCheckRunPoster,
+    PostedStatus,
     StatusState,
 )
 
@@ -732,6 +734,46 @@ async def test_reconcile_unbuilt_heads(pool: asyncpg.Pool) -> None:
     events.clear()
     submitted = await reconcile_repo(pool, project, heads, Sink())
     assert submitted == 0  # main head cancelled, PRs skipped
+
+
+async def test_reconcile_skips_heads_that_reused_a_build(pool: asyncpg.Pool) -> None:
+    """A head with the tree of an earlier build reuses it and gets no
+    build record of its own, only the replayed statuses. Submitting it
+    again after a restart reruns the PR's onEvent effects, which post
+    their comments a second time."""
+    project_id = await insert_project(
+        pool, "reused", forge="github", forge_repo_id="reused-1"
+    )
+    await insert_build(pool, project_id, commit_sha="first-push", status="succeeded")
+    statuses = CommitStatusStore(pool)
+    # replay_terminal_status onto PR 7's head, which has the same tree.
+    await statuses.set(
+        project_id, "same-tree", "nixbot/nix-build", PostedStatus(StatusState.success)
+    )
+    # PR 8 waits for approval: the gate is all nixbot posted, no build.
+    await statuses.set(
+        project_id,
+        "gated",
+        "nixbot/nix-eval",
+        PostedStatus(StatusState.action_required),
+    )
+    project = await RepoStore(pool).by_forge_id("github", "reused-1")
+    assert project is not None
+    heads = [
+        RemoteHead(branch="main", commit_sha="first-push"),
+        RemoteHead(branch="main", commit_sha="same-tree", pr_number=7),
+        RemoteHead(branch="main", commit_sha="gated", pr_number=8),
+    ]
+
+    events: list[object] = []
+
+    class Sink:
+        async def submit(self, event: object) -> None:
+            events.append(event)
+
+    submitted = await reconcile_repo(pool, project, heads, Sink())
+    assert submitted == 1
+    assert events[0].commit_sha == "gated"  # type: ignore[attr-defined]
 
 
 async def test_gitea_watermark_stops_pagination(pool: asyncpg.Pool) -> None:

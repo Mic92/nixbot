@@ -3,8 +3,10 @@ default-branch head and open-PR heads that have no build record yet.
 
 Runs after crash recovery. Duplicates are resolved by the
 supersede rules. "Built" means any build record exists for the head
-commit in that project, regardless of result — exact merge-tree
-checking happens once the orchestrator computes the tree.
+commit in that project, regardless of result, or the result of a build
+it reused was posted on it. Resubmitting a reusing head reruns its
+pull request's onEvent effects. Exact merge-tree checking happens once
+the orchestrator computes the tree.
 """
 
 from __future__ import annotations
