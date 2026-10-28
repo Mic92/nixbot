@@ -609,7 +609,7 @@ async def build_attributes(  # noqa: PLR0913
             attr_prefix=BranchConfig.load(worktree_path).attribute,
         ),
     )
-    await o.finish_linked(
+    linked_events = await o.finish_linked(
         build,
         BuildResult(status, generation, schedule_result.results),
         eval_success=True,
@@ -617,6 +617,13 @@ async def build_attributes(  # noqa: PLR0913
     o.release_run(build.id_)
     await after_build(
         o, event, build, status, worktree_path=worktree_path, credentials=credentials
+    )
+    await o.after_linked(
+        linked_events,
+        build,
+        status,
+        worktree_path=worktree_path,
+        credentials=credentials,
     )
     return status
 

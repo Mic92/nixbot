@@ -604,10 +604,31 @@ class Orchestrator:
         result: BuildResult,
         *,
         eval_success: bool | None = None,
-    ) -> None:
+    ) -> list[ChangeEvent]:
         """Final status fan-out for second contexts attached to this
         build. eval_success is None when no eval result exists."""
-        await build_reuse.finish_linked(self, build, result, eval_success=eval_success)
+        return await build_reuse.finish_linked(
+            self, build, result, eval_success=eval_success
+        )
+
+    async def after_linked(
+        self,
+        linked_events: list[ChangeEvent],
+        build: BuildRecord,
+        status: str,
+        *,
+        worktree_path: Path,
+        credentials: FetchCredentials | None,
+    ) -> None:
+        """Effects and gcroots for branch pushes that joined this build."""
+        await build_reuse.after_linked(
+            self,
+            linked_events,
+            build,
+            status,
+            worktree_path=worktree_path,
+            credentials=credentials,
+        )
 
     async def post_process_skipped(
         self, event: ChangeEvent, skipped: list[tuple[str, str]]
