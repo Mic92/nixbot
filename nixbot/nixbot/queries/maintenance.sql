@@ -238,7 +238,19 @@ SELECT 1 AS one FROM builds WHERE project_id = $1
 AND status != 'cancelled' LIMIT 1;
 
 -- name: CommitBuilt :one
-SELECT 1 AS one FROM builds WHERE project_id = $1 AND commit_sha = $2 LIMIT 1;
+-- A head that reused another commit's build has no build record, only
+-- the result replayed onto it. The approval gate's action_required and
+-- a pending status are not results.
+SELECT 1 AS one WHERE EXISTS (
+    SELECT 1 FROM builds b
+    WHERE b.project_id = sqlc.arg(project_id)::bigint
+      AND b.commit_sha = sqlc.arg(commit_sha)::text
+) OR EXISTS (
+    SELECT 1 FROM commit_statuses s
+    WHERE s.project_id = sqlc.arg(project_id)::bigint
+      AND s.sha = sqlc.arg(commit_sha)::text
+      AND s.state NOT IN ('pending', 'action_required')
+);
 
 -- name: RunningBuildIds :many
 SELECT id FROM builds WHERE status IN ('pending', 'evaluating', 'building');

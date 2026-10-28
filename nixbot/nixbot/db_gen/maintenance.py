@@ -318,7 +318,16 @@ AND status != 'cancelled' LIMIT 1
 """
 
 COMMIT_BUILT: typing.Final[str] = """-- name: CommitBuilt :one
-SELECT 1 AS one FROM builds WHERE project_id = $1 AND commit_sha = $2 LIMIT 1
+SELECT 1 AS one WHERE EXISTS (
+    SELECT 1 FROM builds b
+    WHERE b.project_id = $1::bigint
+      AND b.commit_sha = $2::text
+) OR EXISTS (
+    SELECT 1 FROM commit_statuses s
+    WHERE s.project_id = $1::bigint
+      AND s.sha = $2::text
+      AND s.state NOT IN ('pending', 'action_required')
+)
 """
 
 RUNNING_BUILD_IDS: typing.Final[str] = """-- name: RunningBuildIds :many
