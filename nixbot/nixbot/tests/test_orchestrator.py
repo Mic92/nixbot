@@ -2332,6 +2332,53 @@ async def test_push_linking_running_pr_build_delivers_build_finished(
     ]
 
 
+async def test_push_linking_running_pr_build_runs_effects(
+    pool: asyncpg.Pool,
+    make_env: EnvFactory,
+    upstream: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A main push that links to a PR's still running build deploys when
+    the build succeeds, the same as a push that reuses a finished one."""
+    ran = patch_effects(monkeypatch).ran
+    pr_sha = add_commit(upstream, "link-deploy")
+    executor = FakeExecutor(gate=asyncio.Event())
+    orchestrator, reporter, project = await make_env(
+        FakeEvalRunner([mk_job("a")]), executor, name="link-deploy"
+    )
+    pr_task = asyncio.create_task(
+        orchestrator.handle_change_event(
+            ChangeEvent(repo=project, branch="main", commit_sha=pr_sha, pr_number=9)
+        )
+    )
+    await asyncio.wait_for(executor.started.wait(), timeout=10)
+
+    git(upstream, "commit", "--allow-empty", "-m", "link-deploy-merge")
+    main_sha = git(upstream, "rev-parse", "HEAD")
+    main_build = await orchestrator.handle_change_event(
+        ChangeEvent(repo=project, branch="main", commit_sha=main_sha)
+    )
+    assert executor.gate is not None
+    executor.gate.set()
+    built = await asyncio.wait_for(pr_task, timeout=10)
+    assert built is not None
+    assert main_build is not None
+    assert main_build.id_ == built.id_
+
+    await drain_effect_items(orchestrator, project, pool)
+    assert ran == ["deploy"]
+    assert await effect_statuses(pool, built.id_) == {"deploy": "succeeded"}
+    # The gated PR pass reports effects-started for its effect checks on
+    # pr_sha. The deploy itself belongs to the main commit.
+    shas = {
+        kind: {e[-1] for e in reporter.events if e[0] == kind}
+        for kind in ("effect-started", "effects-started", "effects-finished")
+    }
+    assert shas["effect-started"] == {main_sha}
+    assert main_sha in shas["effects-started"]
+    assert shas["effects-finished"] == {main_sha}
+
+
 async def tag_deliveries(pool: asyncpg.Pool) -> list[dict[str, object]]:
     rows = await pool.fetch(
         "SELECT payload FROM work_queue"

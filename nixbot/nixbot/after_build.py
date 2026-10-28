@@ -48,6 +48,24 @@ async def after_build(  # noqa: PLR0913
     await _step("deliveries", build, _deliveries(o, event, build, reused))
 
 
+async def after_linked_build(
+    o: Orchestrator,
+    event: ChangeEvent,
+    build: BuildRecord,
+    *,
+    worktree_path: Path,
+    credentials: FetchCredentials | None,
+) -> None:
+    """A succeeded build that a branch push joined while it ran. The
+    push got its build_finished from finish_linked, so no deliveries."""
+    await _step(
+        "effects",
+        build,
+        _effects(o, event, build, worktree_path, credentials, reused=True),
+    )
+    await _step("schedules", build, o.refresh_schedules(event))
+
+
 async def _step(name: str, build: BuildRecord, step: Awaitable[None]) -> None:
     try:
         await step

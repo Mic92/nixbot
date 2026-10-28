@@ -14,7 +14,7 @@ import json
 import logging
 from typing import TYPE_CHECKING
 
-from .after_build import after_build
+from .after_build import after_build, after_linked_build
 from .canceller import RegisterOutcome
 from .db import BuildStatus
 from .db_gen import builds as builds_q
@@ -97,10 +97,12 @@ async def finish_linked(
     result: BuildResult,
     *,
     eval_success: bool | None = None,
-) -> None:
+) -> list[ChangeEvent]:
     """Final status fan-out for second contexts attached to this
-    build. eval_success is None when no eval result exists."""
-    for linked in o.linked_events.pop(build.id_, []):
+    build. eval_success is None when no eval result exists. Returns
+    the contexts for after_linked."""
+    linked_events = o.linked_events.pop(build.id_, [])
+    for linked in linked_events:
         if eval_success is not None:
             await o.reporter.eval_finished(
                 linked, build, EvalReport(success=eval_success)
@@ -112,6 +114,44 @@ async def finish_linked(
         await o.reporter.build_finished(linked, build, result)
         await o.deliver_tag(linked, build, result.status)
         await deliver_branch_push(o, linked, build)
+    return linked_events
+
+
+async def after_linked(  # noqa: PLR0913
+    o: Orchestrator,
+    linked_events: list[ChangeEvent],
+    build: BuildRecord,
+    status: str,
+    *,
+    worktree_path: Path,
+    credentials: FetchCredentials | None,
+) -> None:
+    """A branch push that joined a running build gets what a push
+    reusing a finished build gets: gcroots/outputs and onPush effects.
+    Call it after the build's own after_build, so that a gated PR pass
+    cannot record skipped rows over a started deploy."""
+    if status != BuildStatus.SUCCEEDED:
+        return
+    for event in linked_events:
+        if event.pr_number is not None or event.tag is not None:
+            continue
+        # Each pass can claim the effects, so read the started-flag again.
+        current = await builds_q.get_build(o.pool, id_=build.id_)
+        if current is None:
+            logger.warning(
+                "linked push skipped: build vanished", extra={"build_id": build.id_}
+            )
+            return
+        try:
+            await _post_process_existing(o, event, current)
+        except Exception:
+            logger.exception(
+                "gcroots/outputs for linked push failed",
+                extra={"build_id": build.id_},
+            )
+        await after_linked_build(
+            o, event, current, worktree_path=worktree_path, credentials=credentials
+        )
 
 
 async def deliver_branch_push(
