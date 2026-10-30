@@ -161,7 +161,7 @@ async def _reeval(
             event,
             worktree_path,
         ):
-            await s.orchestrator.run_build(event, build, worktree_path)
+            await s.orchestrator.run_build(event, build, worktree_path, credentials)
     finally:
         s.orchestrator.release_run(build.id_)
 

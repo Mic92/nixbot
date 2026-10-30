@@ -26,7 +26,8 @@ from nixbot.config import (
 from nixbot.db_gen import approvals as approvals_q
 from nixbot.db_gen import builds as builds_q
 from nixbot.events import BuildResult, NullStatusReporter
-from nixbot.forge import DiscoveredRepo
+from nixbot.flake_prefetch import _prefetch_env
+from nixbot.forge import DiscoveredRepo, NetrcFetchCredentialsProvider
 from nixbot.schedule_runner import scheduled_worktree_id
 from nixbot.schedules import DueEffect, ScheduleWhen
 from nixbot.status import CommitStatusStore, PostedStatus, StatusState
@@ -513,7 +514,7 @@ async def test_restart_gitlab_mr_build_fetches_mr_refs(
 
 
 async def test_restart_eval_failed_build_reevaluates(
-    service: CIService, git_repo: tuple[Path, str]
+    service: CIService, git_repo: tuple[Path, str], tmp_path: Path
 ) -> None:
     """A build that failed before eval produced attributes has nothing
     to resume. Restarting it must re-evaluate instead of aggregating an
@@ -526,6 +527,10 @@ async def test_restart_eval_failed_build_reevaluates(
         pool, project_id, commit_sha=sha, status="failed", error="eval boom"
     )
 
+    provider = NetrcFetchCredentialsProvider("https://forge.example.com", "test-token")
+    service.credentials_providers["github"] = provider
+    prefetch_home = tmp_path / "prefetch-home"
+    prefetch_home.mkdir()
     reevals: list[int] = []
 
     async def fake_run_build(
@@ -535,6 +540,10 @@ async def test_restart_eval_failed_build_reevaluates(
         credentials: Any = None,
     ) -> None:
         assert await asyncio.to_thread(worktree_path.exists)
+        env = _prefetch_env(credentials, prefetch_home)
+        assert (Path(env["HOME"]) / ".netrc").read_text() == (
+            "machine forge.example.com login oauth2 password test-token\n"
+        )
         reevals.append(build.id_)
 
     service.orchestrator.run_build = fake_run_build  # type: ignore[method-assign]
@@ -545,6 +554,7 @@ async def test_restart_eval_failed_build_reevaluates(
     assert reevals == [build_id]
     status = await pool.fetchval("SELECT status FROM builds WHERE id = $1", build_id)
     assert status != "succeeded"
+    provider.cleanup()
 
 
 async def test_restart_clears_stale_error_and_warnings(
