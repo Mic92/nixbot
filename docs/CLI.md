@@ -48,6 +48,11 @@ Patterns are shell-style wildcards matched against the remote URL in the form
 `host/owner/repo`, so both `git@github.com:acme/widget.git` and
 `https://github.com/acme/widget` match `github.com/acme/*`.
 
+The same patterns pick the server for `-R`, from any directory: with the entries
+above, `-R acme/widget` reaches `ci.example.org`. `-R` names a forge, not a
+host, so only the `owner/repo` part of a pattern is compared, and a pattern
+without one, like `git.other.org/*`, never matches `-R`.
+
 You can also assign a single checkout to a server directly, which takes
 precedence over the patterns:
 
@@ -58,9 +63,10 @@ git config nixbot.url https://ci.example.org
 When several settings are present, `nbo` uses the first of:
 
 1. the `NIXBOT_URL` environment variable
-2. `git config nixbot.url`
-3. a `remotes` pattern match
+2. a `remotes` pattern matching the `-R` repository
+3. `git config nixbot.url`
 4. the only server in `hosts.toml`, if there is just one
+5. a `remotes` pattern matching the `origin` remote
 
 ### API tokens
 

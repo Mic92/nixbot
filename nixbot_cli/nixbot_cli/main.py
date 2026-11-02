@@ -866,8 +866,11 @@ To run it on this machine instead, see nbo effects run-scheduled.""",
     return parser
 
 
-def make_client() -> NixbotClient:
-    settings = Settings.load()
+def make_client(args: argparse.Namespace) -> NixbotClient:
+    # -R (or `repo enable/disable REPO`) can pick the server, see Settings.load.
+    settings = Settings.load(
+        getattr(args, "repo", None) or getattr(args, "repository", None)
+    )
     token = settings.token or (
         settings.resolve_token if settings.token_command else None
     )
@@ -879,7 +882,7 @@ def main(argv: Sequence[str] | None = None) -> NoReturn:
     try:
         # Effects commands drive nix locally and need no API client.
         if getattr(args, "needs_client", True):
-            with make_client() as client:
+            with make_client(args) as client:
                 code = args.func(client, args)
         else:
             code = args.func(args)

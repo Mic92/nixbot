@@ -470,6 +470,41 @@ def test_token_command_runs_only_for_control(harness: WebHarness) -> None:
     assert calls == ["fetch"]
 
 
+def test_settings_server_for_repo_arg(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """-R picks the server whose `remotes` pattern covers that repository,
+    wherever nbo runs. A pattern without an owner part cannot speak for
+    an owner/name and is skipped."""
+    monkeypatch.delenv("NIXBOT_URL", raising=False)
+    monkeypatch.delenv("NIXBOT_TOKEN", raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    hosts = tmp_path / "nixbot" / "hosts.toml"
+    hosts.parent.mkdir(parents=True)
+    hosts.write_text(
+        '["https://ci.other.org"]\nremotes = ["git.other.org/*"]\n'
+        '["https://ci.example.org"]\nremotes = ["github.com/acme/*"]\n'
+    )
+
+    def git(*args: str) -> None:
+        subprocess.run(["git", "-C", str(tmp_path), *args], check=True)  # noqa: S603
+
+    git("init", "-q")
+    git("remote", "add", "origin", "https://git.other.org/team/thing")
+    git("config", "nixbot.url", "https://ci.other.org")
+    monkeypatch.chdir(tmp_path)
+
+    # The checkout belongs to ci.other.org, but -R names an acme repository.
+    assert Settings.load("acme/widget").url == "https://ci.example.org"
+    assert Settings.load("github/Acme/widget").url == "https://ci.example.org"
+    # Without a matching pattern the checkout's own settings still apply.
+    assert Settings.load("nobody/nothing").url == "https://ci.other.org"
+    assert Settings.load().url == "https://ci.other.org"
+    # NIXBOT_URL still wins.
+    monkeypatch.setenv("NIXBOT_URL", "https://ci.env.org")
+    assert Settings.load("acme/widget").url == "https://ci.env.org"
+
+
 def test_log_follow_finished_attr_falls_back_to_stored_log(
     api: NixbotClient, capsys: pytest.CaptureFixture[str]
 ) -> None:

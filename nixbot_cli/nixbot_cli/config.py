@@ -27,9 +27,10 @@ class Settings:
     token_command: str | None = field(default=None, compare=False)
 
     @classmethod
-    def load(cls) -> Settings:
-        """Server: NIXBOT_URL, `git config nixbot.url`, the hosts.toml
-        entry whose `remotes` match the origin URL, or the only entry.
+    def load(cls, repo: str | None = None) -> Settings:
+        """Server: NIXBOT_URL, the hosts.toml entry whose `remotes` cover
+        `repo` (the -R argument), `git config nixbot.url`, the only entry,
+        or the entry whose `remotes` match the origin URL.
         NIXBOT_TOKEN overrides the token from hosts.toml."""
         url = os.environ.get("NIXBOT_URL")
         token = os.environ.get("NIXBOT_TOKEN")
@@ -37,7 +38,7 @@ class Settings:
         path = config_path()
         if path.exists():
             hosts = tomllib.loads(path.read_text())
-        url = url or _select_host(hosts)
+        url = url or _host_for_repo(hosts, repo) or _select_host(hosts)
         if not url:
             remote = _origin_remote()
             where = (
@@ -77,6 +78,22 @@ def _origin_remote() -> str | None:
         return None
     remote = re.sub(r"^\w+://|^\w+@", "", remote)
     return remote.replace(":", "/").removesuffix(".git")
+
+
+def _host_for_repo(hosts: dict[str, dict], repo: str | None) -> str | None:
+    """The first host with a `remotes` pattern covering repo, given as
+    [forge/]owner/name. Forge names are not hostnames, so only the
+    owner/name part of a "host/owner/name" pattern is compared; a pattern
+    without an owner part, such as "git.example.org/*", is skipped."""
+    if not repo:
+        return None
+    owner_name = "/".join(repo.strip("/").split("/")[-2:]).lower()
+    for url, entry in hosts.items():
+        for pat in entry.get("remotes", []):
+            path = pat.partition("/")[2]
+            if "/" in path and fnmatch.fnmatch(owner_name, path.lower()):
+                return url
+    return None
 
 
 def _select_host(hosts: dict[str, dict]) -> str | None:
