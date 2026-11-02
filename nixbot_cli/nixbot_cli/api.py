@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, Self
 import httpx
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Generator, Iterator
 
 
 class ApiError(Exception):
@@ -47,19 +47,64 @@ class RepoRef:
         return f"{self.forge}/{self.owner}/{self.name}"
 
 
+class _FetchedToken(httpx.Auth):
+    """Bearer token fetched on first use. Reads go out anonymously, so a
+    secret manager is asked only for a request that changes state or that
+    the server refuses without a token."""
+
+    def __init__(self, fetch: Callable[[], str | None]) -> None:
+        self.fetch = fetch
+        self.token: str | None = None
+        self.fetched = False
+
+    def get(self) -> str | None:
+        if not self.fetched:
+            self.token = self.fetch()
+            self.fetched = True
+        return self.token
+
+    def _sign(self, request: httpx.Request) -> bool:
+        token = self.get()
+        if token:
+            request.headers["Authorization"] = f"Bearer {token}"
+        return bool(token)
+
+    def auth_flow(
+        self, request: httpx.Request
+    ) -> Generator[httpx.Request, httpx.Response]:
+        if self.fetched or request.method != "GET":
+            self._sign(request)
+            yield request
+            return
+        response = yield request
+        if response.status_code in (401, 403) and self._sign(request):
+            yield request
+
+
 class NixbotClient:
     """Thin wrapper over the /api endpoints."""
 
     def __init__(
         self,
         url: str = "",
-        token: str | None = None,
+        token: str | Callable[[], str | None] | None = None,
         *,
         http: httpx.Client | None = None,
     ) -> None:
         self.http = http or httpx.Client(base_url=url, timeout=30)
-        if token:
+        if callable(token):
+            self.http.auth = _FetchedToken(token)
+        elif token:
             self.http.headers["Authorization"] = f"Bearer {token}"
+
+    def fetch_token(self) -> str | None:
+        """The token this client sends. A lazy one is fetched now, so the
+        following reads carry it too."""
+        if isinstance(self.http.auth, _FetchedToken):
+            return self.http.auth.get()
+        return (
+            self.http.headers.get("Authorization", "").removeprefix("Bearer ") or None
+        )
 
     def close(self) -> None:
         self.http.close()

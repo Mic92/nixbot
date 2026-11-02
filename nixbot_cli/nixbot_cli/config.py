@@ -7,7 +7,7 @@ import os
 import re
 import shlex
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import tomllib
@@ -22,6 +22,9 @@ def config_path() -> Path:
 class Settings:
     url: str
     token: str | None
+    # Run only by resolve_token(): read-only commands need no token, and a
+    # locked or missing secret manager must not stop them.
+    token_command: str | None = field(default=None, compare=False)
 
     @classmethod
     def load(cls) -> Settings:
@@ -50,8 +53,10 @@ class Settings:
             (e for u, e in hosts.items() if u.rstrip("/") == url),
             {},
         )
-        token = token or entry.get("token") or _run_token_command(entry)
-        return cls(url, token)
+        return cls(url, token or entry.get("token"), entry.get("token_command"))
+
+    def resolve_token(self) -> str | None:
+        return self.token or _run_token_command(self.token_command)
 
 
 def _git_config(key: str) -> str | None:
@@ -91,10 +96,9 @@ def _select_host(hosts: dict[str, dict]) -> str | None:
     return None
 
 
-def _run_token_command(entry: dict) -> str | None:
+def _run_token_command(command: str | None) -> str | None:
     """Fetch the token from a secret manager (pass, rbw, ...) via the
     host's token_command. The first line of its stdout is the token."""
-    command = entry.get("token_command")
     if not command:
         return None
     try:

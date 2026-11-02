@@ -640,8 +640,9 @@ def follow_effect(
 def cmd_auth_status(client: NixbotClient, args: argparse.Namespace) -> int:
     settings = Settings.load()
     print(f"server: {settings.url}")
-    if settings.token:
-        print(f"token: {settings.token[:8]}… (NIXBOT_TOKEN or {config_path()})")
+    # fetch_token() also makes the reachability check below send the token.
+    if token := settings.token or client.fetch_token():
+        print(f"token: {token[:8]}… (NIXBOT_TOKEN or {config_path()})")
     else:
         print("token: none (anonymous). Set NIXBOT_TOKEN for control commands.")
     client.repos()  # verifies the server answers and the token is accepted
@@ -867,7 +868,10 @@ To run it on this machine instead, see nbo effects run-scheduled.""",
 
 def make_client() -> NixbotClient:
     settings = Settings.load()
-    return NixbotClient(settings.url, settings.token)
+    token = settings.token or (
+        settings.resolve_token if settings.token_command else None
+    )
+    return NixbotClient(settings.url, token)
 
 
 def main(argv: Sequence[str] | None = None) -> NoReturn:

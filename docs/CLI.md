@@ -74,7 +74,9 @@ export NIXBOT_TOKEN=bnix_...
 ```
 
 Instead of storing the token in plain text you can have `nbo` fetch it from a
-password manager such as `pass` or `rbw` on every run:
+password manager such as `pass` or `rbw`. `nbo` runs the command only when a
+request needs the token, so read-only commands never prompt or fail on a locked
+password manager:
 
 ```toml
 # ~/.config/nixbot/hosts.toml
