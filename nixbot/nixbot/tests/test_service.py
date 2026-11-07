@@ -40,6 +40,7 @@ from .support import (
     insert_project,
     make_config,
     mk_job,
+    wait_started,
 )
 
 if TYPE_CHECKING:
@@ -862,7 +863,7 @@ async def test_restart_attribute_while_build_running(
             repo_info(project), build, [mk_job("a"), mk_job("b")]
         )
     )
-    await asyncio.wait_for(executor.started.wait(), timeout=10)
+    await wait_started(executor.started, run)
 
     await service.restart_attribute(build_id, "a")
     drain = asyncio.create_task(service.drain_work())

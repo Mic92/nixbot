@@ -277,6 +277,28 @@ def cookie_header(cookies: dict[str, str]) -> dict[str, str]:
     return {"cookie": "; ".join(f"{k}={v}" for k, v in cookies.items())}
 
 
+# Overloaded aarch64 builders need far more than local runs.
+WAIT_STARTED_TIMEOUT = 30
+
+
+async def wait_started(event: asyncio.Event, *tasks: asyncio.Future[Any]) -> None:
+    """Wait for `event`, failing fast with the real error when a task
+    ends first. A bare wait_for(event.wait()) reports only a timeout."""
+    waiter = asyncio.ensure_future(event.wait())
+    try:
+        async with asyncio.timeout(WAIT_STARTED_TIMEOUT):
+            await asyncio.wait({waiter, *tasks}, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        waiter.cancel()
+    if event.is_set():
+        return
+    for task in tasks:
+        if task.done():
+            task.result()
+            msg = "task finished before the awaited event"
+            raise AssertionError(msg)
+
+
 def run_sync[T](coro: Coroutine[None, None, T]) -> T:
     """asyncio.run in a fresh thread.
 

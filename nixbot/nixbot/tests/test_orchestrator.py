@@ -44,6 +44,7 @@ from .support import (
     git,
     insert_project,
     mk_job,
+    wait_started,
 )
 
 if TYPE_CHECKING:
@@ -740,7 +741,7 @@ async def test_cancel_interrupts_evaluation(
             ChangeEvent(repo=project, branch="main", commit_sha=sha)
         )
     )
-    await asyncio.wait_for(eval_runner.started.wait(), timeout=10)
+    await wait_started(eval_runner.started, task)
     for cancel_event in orchestrator.cancel_events.values():
         cancel_event.set()
     build = await asyncio.wait_for(task, timeout=10)
@@ -781,10 +782,10 @@ async def test_build_waiting_for_eval_slot_stays_pending(
         )
 
     tasks = [start(projects[0])]
-    await asyncio.wait_for(eval_runner.started.wait(), timeout=10)
+    await wait_started(eval_runner.started, *tasks)
     reporter.started.clear()
     tasks.append(start(projects[1]))
-    await asyncio.wait_for(reporter.started.wait(), timeout=10)
+    await wait_started(reporter.started, *tasks)
     await asyncio.sleep(0.05)
     r1, r2 = await rows()
     assert eval_runner.calls == 1
@@ -818,7 +819,7 @@ async def test_pending_attribute_rows_recorded_for_crash_recovery(
             ChangeEvent(repo=project, branch="main", commit_sha=sha)
         )
     )
-    await asyncio.wait_for(executor.started.wait(), timeout=10)
+    await wait_started(executor.started, task)
     rows = await pool.fetch(
         "SELECT a.attr, a.status FROM build_attributes a "
         "JOIN builds b ON a.build_id = b.id WHERE b.project_id = $1",
@@ -1006,7 +1007,7 @@ async def test_inflight_share_fans_out_final_status(
             ChangeEvent(repo=project, branch="main", commit_sha=sha)
         )
     )
-    await asyncio.wait_for(executor.started.wait(), timeout=10)
+    await wait_started(executor.started, task)
     build2 = await orchestrator.handle_change_event(
         ChangeEvent(repo=project, branch="copy", commit_sha=sha)
     )
@@ -1036,7 +1037,7 @@ async def test_stale_event_does_not_supersede_newer_build(
             ChangeEvent(repo=project, branch="main", commit_sha=new_sha)
         )
     )
-    await asyncio.wait_for(executor.started.wait(), timeout=10)
+    await wait_started(executor.started, task)
     stale_build = await orchestrator.handle_change_event(
         ChangeEvent(repo=project, branch="main", commit_sha=old_sha)
     )
@@ -1577,7 +1578,7 @@ async def test_linked_context_reported_on_eval_failure(
             ChangeEvent(repo=project, branch="main", commit_sha=sha)
         )
     )
-    await asyncio.wait_for(eval_runner.started.wait(), timeout=10)
+    await wait_started(eval_runner.started, task)
     build2 = await orchestrator.handle_change_event(
         ChangeEvent(repo=project, branch="lef-copy", commit_sha=sha)
     )
@@ -2307,7 +2308,7 @@ async def test_push_linking_running_pr_build_delivers_build_finished(
             ChangeEvent(repo=project, branch="main", commit_sha=pr_sha, pr_number=9)
         )
     )
-    await asyncio.wait_for(executor.started.wait(), timeout=10)
+    await wait_started(executor.started, pr_task)
 
     git(upstream, "commit", "--allow-empty", "-m", "link-running-merge")
     main_sha = git(upstream, "rev-parse", "HEAD")
@@ -2396,7 +2397,7 @@ async def test_tag_attached_to_in_flight_build_delivers_on_success(
             ChangeEvent(repo=project, branch="main", commit_sha=sha)
         )
     )
-    await asyncio.wait_for(executor.started.wait(), timeout=10)
+    await wait_started(executor.started, main)
     await orchestrator.handle_change_event(
         ChangeEvent(repo=project, branch="v1.0", commit_sha=sha, tag="v1.0")
     )
