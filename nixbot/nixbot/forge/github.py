@@ -7,28 +7,26 @@ gitrepo CredentialsProvider interface (netrc with x-access-token)."""
 from __future__ import annotations
 
 import asyncio
-import atexit
 import base64
+import contextlib
 import json
 import logging
 import os
-import shutil
-import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 import httpx
 
-from nixbot.gitrepo import FetchCredentials
+from nixbot.gitrepo import FetchCredentials, netrc_file
 
 from .base import DiscoveredRepo, ForgeError, paginate_link, paginate_link_pages
 from .retry import make_client
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -294,19 +292,16 @@ class GitHubFetchCredentialsProvider:
     def __init__(self, client: GitHubAppClient, host: str = "github.com") -> None:
         self.client = client
         self.host = host
-        self._netrc_dir = Path(tempfile.mkdtemp(prefix="github-netrc-"))
-        atexit.register(self.cleanup)
 
-    def cleanup(self) -> None:
-        shutil.rmtree(self._netrc_dir, ignore_errors=True)
-
-    async def get(self, repo_url: str) -> FetchCredentials:
+    @contextlib.asynccontextmanager
+    async def scoped(self, repo_url: str) -> AsyncIterator[FetchCredentials]:
         name = _repo_name_from_url(repo_url)
-        if name is None:
-            return FetchCredentials()
-        installation_id = await self.client.installation_for_repo(name)
-        if installation_id is None:
-            return FetchCredentials()
+        installation_id = (
+            None if name is None else await self.client.installation_for_repo(name)
+        )
+        if name is None or installation_id is None:
+            yield FetchCredentials()
+            return
         # Fetch credentials reach PR-controlled paths (submodule
         # fetches), so the token must not cover the whole installation.
         repo_name = name.split("/")[-1]
@@ -315,22 +310,10 @@ class GitHubFetchCredentialsProvider:
         )
         # GitHub Enterprise: match the host git actually fetches from.
         host = urlparse(repo_url).hostname or self.host
-        netrc = self._netrc_dir / f"{installation_id}-{repo_name}.netrc"
-        _write_netrc_atomic(
-            netrc, f"machine {host} login x-access-token password {token}\n"
-        )
-        return FetchCredentials(netrc_file=netrc, token=token, repo_scoped=True)
-
-
-def _write_netrc_atomic(netrc: Path, content: str) -> None:
-    """Atomic replace: git/curl re-reads the netrc mid-fetch, so an
-    in-place rewrite would expose a truncated file to concurrent
-    fetches of the same installation."""
-    fd, tmp_name = tempfile.mkstemp(dir=netrc.parent)  # 0600 by default
-    os.close(fd)
-    tmp = Path(tmp_name)
-    tmp.write_text(content)
-    tmp.replace(netrc)
+        with netrc_file(
+            f"machine {host} login x-access-token password {token}\n"
+        ) as netrc:
+            yield FetchCredentials(netrc_file=netrc, token=token, repo_scoped=True)
 
 
 def _repo_name_from_url(repo_url: str) -> str | None:

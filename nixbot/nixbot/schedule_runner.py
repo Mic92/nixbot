@@ -26,6 +26,7 @@ from .workload_identity import EffectIdentity
 if TYPE_CHECKING:
     from .events import RepoInfo
     from .executor import LogWriter
+    from .gitrepo import FetchCredentials
     from .service import CIService
 
 logger = logging.getLogger(__name__)
@@ -78,16 +79,16 @@ async def refresh_schedules(s: CIService, project_id: int, rev: str) -> None:
     if project is None or not project.enabled:
         return
     info = repo_info(project)
-    credentials = await s.credentials_provider(info.forge).get(info.clone_url)
-    await s.orchestrator.repos.fetch(
-        info.key, info.clone_url, ["+refs/heads/*:refs/heads/*"], credentials
-    )
-    worktree = await s.orchestrator.repos.checkout_for_build(
-        info.key,
-        f"schedules-{project_id}",
-        base_commit=rev,
-        credentials=credentials,
-    )
+    async with s.fetch_credentials(info) as credentials:
+        await s.orchestrator.repos.fetch(
+            info.key, info.clone_url, ["+refs/heads/*:refs/heads/*"], credentials
+        )
+        worktree = await s.orchestrator.repos.checkout_for_build(
+            info.key,
+            f"schedules-{project_id}",
+            base_commit=rev,
+            credentials=credentials,
+        )
     try:
         ctx = EffectsContext(
             path=worktree.path,
@@ -121,7 +122,8 @@ async def run_scheduled(
         run_id = await store.start_run(due)
     async with s.orchestrator.open_effect_log(run_id) as log:
         try:
-            success = await _run_scheduled_inner(s, due, info, log)
+            async with s.fetch_credentials(info) as credentials:
+                success = await _run_scheduled_inner(s, due, info, log, credentials)
             error = None if success else (failure_excerpt(log.tail_lines()) or None)
         except Exception as e:
             # Spawned task: an exception would only surface as "Task
@@ -138,9 +140,12 @@ async def run_scheduled(
 
 
 async def _run_scheduled_inner(
-    s: CIService, due: DueEffect, info: RepoInfo, log: LogWriter
+    s: CIService,
+    due: DueEffect,
+    info: RepoInfo,
+    log: LogWriter,
+    credentials: FetchCredentials,
 ) -> bool:
-    credentials = await s.credentials_provider(info.forge).get(info.clone_url)
     await s.orchestrator.repos.fetch(
         info.key, info.clone_url, ["+refs/heads/*:refs/heads/*"], credentials
     )

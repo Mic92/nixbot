@@ -70,13 +70,14 @@ from .work_queue import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Coroutine, Sequence
+    from collections.abc import AsyncIterator, Coroutine, Sequence
 
     import asyncpg
 
     from .approval import GatePoster
     from .config import Config
     from .db import BuildRecord
+    from .db_gen.models import Project
     from .forge import GiteaClient, GitHubAppClient, GitlabClient
     from .orchestrator import Orchestrator
     from .polling import PolledRepository
@@ -99,11 +100,13 @@ class PullBasedCredentialsProvider:
     def __init__(self, repos: list[PolledRepository]) -> None:
         self._by_url = {repo.url: repo for repo in repos}
 
-    async def get(self, repo_url: str) -> FetchCredentials:
+    @contextlib.asynccontextmanager
+    async def scoped(self, repo_url: str) -> AsyncIterator[FetchCredentials]:
         repo = self._by_url.get(repo_url)
         if repo is None:
-            return FetchCredentials()
-        return FetchCredentials(
+            yield FetchCredentials()
+            return
+        yield FetchCredentials(
             ssh_private_key_file=repo.ssh_private_key_file,
             ssh_known_hosts_file=repo.ssh_known_hosts_file,
         )
@@ -222,6 +225,11 @@ class CIService:
 
     def credentials_provider(self, forge: str) -> CredentialsProvider:
         return self.credentials_providers.get(forge, _STATIC_CREDENTIALS)
+
+    def fetch_credentials(
+        self, info: RepoInfo
+    ) -> contextlib.AbstractAsyncContextManager[FetchCredentials]:
+        return self.credentials_provider(info.forge).scoped(info.clone_url)
 
     def _spawn(self, coro: Coroutine[None, None, object]) -> asyncio.Task:
         task = asyncio.create_task(coro)
@@ -417,7 +425,20 @@ class CIService:
         if project is None or not project.enabled:
             return
         info = repo_info(project)
-        credentials = await self.credentials_provider(info.forge).get(info.clone_url)
+        async with self.fetch_credentials(info) as credentials:
+            await self._process_change_scoped(
+                project, info, change, credentials, last_attempt=last_attempt
+            )
+
+    async def _process_change_scoped(
+        self,
+        project: Project,
+        info: RepoInfo,
+        change: ChangeRequest,
+        credentials: FetchCredentials,
+        *,
+        last_attempt: bool,
+    ) -> None:
         if change.pr_number is not None and await self._gated(
             project.id_, change.pr_number, info, change, credentials
         ):
@@ -748,25 +769,25 @@ class CIService:
         if project is None:
             return
         info = repo_info(project)
-        credentials = await self.credentials_provider(info.forge).get(info.clone_url)
-        try:
-            await self.orchestrator.run_effect_item(
-                info, build, name, kind, credentials
-            )
-        except Exception as e:
-            # Setup failures (fetch/checkout) happen before the
-            # runner settles the row.
-            await builds_q.finish_effect(
-                self.pool,
-                build_id=build_id,
-                kind=kind,
-                name=name,
-                status="failed",
-                error=str(e) or type(e).__name__,
-                log_size=0,
-                log_truncated=False,
-            )
-            raise
+        async with self.fetch_credentials(info) as credentials:
+            try:
+                await self.orchestrator.run_effect_item(
+                    info, build, name, kind, credentials
+                )
+            except Exception as e:
+                # Setup failures (fetch/checkout) happen before the
+                # runner settles the row.
+                await builds_q.finish_effect(
+                    self.pool,
+                    build_id=build_id,
+                    kind=kind,
+                    name=name,
+                    status="failed",
+                    error=str(e) or type(e).__name__,
+                    log_size=0,
+                    log_truncated=False,
+                )
+                raise
 
     async def recover_unfinished_builds(self) -> None:
         """Crash recovery: settle already-built attributes, then queue

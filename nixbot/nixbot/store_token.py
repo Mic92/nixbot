@@ -9,6 +9,8 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from nixbot_effects.tmp import secret_tmpdir
+
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
@@ -34,8 +36,8 @@ async def store_token_file(
             await asyncio.sleep(max(issuer.token_ttl * 2 / 3, 1))
             write_token(path, issuer.mint(identity, audience).token)
 
-    with tempfile.TemporaryDirectory(prefix="nixbot-token-") as token_dir:
-        path = Path(token_dir) / "token"
+    with secret_tmpdir("nixbot-token-") as token_dir:
+        path = token_dir / "token"
         write_token(path, issuer.mint(identity, audience).token)
         task = asyncio.create_task(refresh(path))
         try:

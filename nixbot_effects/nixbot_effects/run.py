@@ -35,6 +35,7 @@ from .sandbox import (
     task_env,
     virtual_ids,
 )
+from .tmp import secret_tmpdir
 
 if TYPE_CHECKING:
     from .options import EffectsOptions
@@ -171,10 +172,13 @@ async def _run_in_sandbox(
         env.update(checkout_env)
         fsroot_args, fsroot_env = fsroot_mounts(drv_env)
         env.update(fsroot_env)
-        # Private daemon socket: each connection gets its own untrusted
-        # nix-daemon, so effects cannot use trusted-user privileges.
-        daemon_socket = work_dir / "daemon-socket"
         async with AsyncExitStack() as stack:
+            # Secrets go on tmpfs. build/ and etc/ live in work_dir
+            # because the effect writes to them and they may be large.
+            private_dir = stack.enter_context(secret_tmpdir("effect-private-"))
+            # Private daemon socket: each connection gets its own untrusted
+            # nix-daemon, so effects cannot use trusted-user privileges.
+            daemon_socket = private_dir / "daemon-socket"
             if shutil.which("nix-daemon") is not None:
                 await stack.enter_async_context(
                     nix_daemon_proxy(daemon_socket, opts.extra_nix_options)
@@ -182,16 +186,9 @@ async def _run_in_sandbox(
             else:
                 daemon_socket = Path("/nix/var/nix/daemon-socket/socket")
             secrets["hercules-ci"] = {"data": {"token": task_token}}
-            secrets_file = work_dir / "secrets.json"
-            secrets_file.touch(mode=0o600)
-            secrets_file.write_text(json.dumps(secrets))
-            event_args: list[str] = []
+            private_args = _private_files(private_dir, secrets, opts.event)
             if opts.event is not None:
-                kind, payload = opts.event
-                event_file = work_dir / "event.json"
-                event_file.write_text(json.dumps(payload))
-                event_args = ["--ro-bind", str(event_file), "/run/event.json"]
-                env.update(payload_env(kind, payload))
+                env.update(payload_env(*opts.event))
             cmd = [
                 *_bubblewrap_command(
                     drv_path,
@@ -206,10 +203,7 @@ async def _run_in_sandbox(
                     checkout_args=checkout_args,
                     fsroot_args=fsroot_args,
                 ),
-                "--ro-bind",
-                str(secrets_file),
-                "/run/secrets.json",
-                *event_args,
+                *private_args,
                 *env_args(env, clear_env),
                 "--",
                 drv["builder"],
@@ -218,6 +212,24 @@ async def _run_in_sandbox(
             await stream_command(cmd, log=opts.log, debug=opts.debug)
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
+
+
+def _private_files(
+    private_dir: Path,
+    secrets: dict[str, Any],
+    event: tuple[str, dict[str, Any]] | None,
+) -> list[str]:
+    """Write secrets (and the event payload) for the sandbox and return
+    the bwrap arguments mounting them under /run."""
+    secrets_file = private_dir / "secrets.json"
+    secrets_file.touch(mode=0o600)
+    secrets_file.write_text(json.dumps(secrets))
+    args = ["--ro-bind", str(secrets_file), "/run/secrets.json"]
+    if event is not None:
+        event_file = private_dir / "event.json"
+        event_file.write_text(json.dumps(event[1]))
+        args += ["--ro-bind", str(event_file), "/run/event.json"]
+    return args
 
 
 async def _run_derivation(drv_path: str, opts: EffectsOptions) -> None:

@@ -24,14 +24,19 @@ import itertools
 import logging
 import os
 import shutil
-import tempfile
+import signal
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 from urllib.parse import urlsplit
 
+from nixbot_effects.tmp import secret_tmpdir
+
 from .environ import passthrough_env
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Iterator
 
 logger = logging.getLogger(__name__)
 
@@ -102,9 +107,23 @@ class FetchCredentials:
 
 
 class CredentialsProvider(Protocol):
-    """Provides per-fetch credentials for a repository URL."""
+    """Provides credentials for a repository URL. Files they reference
+    exist only while the context is entered, so secrets never outlive
+    their use."""
 
-    async def get(self, repo_url: str) -> FetchCredentials: ...
+    def scoped(
+        self, repo_url: str
+    ) -> contextlib.AbstractAsyncContextManager[FetchCredentials]: ...
+
+
+@contextlib.contextmanager
+def netrc_file(content: str) -> Iterator[Path]:
+    """A private netrc file that is removed on exit."""
+    with secret_tmpdir("nixbot-netrc-") as directory:
+        path = directory / "netrc"
+        path.touch(mode=0o600)
+        path.write_text(content)
+        yield path
 
 
 class StaticCredentialsProvider:
@@ -113,8 +132,9 @@ class StaticCredentialsProvider:
     def __init__(self, netrc_file: Path | None = None) -> None:
         self.netrc_file = netrc_file
 
-    async def get(self, repo_url: str) -> FetchCredentials:  # noqa: ARG002
-        return FetchCredentials(netrc_file=self.netrc_file)
+    @contextlib.asynccontextmanager
+    async def scoped(self, repo_url: str) -> AsyncIterator[FetchCredentials]:  # noqa: ARG002
+        yield FetchCredentials(netrc_file=self.netrc_file)
 
 
 async def run_git(
@@ -142,15 +162,13 @@ async def run_git(
         ssh_command = credentials.git_ssh_command()
         if ssh_command is not None:
             env["GIT_SSH_COMMAND"] = ssh_command
-    if credentials is not None and credentials.netrc_file is not None:
-        # git's libcurl reads $HOME/.netrc (CURL_NETRC_OPTIONAL). Point
-        # HOME at a throwaway directory containing only the scoped netrc.
-        home = Path(tempfile.mkdtemp(prefix="git-netrc-"))
-        (home / ".netrc").symlink_to(credentials.netrc_file)
-        env["HOME"] = str(home)
-    else:
-        home = None
-    try:
+    with contextlib.ExitStack() as stack:
+        if credentials is not None and credentials.netrc_file is not None:
+            # git's libcurl reads $HOME/.netrc (CURL_NETRC_OPTIONAL). Point
+            # HOME at a throwaway directory containing only the scoped netrc.
+            home = stack.enter_context(secret_tmpdir("git-netrc-"))
+            (home / ".netrc").symlink_to(credentials.netrc_file)
+            env["HOME"] = str(home)
         proc = await asyncio.create_subprocess_exec(
             "git",
             *args,
@@ -158,14 +176,20 @@ async def run_git(
             env=env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
         )
-        stdout, stderr = await proc.communicate()
+        try:
+            stdout, stderr = await proc.communicate()
+        except BaseException:
+            # git, ssh and curl helpers must not outlive the credential
+            # files removed below.
+            with contextlib.suppress(ProcessLookupError, OSError):
+                os.killpg(proc.pid, signal.SIGKILL)
+            await proc.wait()
+            raise
         if proc.returncode != 0:
             raise GitError(args, proc.returncode or -1, stderr.decode(errors="replace"))
         return stdout.decode(errors="replace")
-    finally:
-        if home is not None:
-            shutil.rmtree(home, ignore_errors=True)
 
 
 def _push_url_rewrites(push_url: str) -> list[tuple[str, str]]:

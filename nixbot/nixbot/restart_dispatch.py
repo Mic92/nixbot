@@ -68,8 +68,8 @@ async def restart_effects(s: CIService, build_id: int, name: str | None = None) 
     if project is None:
         return
     info = repo_info(project)
-    credentials = await s.credentials_provider(info.forge).get(info.clone_url)
-    await s.orchestrator.rerun_effects(info, build, credentials, only=name)
+    async with s.fetch_credentials(info) as credentials:
+        await s.orchestrator.rerun_effects(info, build, credentials, only=name)
 
 
 async def rerun(
@@ -94,19 +94,20 @@ async def rerun(
         if build is None:
             return
         await o.reporter.build_restarted(event_for_build(info, build), build, attr)
-    credentials = await s.credentials_provider(info.forge).get(info.clone_url)
     results = await find_unfinished_builds(s.pool, build_id=build_id)
     resumable = results[0] if results else None
     if resumable is None:
         return
     jobs = await _resumable_eval_jobs(s, build, resumable)
     if jobs is not None:
-        await o.rerun_pending_attributes(info, build, jobs, credentials)
+        async with s.fetch_credentials(info) as credentials:
+            await o.rerun_pending_attributes(info, build, jobs, credentials)
         return
     # No usable stored eval: re-evaluate rather than rerun an empty set
     # that would aggregate straight to "succeeded".
     try:
-        await _reeval(s, info, build, credentials)
+        async with s.fetch_credentials(info) as credentials:
+            await _reeval(s, info, build, credentials)
     except Exception:
         logger.exception("re-evaluation failed", extra={"build_id": build_id})
         await db.set_build_status(

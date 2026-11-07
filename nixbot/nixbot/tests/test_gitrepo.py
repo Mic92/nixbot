@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import shutil
 import time
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
 
@@ -20,9 +21,6 @@ from nixbot.gitrepo import (
 )
 
 from .support import git, init_upstream
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git not available")
 
@@ -421,14 +419,44 @@ async def test_static_credentials_provider(tmp_path: Path) -> None:
     netrc = tmp_path / "netrc"
     netrc.write_text("machine example.com login x password y\n")
     provider = StaticCredentialsProvider(netrc)
-    creds = await provider.get("https://example.com/r.git")
-    assert creds.netrc_file == netrc
-    assert (await StaticCredentialsProvider().get("https://x/y.git")).netrc_file is None
+    async with provider.scoped("https://example.com/r.git") as creds:
+        assert creds.netrc_file == netrc
+    async with StaticCredentialsProvider().scoped("https://x/y.git") as creds:
+        assert creds.netrc_file is None
 
 
 async def test_run_git_error_includes_stderr(tmp_path: Path) -> None:
     with pytest.raises(Exception, match="failed"):
         await run_git(["rev-parse", "HEAD"], cwd=tmp_path)
+
+
+async def test_run_git_cancel_kills_process_tree(tmp_path: Path) -> None:
+    """A cancelled fetch must not leave git (or its ssh/curl children)
+    running after its credential files are removed."""
+    netrc = tmp_path / "netrc"
+    netrc.write_text("machine x login y password z\n")
+    pidfile = tmp_path / "pid"
+    task = asyncio.create_task(
+        run_git(
+            ["-c", f"alias.hang=!echo $$ > {pidfile}; exec sleep 60", "hang"],
+            cwd=tmp_path,
+            credentials=FetchCredentials(netrc_file=netrc),
+        )
+    )
+    for _ in range(200):
+        if pidfile.exists() and pidfile.read_text().strip():
+            break
+        await asyncio.sleep(0.05)
+    pid = int(pidfile.read_text())
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    # The orphaned grandchild is reaped by init asynchronously.
+    for _ in range(100):
+        if not Path(f"/proc/{pid}").exists():
+            break
+        await asyncio.sleep(0.05)
+    assert not Path(f"/proc/{pid}").exists()
 
 
 async def test_merge_infra_failure_is_not_conflict(

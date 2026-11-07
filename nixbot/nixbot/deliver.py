@@ -176,7 +176,22 @@ async def deliver(s: CIService, d: Delivery, *, last_attempt: bool = False) -> N
     if project is None or not project.enabled:
         return
     info = repo_info(project)
-    credentials = await s.credentials_provider(info.forge).get(info.clone_url)
+    async with s.fetch_credentials(info) as credentials:
+        await _deliver_scoped(
+            s, d, project, build, credentials, last_attempt=last_attempt
+        )
+
+
+async def _deliver_scoped(  # noqa: PLR0913
+    s: CIService,
+    d: Delivery,
+    project: Project,
+    build: BuildRecord,
+    credentials: FetchCredentials,
+    *,
+    last_attempt: bool,
+) -> None:
+    info = repo_info(project)
     if d.kind == TAG_KIND:
         await _deliver_tag(s, d, info, build, credentials)
         return
