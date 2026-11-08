@@ -22,7 +22,7 @@ from nixbot.build_scheduler import (
     AttributeStatus,
     BuildOutcome,
 )
-from nixbot.config import Config
+from nixbot.config import BuildStoreConfig, Config
 from nixbot.db import BuildStatus
 from nixbot.db_gen import builds as builds_q
 from nixbot.effects import EffectMeta, EffectsContext
@@ -112,6 +112,8 @@ class FakeEvalRunner:
 class FakeExecutor:
     outcomes: dict[str, BuildOutcome] = field(default_factory=dict)
     built: list[str] = field(default_factory=list)
+    # The build store each attribute was handed, for per-repo routing.
+    stores: list[BuildStoreConfig | None] = field(default_factory=list)
     # When set, builds wait on this gate (for in-flight tests).
     gate: asyncio.Event | None = None
     started: asyncio.Event = field(default_factory=asyncio.Event)
@@ -126,7 +128,9 @@ class FakeExecutor:
         on_start: Callable[[], Awaitable[bool]] | None = None,
         on_built: Callable[[str], None] | None = None,
         identity: EffectIdentity | None = None,
+        store: BuildStoreConfig | None = None,
     ) -> BuildOutcome:
+        self.stores.append(store)
         if on_start is not None and not await on_start():
             return BuildOutcome.cancelled
         self.built.append(job.attr)
@@ -309,6 +313,28 @@ def patch_effects(
         fake.run_effect = run_effect  # type: ignore[method-assign,assignment]
     monkeypatch.setattr("nixbot.orchestrator.default_effects", lambda: fake)
     return fake
+
+
+@pytest.mark.asyncio
+async def test_per_repo_build_store_reaches_the_executor(
+    make_env: EnvFactory, upstream: Path
+) -> None:
+    """A repo listed in build_stores is built in that store."""
+    hub = BuildStoreConfig(url="ssh-ng://nixbot@hub", repos=["acme/hubbed"])
+    default = BuildStoreConfig(url="grpc://farm:50051")
+    executor = FakeExecutor()
+    orchestrator, _, project = await make_env(
+        FakeEvalRunner([mk_job("a")]), executor, name="hubbed"
+    )
+    orchestrator.config.build_store = default
+    orchestrator.config.build_stores = [hub]
+    event = ChangeEvent(
+        repo=project,
+        branch="main",
+        commit_sha=git(upstream, "rev-parse", "HEAD"),
+    )
+    await orchestrator.handle_change_event(event)
+    assert [s.url for s in executor.stores if s] == ["ssh-ng://nixbot@hub"]
 
 
 @pytest.fixture
