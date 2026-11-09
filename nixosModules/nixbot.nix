@@ -43,6 +43,7 @@ let
       private_repo_viewers = cfg.privateRepoViewers;
       eval_max_memory_size = cfg.evalMaxMemorySize;
       eval_worker_count = cfg.evalWorkerCount;
+      eval_concurrency = cfg.evalConcurrency;
       build_concurrency = cfg.buildConcurrency;
       build_store =
         if cfg.buildStore.url == null then
@@ -282,6 +283,16 @@ in
         Keep the historic "default." attribute prefix and the commit-status
         contexts derived from it. Enable on deployments that predate its
         removal and rely on existing required checks or attribute links.
+      '';
+    };
+
+    evalConcurrency = lib.mkOption {
+      type = lib.types.ints.positive;
+      default = 1;
+      description = ''
+        Global cap on concurrent evaluations. Each one runs
+        {option}`evalWorkerCount` workers of up to {option}`evalMaxMemorySize`
+        MiB each.
       '';
     };
 
