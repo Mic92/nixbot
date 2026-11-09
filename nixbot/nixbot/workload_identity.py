@@ -60,6 +60,8 @@ class EffectIdentity:
     # the token endpoint, not by mint().
     allowed_audiences: tuple[str, ...] = ()
     actor: str | None = None
+    # "external": the code is a pull request from an outside contributor.
+    trust: str = "internal"
 
     @property
     def repository(self) -> str:
@@ -90,6 +92,7 @@ class EffectIdentity:
             "repository": self.repository,
             "repository_owner": self.owner,
             "effect": self.effect,
+            "trust": self.trust,
         }
         if self.build_id is not None:
             claims["build_id"] = self.build_id
@@ -117,12 +120,15 @@ class EffectIdentity:
 
 
 def identity_from_event(
-    event: ChangeEvent, effect: str, build_id: int
+    event: ChangeEvent, effect: str, build_id: int, *, external: bool
 ) -> EffectIdentity:
     """The identity of one push- or PR-triggered effect run. Audiences
-    are bound later, once the effect derivation is evaluated."""
+    are bound later, once the effect derivation is evaluated. `external`
+    is the build's own class, not the event's: a build that an internal
+    change created stays internal when a pull request reuses it."""
     repo = event.repo
     identity = EffectIdentity(
+        trust="external" if external else "internal",
         forge=repo.forge,
         owner=repo.owner,
         repo=repo.repo,
@@ -198,6 +204,7 @@ class IdentityIssuer:
                 "pr_number",
                 "schedule",
                 "effect",
+                "trust",
                 "build_id",
             ],
         }

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import os
 import stat
 import threading
@@ -243,11 +244,36 @@ def test_build_nix_command_remote_store(tmp_path: Path) -> None:
         log_dir=tmp_path,
         store=BuildStoreConfig(url="grpc://farm.example.com:50051?system=x86_64-linux"),
     )
-    cmd = build_nix_command(mk_job(), settings, tmp_path / "result-foo")
+    cmd = build_nix_command(
+        mk_job(), settings, tmp_path / "result-foo", settings.store_for(None)
+    )
     assert cmd[cmd.index("--store") + 1].startswith("grpc://farm.example.com")
     assert cmd[cmd.index("--eval-store") + 1] == "auto"
     assert "--out-link" not in cmd
     assert cmd[-1] == "/nix/store/foo.drv^*"
+
+
+def test_external_builds_get_their_own_store(tmp_path: Path) -> None:
+    farm = BuildStoreConfig(url="grpc://farm.example.com:50051")
+    public = BuildStoreConfig(url="grpc://public.example.com:50051")
+    settings = BuildSettings(log_dir=tmp_path, store=farm, external_store=public)
+    internal = push_identity()
+    external = dataclasses.replace(internal, event="pull_request", trust="external")
+    assert settings.store_for(internal) is farm
+    assert settings.store_for(external) is public
+    # No second store configured: one store for both, told apart by the claim.
+    assert BuildSettings(log_dir=tmp_path, store=farm).store_for(external) is farm
+
+
+def test_external_build_store_needs_a_build_store() -> None:
+    with pytest.raises(ValueError, match="needs build_store"):
+        Config.model_validate(
+            {
+                "build_systems": ["x86_64-linux"],
+                "url": "https://ci.example.com",
+                "external_build_store": {"url": "grpc://public:50051"},
+            }
+        )
 
 
 def test_uploaders_conflict_with_build_store() -> None:

@@ -131,6 +131,7 @@ BUILD = BuildRecord(
     eval_duration_ms=None,
     actor=None,
     merged_pr_number=None,
+    external=False,
 )
 
 
