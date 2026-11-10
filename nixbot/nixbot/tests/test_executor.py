@@ -250,6 +250,44 @@ def test_build_nix_command_remote_store(tmp_path: Path) -> None:
     assert cmd[-1] == "/nix/store/foo.drv^*"
 
 
+def test_build_nix_command_per_build_store_overrides(tmp_path: Path) -> None:
+    """A per-build store wins over the instance-wide one."""
+    settings = BuildSettings(
+        log_dir=tmp_path,
+        store=BuildStoreConfig(url="grpc://farm.example.com:50051"),
+    )
+    cmd = build_nix_command(
+        mk_job(),
+        settings,
+        tmp_path / "result-foo",
+        BuildStoreConfig(url="ssh-ng://nixbot@hub.example.com", repos=["o/r"]),
+    )
+    assert cmd[cmd.index("--store") + 1] == "ssh-ng://nixbot@hub.example.com"
+
+
+def test_store_for_picks_per_repo_then_default() -> None:
+    config = Config.model_validate(
+        {
+            "build_systems": ["x86_64-linux"],
+            "url": "https://ci.example.com",
+            "build_store": {"url": "grpc://farm:50051"},
+            "build_stores": [
+                {"url": "ssh-ng://hub", "repos": ["Mic92/repkgs", "numtide/re*"]},
+            ],
+        }
+    )
+    repkgs = config.store_for("Mic92/repkgs")
+    assert repkgs is not None
+    assert repkgs.url == "ssh-ng://hub"
+    globbed = config.store_for("numtide/repkgs-extra")
+    assert globbed is not None
+    assert globbed.url == "ssh-ng://hub"
+    # Anything unmatched keeps the instance-wide default.
+    other = config.store_for("numtide/org")
+    assert other is not None
+    assert other.url == "grpc://farm:50051"
+
+
 def test_uploaders_conflict_with_build_store() -> None:
     with pytest.raises(ValueError, match="cannot be combined"):
         Config.model_validate(

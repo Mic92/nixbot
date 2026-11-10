@@ -67,7 +67,7 @@ if TYPE_CHECKING:
     import asyncpg
 
     from .build_scheduler import BuildOutcome, FailedBuildCache
-    from .config import Config
+    from .config import BuildStoreConfig, Config
     from .db import BuildRecord
     from .gitrepo import FetchCredentials, RepoManager
     from .models import NixEvalJobSuccess
@@ -118,6 +118,7 @@ class AttributeExecutor(Protocol):
         on_start: Callable[[], Awaitable[bool]] | None = None,
         on_built: Callable[[str], None] | None = None,
         identity: EffectIdentity | None = None,
+        store: BuildStoreConfig | None = None,
     ) -> BuildOutcome: ...
 
 

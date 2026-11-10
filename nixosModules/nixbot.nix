@@ -54,6 +54,12 @@ let
             oidc_audience = cfg.buildStore.oidcAudience;
             credential_env = cfg.buildStore.credentialEnv;
           };
+      build_stores = lib.mapAttrsToList (repos: store: {
+        inherit (store) url;
+        oidc_audience = store.oidcAudience;
+        credential_env = store.credentialEnv;
+        repos = [ repos ];
+      }) cfg.buildStore.perRepo;
       gitea =
         if !cfg.gitea.enable then
           null
@@ -332,6 +338,51 @@ in
         type = lib.types.str;
         default = "NIX_GRPC_TOKEN_FILE";
         description = "Environment variable that carries the token file path to nix.";
+      };
+
+      perRepo = lib.mkOption {
+        default = { };
+        example = lib.literalExpression ''
+          {
+            "Mic92/repkgs".url = "ssh-ng://nixbot@10.20.0.39";
+          }
+        '';
+        description = ''
+          Build these repositories in a different store than
+          {option}`buildStore.url`. The attribute name is an "owner/repo"
+          name or an fnmatch pattern ("owner/*"); the first match wins and
+          repositories that match nothing keep the instance-wide default.
+
+          One instance can therefore serve a project whose builds belong
+          somewhere else -- a tribuchet hub, say -- without a second
+          instance, which otherwise needs its own forge app, token, DNS
+          and database.
+
+          This is deliberately service-side configuration: a repository
+          choosing its own build store could redirect builds, and the
+          per-build credential with them, to a host its contributors
+          control.
+        '';
+        type = lib.types.attrsOf (
+          lib.types.submodule {
+            options = {
+              url = lib.mkOption {
+                type = lib.types.str;
+                description = "Store URL, as `nix build --store` takes it.";
+              };
+              oidcAudience = lib.mkOption {
+                type = lib.types.nullOr lib.types.str;
+                default = null;
+                description = "As {option}`buildStore.oidcAudience`, for this store.";
+              };
+              credentialEnv = lib.mkOption {
+                type = lib.types.str;
+                default = "NIX_GRPC_TOKEN_FILE";
+                description = "As {option}`buildStore.credentialEnv`, for this store.";
+              };
+            };
+          }
+        );
       };
     };
 

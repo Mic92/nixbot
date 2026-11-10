@@ -8,6 +8,7 @@ only made sense for the buildbot master/worker split are gone.
 
 from __future__ import annotations
 
+import fnmatch
 import hashlib
 import json
 import os
@@ -227,6 +228,15 @@ class BuildStoreConfig(BaseModel):
     # Environment variable that carries the token file path to nix.
     credential_env: str = "NIX_GRPC_TOKEN_FILE"
 
+    # Repositories this store serves, as "owner/repo" or an fnmatch
+    # pattern ("owner/*"). Empty means every repository.
+    repos: list[str] = []
+
+    def serves(self, repo: str) -> bool:
+        if not self.repos:
+            return True
+        return any(fnmatch.fnmatchcase(repo, pattern) for pattern in self.repos)
+
 
 class PrApprovalConfig(BaseModel):
     """Hold pull requests from outside contributors until a maintainer
@@ -380,6 +390,8 @@ class Config(BaseModel):
     # Global cap on concurrent attribute builds; None = derive from CPU count.
     build_concurrency: int | None = None
     build_store: BuildStoreConfig | None = None
+    # Stores for individual repositories, consulted before `build_store`.
+    build_stores: list[BuildStoreConfig] = []
 
     gitea: GiteaConfig | None = None
     gitlab: GitlabConfig | None = None
@@ -442,10 +454,28 @@ class Config(BaseModel):
     @model_validator(mode="after")
     def _uploaders_need_local_outputs(self) -> Config:
         # Outputs stay in the remote store.
-        if self.build_store is not None and self.uploaders:
+        if (self.build_store is not None or self.build_stores) and self.uploaders:
             msg = "build_store and uploaders cannot be combined"
             raise ValueError(msg)
         return self
+
+    @model_validator(mode="after")
+    def _per_repo_stores_are_scoped(self) -> Config:
+        # A store in `build_stores` without `repos` would shadow every
+        # later entry and silently become the default; say so instead.
+        for store in self.build_stores:
+            if not store.repos:
+                msg = "build_stores entries need `repos`; use `build_store` for the default"
+                raise ValueError(msg)
+        return self
+
+    def store_for(self, repo: str) -> BuildStoreConfig | None:
+        """The build store for `repo` ("owner/repo"): the first matching
+        entry in `build_stores`, else the instance-wide `build_store`."""
+        for store in self.build_stores:
+            if store.serves(repo):
+                return store
+        return self.build_store
 
     @classmethod
     def load(cls, path: Path) -> Config:

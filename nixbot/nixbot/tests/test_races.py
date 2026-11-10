@@ -38,6 +38,7 @@ async def test_cancel_during_retry_window(tmp_path: Path) -> None:
         cancel: asyncio.Event,
         on_built: object = None,
         identity: object = None,
+        store: object = None,
     ) -> tuple[BuildOutcome, bool]:
         nonlocal attempts
         attempts += 1
