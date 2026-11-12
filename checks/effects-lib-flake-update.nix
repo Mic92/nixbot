@@ -129,6 +129,10 @@ let
       branches ? [ "flake-update" ],
       # Each run updates the same: the second must not push.
       stable ? false,
+      # Commits per run: the lock file's, and any postUpdate makes.
+      commits ? 1,
+      # The effect must fail, pushing nothing and opening nothing.
+      fails ? false,
       check ? "",
       expected,
     }:
@@ -158,49 +162,65 @@ let
           url."http://x-access-token:checkout-token@127.0.0.1:$port/".insteadOf "$prefix"
       done
 
-      for attempt in 1 2; do
-        heads=$(git -C "$remote" for-each-ref --format='%(objectname)' refs/heads)
-        (
-          ${lib.optionalString stable "export FAKE_NIX_STABLE=1"}
-          cd "$TMPDIR/checkout"
-          export PATH=${lib.makeBinPath effect.nativeBuildInputs}:$PATH
-          export NIXBOT_EFFECT_CHECKOUT=$TMPDIR/checkout
-          set -euo pipefail
-          eval ${lib.escapeShellArg effect.userSetupScript}
-          eval ${lib.escapeShellArg effect.effectScript}
-        )
-      done
+      runEffect() (
+        ${lib.optionalString stable "export FAKE_NIX_STABLE=1"}
+        cd "$TMPDIR/checkout"
+        export PATH=${lib.makeBinPath effect.nativeBuildInputs}:$PATH
+        export NIXBOT_EFFECT_CHECKOUT=$TMPDIR/checkout
+        set -euo pipefail
+        eval ${lib.escapeShellArg effect.userSetupScript}
+        eval ${lib.escapeShellArg effect.effectScript}
+      )
+    ''
+    + (
+      if fails then
+        ''
+          if runEffect; then
+            echo "${repo}: the effect should have failed" >&2
+            exit 1
+          fi
+          [[ -z $(git -C "$remote" for-each-ref refs/heads/flake-update) ]]
+          [[ ! -e $TMPDIR/requests ]]
+          rm "$TMPDIR/nix-args"
+        ''
+      else
+        ''
+          for attempt in 1 2; do
+            heads=$(git -C "$remote" for-each-ref --format='%(objectname)' refs/heads)
+            runEffect
+          done
 
-      # Fetched and pushed with the effect's token, not the checkout's.
-      grep -qx "http://${
-        if forge == "gitlab" then "oauth2" else "x-access-token"
-      }:secret-token@127.0.0.1:$port" ~/.git-credentials
-      ${lib.optionalString (forge == "github") ''
-        grep -qx "access-tokens = 127.0.0.1:$port=secret-token" ~/.config/nix/nix.conf
-      ''}
-      ${lib.optionalString stable ''
-        [[ $(git -C "$remote" for-each-ref --format='%(objectname)' refs/heads) == "$heads" ]]
-      ''}
-      ${check}
-      # One update per branch and run.
-      [[ $(grep -c . "$TMPDIR/nix-args") == ${toString (2 * builtins.length branches)} ]]
-      rm "$TMPDIR/nix-args"
-      for branch in ${lib.escapeShellArgs branches}; do
-        ${
-          if resets then
-            ''
-              # Reset: each run starts again from develop and force-pushes.
-              [[ $(git -C "$remote" rev-parse "$branch^") == "$develop" ]]
-            ''
-          else
-            ''
-              # No base merge: the second run updates the branch as it stands.
-              [[ $(git -C "$remote" rev-parse "$branch~2") == "$develop" ]]
-            ''
-        }
-      done
-      diff "$TMPDIR/requests" ${pkgs.writeText "${forge}-${repo}-requests" expected}
-    '';
+          # Fetched and pushed with the effect's token, not the checkout's.
+          grep -qx "http://${
+            if forge == "gitlab" then "oauth2" else "x-access-token"
+          }:secret-token@127.0.0.1:$port" ~/.git-credentials
+          ${lib.optionalString (forge == "github") ''
+            grep -qx "access-tokens = 127.0.0.1:$port=secret-token" ~/.config/nix/nix.conf
+          ''}
+          ${lib.optionalString stable ''
+            [[ $(git -C "$remote" for-each-ref --format='%(objectname)' refs/heads) == "$heads" ]]
+          ''}
+          ${check}
+          # One update per branch and run.
+          [[ $(grep -c . "$TMPDIR/nix-args") == ${toString (2 * builtins.length branches)} ]]
+          rm "$TMPDIR/nix-args"
+          for branch in ${lib.escapeShellArgs branches}; do
+            ${
+              if resets then
+                ''
+                  # Reset: each run starts again from develop and force-pushes.
+                  [[ $(git -C "$remote" rev-parse "$branch~${toString commits}") == "$develop" ]]
+                ''
+              else
+                ''
+                  # No base merge: the second run updates the branch as it stands.
+                  [[ $(git -C "$remote" rev-parse "$branch~${toString (2 * commits)}") == "$develop" ]]
+                ''
+            }
+          done
+          diff "$TMPDIR/requests" ${pkgs.writeText "${forge}-${repo}-requests" expected}
+        ''
+    );
   create =
     forge: repo:
     {
@@ -383,6 +403,48 @@ let
         (create "github" "exclude")
         (create "github" "exclude")
       ];
+    }
+    {
+      # A file generated from flake.lock, as a vendor hash goes stale when
+      # nixpkgs' fetcher changes, or from a lock file nix does not update,
+      # as deps.nix from mix.lock: postUpdate regenerates it in the same
+      # pull request, so CI tests the new lock with it.
+      forge = "github";
+      repo = "postupdate";
+      effect = effectFor "github" {
+        baseMergeBranch = "develop";
+        postUpdate = ''
+          jq -r .run flake.lock >generated
+          git add generated
+          git commit -q -m "generated: Update" -m "Regenerated from flake.lock"
+        '';
+      };
+      commits = 2;
+      check = ''
+        [[ $(git -C "$remote" show flake-update:generated) \
+          == $(git -C "$remote" show flake-update:flake.lock | jq -r .run) ]]
+      '';
+      # The body has both commits' bodies, not just the last one's.
+      expected = requests (
+        lib.genList (
+          _:
+          lib.recursiveUpdate (create "github" "postupdate") {
+            body.body = "Updated input 'nixpkgs'\n\nRegenerated from flake.lock";
+          }
+        ) 2
+      );
+    }
+    {
+      # A postUpdate that leaves changes uncommitted fails the effect
+      # rather than pushing a lock without them.
+      forge = "github";
+      repo = "uncommitted";
+      effect = effectFor "github" {
+        baseMergeBranch = "develop";
+        postUpdate = "touch generated";
+      };
+      fails = true;
+      expected = "";
     }
     {
       # A branch and pull request per input of the lock file.
