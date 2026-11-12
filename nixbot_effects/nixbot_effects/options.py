@@ -32,6 +32,9 @@ class EffectsOptions:
     forge_type: str | None = None
     locked_url: str | None = None
     default_branch: str | None = None
+    # Locked flake URL whose herculesCI.onEvent every repository gets
+    # below its own onEvent.
+    default_event_effects: str | None = None
     # Credentials and secrets, as values.
     secrets: dict[str, Any] | None = None
     git_token: str | None = None

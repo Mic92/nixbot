@@ -38,7 +38,9 @@ def build_context(
     o: Orchestrator, event: ChangeEvent, worktree_path: Path
 ) -> EffectsContext:
     """Context for evaluating and building only. The tree was already
-    evaluated by the build, and nothing runs, so no tokens or secrets."""
+    evaluated by the build, and nothing runs, so no tokens or secrets.
+    The server's default onEvent effects are left out: the commit cannot
+    break them, and every build of every project would check them."""
     return effects_context(
         o.config,
         event.repo,
@@ -47,6 +49,7 @@ def build_context(
         branch=event.branch,
         git_token=None,
         task_token=None,
+        with_default_event_effects=False,
     )
 
 
