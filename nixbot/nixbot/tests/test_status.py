@@ -85,12 +85,15 @@ class MemoryCommitStatuses:
     ) -> None:
         self.rows[(project_id, sha, context)] = status
 
-    async def failed(self, project_id: int, sha: str) -> dict[str, str | None]:
+    async def unresolved(self, project_id: int, sha: str) -> dict[str, str | None]:
         return {
             context: status.attr
             for (project, head, context), status in self.rows.items()
             if (project, head) == (project_id, sha)
-            and status.state is StatusState.failure
+            and (
+                status.state is StatusState.failure
+                or (status.state is StatusState.pending and status.attr is not None)
+            )
         }
 
 
@@ -225,11 +228,16 @@ async def test_build_restarted_posts_pending_new_runs() -> None:
     """Re-run must flip the checks to pending immediately and, on
     GitHub, force a new check run so it renders as re-running."""
     reporter, poster, store = make_reporter()
-    for context in (
-        "nixbot/nix-build github:acme/widget#checks.x86_64-linux.foo",
-        "nixbot/nix-build",
+    for context, attr in (
+        (
+            "nixbot/nix-build github:acme/widget#checks.x86_64-linux.foo",
+            "x86_64-linux.foo",
+        ),
+        ("nixbot/nix-build", None),
     ):
-        await store.set(1, "sha1", context, PostedStatus(StatusState.failure, run_id=5))
+        await store.set(
+            1, "sha1", context, PostedStatus(StatusState.failure, attr, run_id=5)
+        )
 
     await reporter.build_restarted(EVENT, BUILD, "x86_64-linux.foo")
     contexts = [(p.context, p.state) for p in poster.posts]
@@ -247,6 +255,38 @@ async def test_build_restarted_posts_pending_new_runs() -> None:
     assert [(p.context, p.state) for p in poster.posts] == [
         ("nixbot/nix-eval", StatusState.pending),
         ("nixbot/nix-build", StatusState.pending),
+    ]
+
+
+@pytest.mark.parametrize("prefix", ["checks", "hydraJobs"])
+async def test_restarted_attribute_settles_on_rebuild(prefix: str) -> None:
+    """A per-attribute restart flips the context the attribute was
+    posted under, whatever the repository's attribute prefix, and the
+    rebuild settles it."""
+    reporter, poster, _ = make_reporter()
+
+    async def finish(status: str, generation: int) -> None:
+        await reporter.build_finished(
+            EVENT,
+            BUILD,
+            BuildResult(
+                status,
+                generation,
+                [attr_result("foo", AttributeStatus(status))],
+                attr_statuses={"foo": status},
+                attr_prefix=prefix,
+            ),
+        )
+
+    await finish("failed", 1)
+    await reporter.build_restarted(EVENT, BUILD, "foo")
+    await finish("succeeded", 2)
+    context = attr_status_context("github", "acme/widget", "foo", prefix)
+    assert {p.context for p in poster.posts} == {context, "nixbot/nix-build"}
+    assert [p.state for p in poster.posts if p.context == context] == [
+        StatusState.failure,
+        StatusState.pending,
+        StatusState.success,
     ]
 
 
@@ -487,14 +527,14 @@ async def test_success_flip_on_rebuild() -> None:
         BUILD,
         BuildResult("failed", 1, [attr_result("flaky", AttributeStatus.failed)]),
     )
-    assert context in await store.failed(1, "sha1")
+    assert context in await store.unresolved(1, "sha1")
     # Rebuild succeeds: status flipped, record cleared.
     await reporter.build_finished(
         EVENT,
         BUILD,
         BuildResult("succeeded", 2, [attr_result("flaky", AttributeStatus.succeeded)]),
     )
-    assert context not in await store.failed(1, "sha1")
+    assert context not in await store.unresolved(1, "sha1")
     flip = [p for p in poster.posts if p.context == context]
     assert [p.state for p in flip] == [StatusState.failure, StatusState.success]
 
@@ -517,7 +557,7 @@ async def test_cancelled_attributes_are_recorded_as_failures() -> None:
         BuildResult("cancelled", 1, [attr_result("a", AttributeStatus.cancelled)]),
     )
     context = attr_status_context("github", "acme/widget", "a")
-    assert context in await store.failed(1, "sha1")
+    assert context in await store.unresolved(1, "sha1")
     combined = next(p for p in poster.posts if p.context == "nixbot/nix-build")
     assert combined.state == StatusState.error
 
@@ -642,7 +682,7 @@ async def test_success_flip_for_attributes_outside_the_rerun_subset() -> None:
             attr_statuses={"a": "succeeded", "b": "succeeded"},
         ),
     )
-    assert context not in await store.failed(1, "sha1")
+    assert context not in await store.unresolved(1, "sha1")
     assert [p.state for p in poster.posts if p.context == context] == [
         StatusState.success
     ]
@@ -976,7 +1016,7 @@ async def test_failure_of_an_attribute_no_longer_built_is_resolved() -> None:
         "checks.x": (StatusState.success, "succeeded"),
         "checks.gone": (StatusState.success, "not part of this build"),
     }
-    assert await statuses.failed(1, "sha1") == {}
+    assert await statuses.unresolved(1, "sha1") == {}
 
 
 async def test_rebuild_leaves_failures_without_an_attribute_alone() -> None:

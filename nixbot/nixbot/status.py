@@ -16,9 +16,11 @@ attributes, capped by failedBuildReportLimit (default 47).
 The last status posted per (project, sha, context) is stored in
 commit_statuses: GitHub runs are PATCHed by their stored id, and a
 later build of the commit flips stored failures to success, including
-those of attributes it no longer builds. Status posts carry the
-build's monotonic generation; stale posts (lower generation than the
-last one sent for that build) are dropped.
+those of attributes it no longer builds. A per-attribute restart sets
+the attribute's stored context pending, and the rebuild settles it the
+same way. Status posts carry the build's monotonic generation; stale
+posts (lower generation than the last one sent for that build) are
+dropped.
 
 Target URLs point at the service's own URL scheme
 (/repos/<forge>/<owner>/<name>/builds/<number>), independent of the frontend tasks.
@@ -138,8 +140,9 @@ class CommitStatuses(Protocol):
         self, project_id: int, sha: str, context: str, status: PostedStatus
     ) -> None: ...
 
-    async def failed(self, project_id: int, sha: str) -> dict[str, str | None]:
-        """Failed contexts of the commit, with their attribute."""
+    async def unresolved(self, project_id: int, sha: str) -> dict[str, str | None]:
+        """Contexts of the commit a later build settles, with their
+        attribute: failures, and attributes a restart set pending."""
         ...
 
 
@@ -172,8 +175,10 @@ class CommitStatusStore:
             run_id=status.run_id,
         )
 
-    async def failed(self, project_id: int, sha: str) -> dict[str, str | None]:
-        rows = await q.failed_commit_statuses(self.pool, project_id=project_id, sha=sha)
+    async def unresolved(self, project_id: int, sha: str) -> dict[str, str | None]:
+        rows = await q.unresolved_commit_statuses(
+            self.pool, project_id=project_id, sha=sha
+        )
         return {row.context: row.attr for row in rows}
 
 
@@ -703,21 +708,21 @@ class ForgeStatusReporter:
                 force_new=True,
             )
         else:
-            context = attr_status_context(
-                event.repo.forge,
-                event.repo.name,
-                attr,
-                context_prefix=self.context_prefix,
-            )
-            await self._post(
-                event,
-                build,
-                context,
-                StatusState.pending,
-                "rebuilding",
-                attr=attr,
-                force_new=True,
-            )
+            # Only a build knows the repository's attribute prefix, so
+            # flip the context the attribute was posted under.
+            unresolved = await self.statuses.unresolved(event.repo.id, event.commit_sha)
+            for context, posted_attr in unresolved.items():
+                if posted_attr != attr:
+                    continue
+                await self._post(
+                    event,
+                    build,
+                    context,
+                    StatusState.pending,
+                    "rebuilding",
+                    attr=attr,
+                    force_new=True,
+                )
         await self._post(
             event,
             build,
@@ -739,7 +744,7 @@ class ForgeStatusReporter:
     ) -> dict[str, int]:
         """Per-attribute failure statuses and success flips over the
         whole build. Returns failed/succeeded/cancelled counts."""
-        previously_failed = await self.statuses.failed(event.repo.id, event.commit_sha)
+        unresolved = await self.statuses.unresolved(event.repo.id, event.commit_sha)
 
         counts = {"failed": 0, "succeeded": 0, "cancelled": 0}
         reported = 0
@@ -752,14 +757,14 @@ class ForgeStatusReporter:
                 attr_prefix,
                 context_prefix=self.context_prefix,
             )
-            was_failed = context in previously_failed
-            previously_failed.pop(context, None)
+            was_unresolved = context in unresolved
+            unresolved.pop(context, None)
             if status in FAILED_STATUS_STATES:
                 result = detail.get(attr)
-                if was_failed and result is None:
+                if was_unresolved and result is None:
                     # Already posted with error detail.
                     continue
-                if not was_failed:
+                if not was_unresolved:
                     # Only new failures consume the report budget;
                     # previously-failed contexts always re-post so they
                     # can later flip to success.
@@ -781,14 +786,14 @@ class ForgeStatusReporter:
                     attr=attr,
                     text=_fence(error) if error else None,
                 )
-            elif was_failed:
+            elif was_unresolved:
                 await self._post(
                     event, build, context, StatusState.success, "succeeded", attr=attr
                 )
         if complete:
             # Failures of attributes this build of the commit no longer
             # has, e.g. after the PR's base dropped them.
-            for context, dropped in previously_failed.items():
+            for context, dropped in unresolved.items():
                 # The gate, the eval and the effects have no attribute.
                 if dropped is None:
                     continue

@@ -220,12 +220,18 @@ async def test_commit_status_store(pool: asyncpg.Pool) -> None:
     assert await store.get(project_id, "sha", "ctx") == PostedStatus(
         StatusState.failure, "flaky", 555
     )
-    assert await store.failed(project_id, "sha") == {"ctx": "flaky"}
+    assert await store.unresolved(project_id, "sha") == {"ctx": "flaky"}
+    # A restart's pending attribute stays unresolved, a pending gate not.
+    await store.set(
+        project_id, "sha", "ctx", PostedStatus(StatusState.pending, "flaky", 556)
+    )
+    await store.set(project_id, "sha", "gate", PostedStatus(StatusState.pending))
+    assert await store.unresolved(project_id, "sha") == {"ctx": "flaky"}
     # A later post on the commit takes over.
     await store.set(
         project_id, "sha", "ctx", PostedStatus(StatusState.success, None, 777)
     )
-    assert await store.failed(project_id, "sha") == {}
+    assert await store.unresolved(project_id, "sha") == {}
     assert await store.get(project_id, "sha", "ctx") == PostedStatus(
         StatusState.success, None, 777
     )
