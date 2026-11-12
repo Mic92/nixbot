@@ -6,12 +6,12 @@
 from __future__ import annotations
 
 __all__: collections.abc.Sequence[str] = (
-    "FailedCommitStatusesRow",
     "GetCommitStatusRow",
     "QueryResults",
-    "failed_commit_statuses",
+    "UnresolvedCommitStatusesRow",
     "get_commit_status",
     "latest_build_for_sha",
+    "unresolved_commit_statuses",
     "upsert_commit_status",
 )
 
@@ -36,7 +36,7 @@ class GetCommitStatusRow:
 
 
 @dataclasses.dataclass()
-class FailedCommitStatusesRow:
+class UnresolvedCommitStatusesRow:
     context: str
     attr: str | None
 
@@ -55,9 +55,10 @@ DO UPDATE SET state = EXCLUDED.state, attr = EXCLUDED.attr,
               run_id = EXCLUDED.run_id, updated_at = now()
 """
 
-FAILED_COMMIT_STATUSES: typing.Final[str] = """-- name: FailedCommitStatuses :many
+UNRESOLVED_COMMIT_STATUSES: typing.Final[str] = """-- name: UnresolvedCommitStatuses :many
 SELECT context, attr FROM commit_statuses
-WHERE project_id = $1 AND sha = $2 AND state = 'failure'
+WHERE project_id = $1 AND sha = $2
+  AND (state = 'failure' OR (state = 'pending' AND attr IS NOT NULL))
 """
 
 LATEST_BUILD_FOR_SHA: typing.Final[str] = """-- name: LatestBuildForSha :one
@@ -119,11 +120,11 @@ async def upsert_commit_status(conn: ConnectionLike, *, project_id: int, sha: st
     await conn.execute(UPSERT_COMMIT_STATUS, project_id, sha, context, state, attr, run_id)
 
 
-def failed_commit_statuses(conn: ConnectionLike, *, project_id: int, sha: str) -> QueryResults[FailedCommitStatusesRow]:
-    def _decode_hook(row: asyncpg.Record) -> FailedCommitStatusesRow:
-        return FailedCommitStatusesRow(context=row[0], attr=row[1])
+def unresolved_commit_statuses(conn: ConnectionLike, *, project_id: int, sha: str) -> QueryResults[UnresolvedCommitStatusesRow]:
+    def _decode_hook(row: asyncpg.Record) -> UnresolvedCommitStatusesRow:
+        return UnresolvedCommitStatusesRow(context=row[0], attr=row[1])
 
-    return QueryResults(conn, FAILED_COMMIT_STATUSES, _decode_hook, project_id, sha)
+    return QueryResults(conn, UNRESOLVED_COMMIT_STATUSES, _decode_hook, project_id, sha)
 
 
 async def latest_build_for_sha(conn: ConnectionLike, *, project_id: int, commit_sha: str) -> int | None:

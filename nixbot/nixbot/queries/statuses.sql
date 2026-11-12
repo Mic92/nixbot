@@ -11,9 +11,10 @@ ON CONFLICT (project_id, sha, context)
 DO UPDATE SET state = EXCLUDED.state, attr = EXCLUDED.attr,
               run_id = EXCLUDED.run_id, updated_at = now();
 
--- name: FailedCommitStatuses :many
+-- name: UnresolvedCommitStatuses :many
 SELECT context, attr FROM commit_statuses
-WHERE project_id = $1 AND sha = $2 AND state = 'failure';
+WHERE project_id = $1 AND sha = $2
+  AND (state = 'failure' OR (state = 'pending' AND attr IS NOT NULL));
 
 -- name: LatestBuildForSha :one
 SELECT id FROM builds WHERE project_id = $1 AND commit_sha = $2
