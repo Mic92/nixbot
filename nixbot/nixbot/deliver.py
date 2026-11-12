@@ -72,6 +72,10 @@ class Delivery:
     # pushed commit.
     tag: str | None = None
     rev: str | None = None
+    # A build settling for a head, as opposed to something happening on
+    # the forge. The orchestrator may report the same one again, e.g. for
+    # a head that reused the build and so has no build record to find.
+    once: bool = False
 
     def as_payload(self) -> dict[str, Any]:
         return {k: v for k, v in asdict(self).items() if v is not None}
@@ -157,6 +161,23 @@ def build_payload(base_url: str, info: RepoInfo, build: BuildRecord) -> dict[str
         "branch": build.branch,
         "rev": build.commit_sha,
     }
+
+
+def _settled_for(payload: dict[str, Any]) -> tuple[Any, ...]:
+    pr = payload.get("pullRequest", {})
+    build = payload.get("build", {})
+    return (pr.get("number"), pr.get("headRev"), build.get("branch"), build.get("rev"))
+
+
+async def _already_delivered(
+    s: CIService, build: BuildRecord, kind: str, name: str, payload: dict[str, Any]
+) -> bool:
+    row = await q.effect_run(s.pool, build_id=build.id_, kind=kind, name=name)
+    # A pending row may have lost its work item to a crash. Queueing it
+    # again is harmless.
+    if row is None or row.status == "pending" or row.payload is None:
+        return False
+    return _settled_for(json.loads(row.payload)) == _settled_for(payload)
 
 
 def event_dedup_key(
@@ -426,6 +447,8 @@ async def _match_and_enqueue(  # noqa: PLR0913
     busy: list[str] = []
     payload_json = json.dumps(payload)
     for name, meta in listing.items():
+        if d.once and await _already_delivered(s, build, d.kind, name, payload):
+            continue
         reason = skip_reason(meta.when, payload)
         lock = None
         try:

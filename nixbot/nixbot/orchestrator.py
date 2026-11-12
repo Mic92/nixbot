@@ -448,6 +448,7 @@ class Orchestrator:
             "build_id": build.id_,
             "actor": event.actor,
             "pr_number": event.pr_number,
+            "once": True,
         }
         if event.pr_number is not None and build.status == BuildStatus.SUCCEEDED:
             await queue.enqueue("deliver", key, {"kind": "pull_request", **base})
