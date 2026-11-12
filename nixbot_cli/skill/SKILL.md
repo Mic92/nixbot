@@ -3,9 +3,16 @@ name: nixbot-cli
 description: Inspect and control nixbot CI builds with nbo. Use to find the build for a branch/PR, watch it, list failed attributes, fetch failure logs, restart or cancel builds.
 ---
 
-Server: `NIXBOT_URL` or `~/.config/nixbot/hosts.toml`. In a checkout, repo and
-build number are inferred from `origin`/`HEAD`, override with
-`-R [forge/]owner/name` and an explicit build number.
+Server, first match: `NIXBOT_URL`; the `~/.config/nixbot/hosts.toml` entry whose
+`remotes` cover the `-R` repo; `git config nixbot.url`; the only hosts.toml
+entry; the entry whose `remotes` match `origin`. `-R` alone does not pick a
+server unless a `remotes` pattern covers it, so outside the repo's checkout set
+`NIXBOT_URL`, for example to the host of a PR's nixbot check link. Check with
+`nbo auth status`.
+
+In a checkout, repo and build number are inferred from `origin`/`HEAD`. `origin`
+may be a fork, so pass `-R [forge/]owner/name` and an explicit build number.
+Reads need no token on public instances.
 
 ```bash
 nbo build list --branch main
@@ -22,5 +29,4 @@ nbo effects list | run default.deploy        # local, no token
 ```
 
 Attribute and effect args accept unambiguous substrings; `--json [fields]` for
-machine-readable output. `nbo auth status` shows server/token. HTTP API docs at
-`/llms.txt`.
+machine-readable output. HTTP API docs at `/llms.txt`.

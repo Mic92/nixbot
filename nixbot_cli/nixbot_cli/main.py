@@ -640,8 +640,9 @@ def follow_effect(
 def cmd_auth_status(client: NixbotClient, args: argparse.Namespace) -> int:
     settings = Settings.load()
     print(f"server: {settings.url}")
-    if settings.token:
-        print(f"token: {settings.token[:8]}… (NIXBOT_TOKEN or {config_path()})")
+    # fetch_token() also makes the reachability check below send the token.
+    if token := settings.token or client.fetch_token():
+        print(f"token: {token[:8]}… (NIXBOT_TOKEN or {config_path()})")
     else:
         print("token: none (anonymous). Set NIXBOT_TOKEN for control commands.")
     client.repos()  # verifies the server answers and the token is accepted
@@ -865,9 +866,15 @@ To run it on this machine instead, see nbo effects run-scheduled.""",
     return parser
 
 
-def make_client() -> NixbotClient:
-    settings = Settings.load()
-    return NixbotClient(settings.url, settings.token)
+def make_client(args: argparse.Namespace) -> NixbotClient:
+    # -R (or `repo enable/disable REPO`) can pick the server, see Settings.load.
+    settings = Settings.load(
+        getattr(args, "repo", None) or getattr(args, "repository", None)
+    )
+    token = settings.token or (
+        settings.resolve_token if settings.token_command else None
+    )
+    return NixbotClient(settings.url, token)
 
 
 def main(argv: Sequence[str] | None = None) -> NoReturn:
@@ -875,7 +882,7 @@ def main(argv: Sequence[str] | None = None) -> NoReturn:
     try:
         # Effects commands drive nix locally and need no API client.
         if getattr(args, "needs_client", True):
-            with make_client() as client:
+            with make_client(args) as client:
                 code = args.func(client, args)
         else:
             code = args.func(args)
