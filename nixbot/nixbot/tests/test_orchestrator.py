@@ -2018,6 +2018,33 @@ async def test_lock_serializes_builds_without_interleaving(
     assert ident(first_deploy) == (build1.id_, "deploy")
 
 
+async def test_lock_runs_dependency_that_sorts_after_its_dependent(
+    pool: asyncpg.Pool,
+    make_env: EnvFactory,
+    upstream: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Effects on one lock follow `after`, whatever their names: `apply`
+    is queued before `migrate`, and waiting for it must not keep
+    `migrate` from the lock."""
+    ran = patch_effects(
+        monkeypatch,
+        effects={
+            "apply": EffectMeta(after=("migrate",), lock="env"),
+            "migrate": EffectMeta(lock="env"),
+        },
+    ).ran
+    orchestrator, project, build = await _effects_build(
+        make_env, upstream, "eff-lock-after"
+    )
+    await drain_effect_items(orchestrator, project, pool)
+    assert ran == ["migrate", "apply"]
+    assert await effect_statuses(pool, build.id_) == {
+        "apply": "succeeded",
+        "migrate": "succeeded",
+    }
+
+
 async def test_effect_dep_cycle_fails_discovery(
     pool: asyncpg.Pool,
     make_env: EnvFactory,
