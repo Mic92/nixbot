@@ -36,6 +36,9 @@ DO NOTHING;
 -- dependency settled; the runner then decides between run and skip.
 -- A pull request based on a lower-numbered PR's head branch waits for
 -- that PR's queued or running change items, so a stack builds bottom-up.
+-- A PR not into the default branch also waits 10 seconds after it
+-- arrives: a restack pushes every branch at once and the webhooks land in
+-- any order, so the PR below must be queued before the hold can see it.
 UPDATE work_queue SET status = 'running', claimed_at = now()
 WHERE id = (
     SELECT id FROM work_queue w
@@ -73,6 +76,15 @@ WHERE id = (
               AND j.default_branch = w.payload->>'branch'
           )
       )
+      AND NOT (w.kind = 'change'
+               AND w.payload->>'pr_number' IS NOT NULL
+               AND w.created_at > now() - interval '10 seconds'
+               AND NOT EXISTS (
+                 SELECT 1 FROM projects j
+                 WHERE j.forge = w.payload->>'forge'
+                   AND j.forge_repo_id = w.payload->>'forge_repo_id'
+                   AND j.default_branch = w.payload->>'branch'
+               ))
     ORDER BY w.created_at, w.id
     FOR UPDATE SKIP LOCKED
     LIMIT 1

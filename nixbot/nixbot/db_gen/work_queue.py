@@ -99,6 +99,15 @@ WHERE id = (
               AND j.default_branch = w.payload->>'branch'
           )
       )
+      AND NOT (w.kind = 'change'
+               AND w.payload->>'pr_number' IS NOT NULL
+               AND w.created_at > now() - interval '10 seconds'
+               AND NOT EXISTS (
+                 SELECT 1 FROM projects j
+                 WHERE j.forge = w.payload->>'forge'
+                   AND j.forge_repo_id = w.payload->>'forge_repo_id'
+                   AND j.default_branch = w.payload->>'branch'
+               ))
     ORDER BY w.created_at, w.id
     FOR UPDATE SKIP LOCKED
     LIMIT 1

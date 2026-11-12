@@ -106,6 +106,13 @@ async def _enqueue_change(queue: WorkQueue, change: ChangeRequest) -> None:
     )
 
 
+async def _settle(pool: asyncpg.Pool) -> None:
+    """Age every queued item past the wait a stacked PR gets on arrival."""
+    await pool.execute(
+        "UPDATE work_queue SET created_at = created_at - interval '1 minute'"
+    )
+
+
 async def _claim_prs(queue: WorkQueue) -> dict[int, int]:
     """Claim everything claimable: PR number -> work item id."""
     claimed = {}
@@ -122,6 +129,7 @@ async def test_claim_builds_stacked_prs_bottom_up(pool: asyncpg.Pool) -> None:
     await _enqueue_pr(queue, 3, "b2", "b3", "c3")
     await _enqueue_pr(queue, 2, "b1", "b2", "c2")
     await _enqueue_pr(queue, 1, "main", "b1", "c1")
+    await _settle(pool)
 
     bottom = await _claim_prs(queue)
     assert list(bottom) == [1]
@@ -136,6 +144,26 @@ async def test_claim_builds_stacked_prs_bottom_up(pool: asyncpg.Pool) -> None:
     assert list(middle) == [2]
     await queue.finish(middle[2])
     assert list(await _claim_prs(queue)) == [3]
+
+
+async def test_claim_lets_a_restack_land_before_building_it(pool: asyncpg.Pool) -> None:
+    """A restack's pushes land within a second or two, in any order. A
+    stacked PR waits a few seconds after it arrives, so the PR below is
+    queued by the time it could start; a PR into the default branch does
+    not wait."""
+    await insert_project(pool, forge_repo_id="stack")
+    queue = WorkQueue(pool)
+    await _enqueue_pr(queue, 3, "b2", "b3", "c3")
+    assert await _claim_prs(queue) == {}
+    await _enqueue_pr(queue, 2, "b1", "b2", "c2")
+    await _enqueue_pr(queue, 1, "main", "b1", "c1")
+
+    bottom = await _claim_prs(queue)
+    assert list(bottom) == [1]
+    await _settle(pool)
+    assert await _claim_prs(queue) == {}
+    await queue.finish(bottom[1])
+    assert list(await _claim_prs(queue)) == [2]
 
 
 async def test_claim_holds_only_on_open_pr_branches(pool: asyncpg.Pool) -> None:
@@ -165,6 +193,7 @@ async def test_claim_holds_only_on_open_pr_branches(pool: asyncpg.Pool) -> None:
     await supersede_pending_changes(
         pool, forge="github", forge_repo_id="stack", pr_number=7
     )
+    await _settle(pool)
     claimed = await _claim_prs(queue)
     assert list(claimed) == [1, 2, 3, 4, 5, 8]
     await queue.finish(claimed[5])
