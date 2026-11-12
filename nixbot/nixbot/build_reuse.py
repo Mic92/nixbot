@@ -78,9 +78,15 @@ async def replay_effect_statuses(
     o: Orchestrator, event: ChangeEvent, build: BuildRecord
 ) -> None:
     """Re-post each finished effect's status and the aggregate summary
-    onto the reusing commit's SHA, so a failed deploy is not green."""
+    onto the reusing commit's SHA, so a failed deploy is not green.
+    Only the build's own effects: a delivered (onEvent) effect posts no
+    status when it runs, so one replayed here would never be updated."""
     for effect in await builds_q.effects_for_build(o.pool, build_id=build.id_):
-        if effect.status in ("succeeded", "failed", "dependency_failed"):
+        if effect.owner == "build" and effect.status in (
+            "succeeded",
+            "failed",
+            "dependency_failed",
+        ):
             await o.reporter.effect_finished(
                 event,
                 build,
