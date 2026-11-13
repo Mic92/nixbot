@@ -275,15 +275,21 @@ let
     body.merge_method = "rebase";
     path = "/api/v3/repos/acme/clean/pulls/1/merge";
   };
-  giteaMerge = {
+  giteaMerge = repo: method: {
     method = "POST";
     auth = "token secret-token";
     body = {
-      Do = "squash";
+      Do = method;
       delete_branch_after_merge = true;
       merge_when_checks_succeed = true;
     };
-    path = "/api/v1/repos/acme/giteamerge/pulls/1/merge";
+    path = "/api/v1/repos/acme/${repo}/pulls/1/merge";
+  };
+  giteaOpenPulls = repo: {
+    method = "GET";
+    auth = "token secret-token";
+    body = null;
+    path = "/api/v1/repos/acme/${repo}/pulls?state=open";
   };
   cases = [
     {
@@ -355,16 +361,26 @@ let
       };
       expected = requests [
         (create "gitea" "giteamerge")
-        giteaMerge
+        (giteaMerge "giteamerge" "squash")
         (create "gitea" "giteamerge")
-        (
-          openPulls "giteamerge" ""
-          // {
-            auth = "token secret-token";
-            path = "/api/v1/repos/acme/giteamerge/pulls?state=open";
-          }
-        )
-        giteaMerge
+        (giteaOpenPulls "giteamerge")
+        (giteaMerge "giteamerge" "squash")
+      ];
+    }
+    {
+      # Gitea only: the pull request lands as it is, its commits unchanged.
+      forge = "gitea";
+      repo = "fastforward";
+      effect = effectFor "gitea" {
+        baseMergeBranch = "develop";
+        autoMergeMethod = "fast-forward-only";
+      };
+      expected = requests [
+        (create "gitea" "fastforward")
+        (giteaMerge "fastforward" "fast-forward-only")
+        (create "gitea" "fastforward")
+        (giteaOpenPulls "fastforward")
+        (giteaMerge "fastforward" "fast-forward-only")
       ];
     }
     {
