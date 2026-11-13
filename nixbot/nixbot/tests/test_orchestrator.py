@@ -2359,6 +2359,47 @@ async def test_push_linking_running_pr_build_delivers_build_finished(
     ]
 
 
+async def test_push_linking_running_pr_build_post_processes(
+    make_env: EnvFactory, upstream: Path, tmp_path: Path
+) -> None:
+    pr_sha = add_commit(upstream, "link-steps")
+    executor = FakeExecutor(gate=asyncio.Event())
+    orchestrator, _, project = await make_env(
+        FakeEvalRunner([mk_job("a")]), executor, name="link-steps"
+    )
+    gcroots: list[tuple[str, str]] = []
+    outputs: list[tuple[object, ...]] = []
+
+    async def capture_gcroot(gcroots_dir: Path, proj: str, attr: str, out: str) -> None:
+        gcroots.append((attr, out))
+
+    def capture_output(*args: object) -> Path:
+        outputs.append(args[-3:])  # branch, attr, out path
+        return tmp_path / "out"
+
+    orchestrator.register_gcroot = capture_gcroot
+    orchestrator.write_output_path = capture_output
+    orchestrator.config.outputs_path = tmp_path / "outputs"
+    pr_task = asyncio.create_task(
+        orchestrator.handle_change_event(
+            ChangeEvent(repo=project, branch="main", commit_sha=pr_sha, pr_number=9)
+        )
+    )
+    await wait_started(executor.started, pr_task)
+
+    git(upstream, "commit", "--allow-empty", "-m", "link-steps-merge")
+    main_sha = git(upstream, "rev-parse", "HEAD")
+    await orchestrator.handle_change_event(
+        ChangeEvent(repo=project, branch="main", commit_sha=main_sha)
+    )
+
+    assert executor.gate is not None
+    executor.gate.set()
+    assert await asyncio.wait_for(pr_task, timeout=10) is not None
+    assert gcroots == [("a", "/nix/store/a-out")]
+    assert outputs == [("main", "a", "/nix/store/a-out")]
+
+
 async def tag_deliveries(pool: asyncpg.Pool) -> list[dict[str, object]]:
     rows = await pool.fetch(
         "SELECT payload FROM work_queue"

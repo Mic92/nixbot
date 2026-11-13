@@ -52,6 +52,8 @@ async def attach_linked_event(
         await replay_terminal_status(o, event, current)
         await o.deliver_tag(event, current, current.status)
         await deliver_branch_push(o, event, current)
+        if current.status == BuildStatus.SUCCEEDED:
+            await _post_process_existing(o, event, current)
 
 
 async def replay_terminal_status(
@@ -112,6 +114,8 @@ async def finish_linked(
         await o.reporter.build_finished(linked, build, result)
         await o.deliver_tag(linked, build, result.status)
         await deliver_branch_push(o, linked, build)
+        if result.status == BuildStatus.SUCCEEDED:
+            await _post_process_existing(o, linked, build)
 
 
 async def deliver_branch_push(
@@ -174,12 +178,7 @@ async def reuse_terminal_build(  # noqa: PLR0913
         return
     o.canceller.complete(build.id_)
     if build.status == BuildStatus.SUCCEEDED:
-        try:
-            await _post_process_existing(o, event, build)
-        except Exception:
-            logger.exception(
-                "gcroots/outputs for reused build failed", extra={"build_id": build.id_}
-            )
+        await _post_process_existing(o, event, build)
     await after_build(
         o,
         event,
@@ -195,15 +194,20 @@ async def reuse_terminal_build(  # noqa: PLR0913
 async def _post_process_existing(
     o: Orchestrator, event: ChangeEvent, build: BuildRecord
 ) -> None:
-    """Gcroots/outputs updates for a context reusing an already
-    succeeded build (e.g. default-branch push reusing a PR build)."""
-    rows = await q.succeeded_attribute_outputs(o.pool, build_id=build.id_)
-    pairs = []
-    for row in rows:
-        out = (json.loads(row.outputs) if row.outputs else {}).get("out")
-        if out:
-            pairs.append((row.attr, out))
-    await post_process_skipped(o, event, pairs)
+    """Gcroots/outputs updates for a context reusing or linked to an
+    already succeeded build (e.g. default-branch push reusing a PR build)."""
+    try:
+        rows = await q.succeeded_attribute_outputs(o.pool, build_id=build.id_)
+        pairs = []
+        for row in rows:
+            out = (json.loads(row.outputs) if row.outputs else {}).get("out")
+            if out:
+                pairs.append((row.attr, out))
+        await post_process_skipped(o, event, pairs)
+    except Exception:
+        logger.exception(
+            "gcroots/outputs for reused build failed", extra={"build_id": build.id_}
+        )
 
 
 async def post_process_skipped(
