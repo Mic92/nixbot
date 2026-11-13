@@ -17,7 +17,7 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from nixbot_effects.proc import ProcessGroup
 
@@ -28,7 +28,20 @@ if TYPE_CHECKING:
 
     from .config import Interpolate, PostBuildStep
     from .events import ChangeEvent
-    from .models import NixEvalJobSuccess
+
+
+class BuiltAttribute(Protocol):
+    """An eval job, or the stored attribute row of a reused build."""
+
+    @property
+    def attr(self) -> str: ...
+    @property
+    def outputs(self) -> Mapping[str, str | None]: ...
+    @property
+    def drv_path(self) -> str: ...
+    @property
+    def system(self) -> str: ...
+
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +56,7 @@ class InterpolationError(Exception):
     pass
 
 
-def build_props(event: ChangeEvent, job: NixEvalJobSuccess) -> dict[str, str]:
+def build_props(event: ChangeEvent, job: BuiltAttribute) -> dict[str, str]:
     """Properties available to %(prop:...)s in post-build steps."""
     return {
         "attr": job.attr,
@@ -56,6 +69,8 @@ def build_props(event: ChangeEvent, job: NixEvalJobSuccess) -> dict[str, str]:
         "project": event.repo.name,
         "branch": event.branch,
         "revision": event.commit_sha,
+        # differs from revision for reused outputs
+        "built_revision": event.commit_sha,
         "pr_number": str(event.pr_number or ""),
         "default_branch": event.repo.default_branch,
     }

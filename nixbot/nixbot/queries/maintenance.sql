@@ -230,7 +230,7 @@ SELECT id FROM effect_runs WHERE build_id = sqlc.arg(build_id)
   AND (sqlc.narg(names)::text[] IS NULL OR name = ANY(sqlc.narg(names)::text[]));
 
 -- name: SucceededAttributeOutputs :many
-SELECT attr, outputs FROM build_attributes
+SELECT attr, outputs, drv_path, system FROM build_attributes
 WHERE build_id = $1 AND status IN ('succeeded', 'skipped_local');
 
 -- name: ProjectHasBuilds :one

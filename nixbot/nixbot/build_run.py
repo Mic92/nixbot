@@ -172,7 +172,9 @@ async def run_build(
         # result must not be overwritten with a failure.
         current = await q.get_build(o.pool, id_=build.id_)
         if current is None or current.status not in BuildStatus.TERMINAL:
-            await _settle_aborted(o, event, build, BuildStatus.FAILED, error=str(e))
+            await _settle_aborted(
+                o, event, build, worktree_path, BuildStatus.FAILED, error=str(e)
+            )
     finally:
         # Eval gc-roots only need to outlive the build. Without
         # cleanup the nix store grows unboundedly.
@@ -220,10 +222,11 @@ def _eval_settings(
     )
 
 
-async def _settle_aborted(
+async def _settle_aborted(  # noqa: PLR0913
     o: Orchestrator,
     event: ChangeEvent,
     build: BuildRecord,
+    worktree_path: Path,
     status: str,
     *,
     error: str | None = None,
@@ -246,6 +249,7 @@ async def _settle_aborted(
     await o.finish_linked(
         build,
         BuildResult(status, build.status_generation, []),
+        worktree_path=worktree_path,
         eval_success=None if status == BuildStatus.CANCELLED else False,
     )
     refreshed = await q.get_build(o.pool, id_=build.id_)
@@ -443,7 +447,7 @@ async def _run_build_inner(
             cancel_wait.cancel()
         if cancel_event.is_set() and not eval_task.done():
             await _reap(eval_task, build_task)
-            await _settle_aborted(o, event, build, BuildStatus.CANCELLED)
+            await _settle_aborted(o, event, build, worktree_path, BuildStatus.CANCELLED)
             return
         # EvalError and anything else propagate to run_build,
         # which settles the build as failed. Flush warnings dropped
@@ -589,6 +593,23 @@ async def build_attributes(  # noqa: PLR0913
         )
         post_process_error = str(e)
 
+    try:
+        await o.run_skipped_local_steps(
+            event,
+            [
+                r.job
+                for r in schedule_result.results
+                if r.status == AttributeStatus.skipped_local
+                and isinstance(r.job, NixEvalJobSuccess)
+            ],
+            cwd=worktree_path,
+        )
+    except Exception:
+        logger.exception(
+            "post-build steps for skipped attributes failed",
+            extra={"build_id": build.id_},
+        )
+
     status, generation = await db.aggregate_build(o.pool, build.id_)
     if post_process_error is not None:
         status = BuildStatus.FAILED
@@ -612,6 +633,7 @@ async def build_attributes(  # noqa: PLR0913
     await o.finish_linked(
         build,
         BuildResult(status, generation, schedule_result.results),
+        worktree_path=worktree_path,
         eval_success=True,
     )
     o.release_run(build.id_)
