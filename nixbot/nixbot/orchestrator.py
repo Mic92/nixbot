@@ -60,7 +60,7 @@ from .web.logs import LogRegistry
 from .work_queue import WorkQueue
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Awaitable, Callable
+    from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
     from contextlib import AbstractAsyncContextManager
     from pathlib import Path
 
@@ -411,7 +411,7 @@ class Orchestrator:
                 )
             return
         if not rebuild:
-            await build_reuse.attach_linked_event(self, event, build)
+            await build_reuse.attach_linked_event(self, event, build, worktree_path)
             return
         try:
             await self.run_build(event, build, worktree_path, credentials)
@@ -605,11 +605,14 @@ class Orchestrator:
         build: BuildRecord,
         result: BuildResult,
         *,
+        worktree_path: Path,
         eval_success: bool | None = None,
     ) -> None:
         """Final status fan-out for second contexts attached to this
         build. eval_success is None when no eval result exists."""
-        await build_reuse.finish_linked(self, build, result, eval_success=eval_success)
+        await build_reuse.finish_linked(
+            self, build, result, worktree_path=worktree_path, eval_success=eval_success
+        )
 
     async def post_process_skipped(
         self, event: ChangeEvent, skipped: list[tuple[str, str]]
@@ -617,3 +620,16 @@ class Orchestrator:
         """Gcroots/outputs updates for built or skipped-as-local
         attributes (push events only)."""
         await build_reuse.post_process_skipped(self, event, skipped)
+
+    async def run_skipped_local_steps(
+        self,
+        event: ChangeEvent,
+        jobs: Sequence[NixEvalJobSuccess],
+        *,
+        cwd: Path,
+    ) -> None:
+        """`jobs` must come from this event's evaluation, since their
+        built_revision is the event's commit."""
+        await build_reuse.run_reuse_steps(
+            self, event, jobs, built_revision=event.commit_sha, cwd=cwd
+        )

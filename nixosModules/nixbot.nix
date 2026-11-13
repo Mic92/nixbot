@@ -154,6 +154,7 @@ let
         environment = step.environment;
         command = step.command;
         warn_only = step.warnOnly;
+        on_reuse = step.onReuse;
       }) cfg.postBuildSteps;
       uploaders = map (u: {
         inherit (u) name environment command;
@@ -883,8 +884,8 @@ in
                 `inputs.nixbot.lib.interpolate "%(prop:out_link)s"`
                 for per-build placeholders. Available properties: attr,
                 out_link (the build's result symlink), out_path, drv_path,
-                system, project, branch, revision, pr_number,
-                default_branch. `%(secret:NAME)s` reads a
+                system, project, branch, revision, built_revision,
+                pr_number, default_branch. `%(secret:NAME)s` reads a
                 systemd credential; load it via
                 `systemd.services.nixbot.serviceConfig.LoadCredential`.
               '';
@@ -901,6 +902,16 @@ in
               type = lib.types.bool;
               default = false;
               description = "Failures only warn instead of failing the build.";
+            };
+
+            onReuse = lib.mkOption {
+              type = lib.types.bool;
+              default = false;
+              description = ''
+                Also run for outputs a commit reuses instead of building,
+                such as another build of the same tree or outputs already
+                in the store.
+              '';
             };
           };
         }

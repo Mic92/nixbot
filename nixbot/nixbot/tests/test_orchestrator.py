@@ -22,7 +22,7 @@ from nixbot.build_scheduler import (
     AttributeStatus,
     BuildOutcome,
 )
-from nixbot.config import BuildStoreConfig, Config
+from nixbot.config import BuildStoreConfig, Config, Interpolate, PostBuildStep
 from nixbot.db import BuildStatus
 from nixbot.db_gen import builds as builds_q
 from nixbot.effects import EffectMeta, EffectsContext
@@ -35,6 +35,7 @@ from nixbot.models import CacheStatus
 from nixbot.nix_eval import EvalError, EvalResult, EvalSettings
 from nixbot.orchestrator import AttributeExecutor, EvalRunnerLike, Orchestrator
 from nixbot.recovery import fail_interrupted_effects
+from nixbot.upload import UploadResult
 from nixbot.work_queue import WorkItem, WorkQueue
 
 from .support import (
@@ -2359,6 +2360,81 @@ async def test_push_linking_running_pr_build_delivers_build_finished(
     ]
 
 
+_STEP_PROPS = ("attr", "branch", "pr_number", "revision", "built_revision", "out_link")
+
+
+def record_post_build_steps(orchestrator: Orchestrator, record: Path) -> None:
+    def step(name: str, *, on_reuse: bool) -> PostBuildStep:
+        return PostBuildStep(
+            name=name,
+            environment={},
+            command=[
+                "sh",
+                "-c",
+                'echo "$*" >> "$0"',
+                str(record),
+                name,
+                *(Interpolate(f"%(prop:{prop})s") for prop in _STEP_PROPS),
+            ],
+            on_reuse=on_reuse,
+        )
+
+    orchestrator.config = orchestrator.config.model_copy(
+        update={
+            "post_build_steps": [
+                step("built", on_reuse=False),
+                step("reused", on_reuse=True),
+            ]
+        }
+    )
+
+
+def recorded_steps(record: Path) -> list[list[str]]:
+    if not record.exists():
+        return []
+    return [line.split(" ") for line in record.read_text().splitlines()]
+
+
+@dataclass
+class RecordingUploader:
+    record: Path
+    name: str = "recording"
+
+    async def upload(self, paths: list[str]) -> UploadResult:
+        with self.record.open("a") as f:
+            f.write(" ".join(["upload", *paths]) + "\n")
+        return UploadResult(success=True, output="")
+
+
+async def test_push_reusing_pr_build_runs_on_reuse_steps(
+    make_env: EnvFactory, upstream: Path, tmp_path: Path
+) -> None:
+    pr_sha = add_commit(upstream, "reuse-steps")
+    orchestrator, _, project = await make_env(
+        FakeEvalRunner([mk_job("a")]), FakeExecutor(), name="reuse-steps"
+    )
+    record = tmp_path / "steps"
+    record_post_build_steps(orchestrator, record)
+    pr_build = await orchestrator.handle_change_event(
+        ChangeEvent(repo=project, branch="main", commit_sha=pr_sha, pr_number=9)
+    )
+
+    git(upstream, "commit", "--allow-empty", "-m", "reuse-steps-merge")
+    main_sha = git(upstream, "rev-parse", "HEAD")
+    main_build = await orchestrator.handle_change_event(
+        ChangeEvent(repo=project, branch="main", commit_sha=main_sha)
+    )
+
+    assert pr_build is not None
+    assert main_build is not None
+    assert main_build.id_ == pr_build.id_
+    assert recorded_steps(record) == [
+        ["built", "a", "main", "9", pr_sha, pr_sha, "result-a"],
+        ["reused", "a", "main", "9", pr_sha, pr_sha, "result-a"],
+        ["reused", "a", "main", "", main_sha, pr_sha, ""],
+    ]
+
+
 async def test_push_linking_running_pr_build_post_processes(
     make_env: EnvFactory, upstream: Path, tmp_path: Path
 ) -> None:
@@ -2367,6 +2443,8 @@ async def test_push_linking_running_pr_build_post_processes(
     orchestrator, _, project = await make_env(
         FakeEvalRunner([mk_job("a")]), executor, name="link-steps"
     )
+    record = tmp_path / "steps"
+    record_post_build_steps(orchestrator, record)
     gcroots: list[tuple[str, str]] = []
     outputs: list[tuple[object, ...]] = []
 
@@ -2392,12 +2470,42 @@ async def test_push_linking_running_pr_build_post_processes(
     await orchestrator.handle_change_event(
         ChangeEvent(repo=project, branch="main", commit_sha=main_sha)
     )
+    assert recorded_steps(record) == []
 
     assert executor.gate is not None
     executor.gate.set()
     assert await asyncio.wait_for(pr_task, timeout=10) is not None
+    assert recorded_steps(record) == [
+        ["built", "a", "main", "9", pr_sha, pr_sha, "result-a"],
+        ["reused", "a", "main", "9", pr_sha, pr_sha, "result-a"],
+        ["reused", "a", "main", "", main_sha, pr_sha, ""],
+    ]
     assert gcroots == [("a", "/nix/store/a-out")]
     assert outputs == [("main", "a", "/nix/store/a-out")]
+
+
+async def test_skipped_local_attribute_runs_on_reuse_steps(
+    make_env: EnvFactory, upstream: Path, tmp_path: Path
+) -> None:
+    sha = add_commit(upstream, "local-steps")
+    executor = FakeExecutor()
+    orchestrator, _, project = await make_env(
+        FakeEvalRunner([mk_job("a", cache_status=CacheStatus.local)]),
+        executor,
+        name="local-steps",
+    )
+    record = tmp_path / "steps"
+    record_post_build_steps(orchestrator, record)
+    orchestrator.uploaders = [RecordingUploader(record)]  # type: ignore[list-item]
+    await orchestrator.handle_change_event(
+        ChangeEvent(repo=project, branch="main", commit_sha=sha)
+    )
+
+    assert executor.built == []
+    assert recorded_steps(record) == [
+        ["upload", "/nix/store/a-out"],
+        ["reused", "a", "main", "", sha, sha, ""],
+    ]
 
 
 async def tag_deliveries(pool: asyncpg.Pool) -> list[dict[str, object]]:

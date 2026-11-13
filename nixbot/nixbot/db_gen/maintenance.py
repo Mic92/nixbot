@@ -86,6 +86,8 @@ class CleanupOldRowsRow:
 class SucceededAttributeOutputsRow:
     attr: str
     outputs: str | None
+    drv_path: str | None
+    system: str | None
 
 
 ATTRIBUTE_KNOWN: typing.Final[str] = """-- name: AttributeKnown :one
@@ -308,7 +310,7 @@ SELECT id FROM effect_runs WHERE build_id = $1
 """
 
 SUCCEEDED_ATTRIBUTE_OUTPUTS: typing.Final[str] = """-- name: SucceededAttributeOutputs :many
-SELECT attr, outputs FROM build_attributes
+SELECT attr, outputs, drv_path, system FROM build_attributes
 WHERE build_id = $1 AND status IN ('succeeded', 'skipped_local')
 """
 
@@ -536,7 +538,7 @@ def build_effect_run_ids(conn: ConnectionLike, *, build_id: int | None, names: c
 
 def succeeded_attribute_outputs(conn: ConnectionLike, *, build_id: int) -> QueryResults[SucceededAttributeOutputsRow]:
     def _decode_hook(row: asyncpg.Record) -> SucceededAttributeOutputsRow:
-        return SucceededAttributeOutputsRow(attr=row[0], outputs=row[1])
+        return SucceededAttributeOutputsRow(attr=row[0], outputs=row[1], drv_path=row[2], system=row[3])
 
     return QueryResults(conn, SUCCEEDED_ATTRIBUTE_OUTPUTS, _decode_hook, build_id)
 
