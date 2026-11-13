@@ -71,10 +71,16 @@ assert lib.assertOneOf "autoMergeMethod" autoMergeMethod [
   "merge"
   "rebase"
   "squash"
+  "fast-forward-only"
 ];
 assert lib.assertMsg (
   autoMergeMethod != null -> forgeType != "gitlab"
 ) "flakeUpdate: autoMergeMethod needs forgeType github or gitea";
+# Not upstream: Gitea merges a pull request that is up to date with its
+# base as it is, rewriting no commit. GitHub has no such method.
+assert lib.assertMsg (
+  autoMergeMethod == "fast-forward-only" -> forgeType == "gitea"
+) "flakeUpdate: autoMergeMethod fast-forward-only needs forgeType gitea";
 assert passedArgs ? flakes -> inputs == [ ] && excludeInputs == [ ] && commitSummary == "";
 assert flakes != { };
 let

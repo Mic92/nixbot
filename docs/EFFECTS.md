@@ -463,6 +463,11 @@ fast-forward or reset) bring an existing branch up to date first. It pushes with
 `tokenSecret`, the forge token by default. Name another secret if the forge
 token may not push.
 
+On Gitea, `autoMergeMethod = "fast-forward-only"` merges the pull request with
+its commits unchanged, once it is up to date with the base. If the base moves
+first, the pull request waits until a run brings the branch up to date with
+`baseMergeBranch`.
+
 With `perInput = true`, each input gets its own branch and pull request, like
 Dependabot. Runs where an input did not move leave its branch alone, so CI does
 not run again. `excludeInputs` names inputs to skip.
