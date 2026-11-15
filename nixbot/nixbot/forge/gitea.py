@@ -23,7 +23,9 @@ class GiteaClient(TokenForgeClient):
         page = 1
         while True:
             response = await self.http.get(
-                f"{url}&page={page}", headers=self.auth_headers()
+                f"{url}&page={page}",
+                headers=self.auth_headers(),
+                timeout=10.0
             )
             check_response(response, self.forge_name)
             data = response.json()
