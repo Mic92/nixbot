@@ -261,6 +261,15 @@ class PostBuildStep(BaseModel):
     warn_only: bool = False
 
 
+class BuildFinishedStep(BaseModel):
+    """Command run once a build's attributes have all settled. The
+    build's attributes arrive as JSON on stdin."""
+
+    name: str
+    environment: Mapping[str, str | Interpolate]
+    command: list[str | Interpolate]
+
+
 class UploaderConfig(BaseModel):
     """Binary-cache push command receiving batches of store paths
     (built intermediates and final outputs) on argv or stdin."""
@@ -403,6 +412,7 @@ class Config(BaseModel):
     )
     outputs_path: Path | None = None
     post_build_steps: list[PostBuildStep] = []
+    build_finished_steps: list[BuildFinishedStep] = []
     uploaders: list[UploaderConfig] = []
     failed_build_report_limit: int = (
         47  # Default: 50 total - 3 reserved for eval/build/effects

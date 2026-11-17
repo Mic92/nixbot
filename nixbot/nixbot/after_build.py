@@ -1,15 +1,18 @@
 """Everything that follows a settled build: effects and their checks,
-schedule refresh, onEvent deliveries. Fresh builds, reruns and reused
-builds all go through here. A failing step is logged and the others
-still run."""
+schedule refresh, onEvent deliveries, build-finished steps. Fresh
+builds, reruns and reused builds all go through here. A failing step is
+logged and the others still run."""
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import TYPE_CHECKING
 
 from .db import BuildStatus
 from .db_gen import builds as q
+from .db_gen import maintenance as mq
+from .post_build import build_finished_props, run_build_finished_steps
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
@@ -46,6 +49,11 @@ async def after_build(  # noqa: PLR0913
             )
         await _step("schedules", build, o.refresh_schedules(event))
     await _step("deliveries", build, _deliveries(o, event, build, reused))
+    await _step(
+        "build finished steps",
+        build,
+        _build_finished_steps(o, event, build, status, worktree_path),
+    )
 
 
 async def _step(name: str, build: BuildRecord, step: Awaitable[None]) -> None:
@@ -88,3 +96,36 @@ async def _deliveries(
         # often a PR. A branch push needs its own.
         finished = not reused or (event.pr_number is None and event.tag is None)
         await o.deliver_events(event, refreshed, finished=finished)
+
+
+async def _build_finished_steps(
+    o: Orchestrator,
+    event: ChangeEvent,
+    build: BuildRecord,
+    status: str,
+    worktree_path: Path,
+) -> None:
+    steps = o.config.build_finished_steps
+    if not steps:
+        return
+    rows = await mq.attributes_for_builds(o.pool, build_ids=[build.id_])
+    attributes = [
+        {
+            "attr": row.attr,
+            "system": row.system,
+            "drv_path": row.drv_path,
+            "outputs": json.loads(row.outputs) if row.outputs else {},
+            "status": row.status,
+        }
+        for row in sorted(rows, key=lambda row: row.attr)
+    ]
+    build_url = (
+        f"{o.config.url}/repos/{event.repo.forge}/{event.repo.name}"
+        f"/builds/{build.number}"
+    )
+    await run_build_finished_steps(
+        steps,
+        build_finished_props(event, status, build_url),
+        attributes,
+        worktree_path,
+    )
