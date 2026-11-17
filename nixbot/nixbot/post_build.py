@@ -1,32 +1,35 @@
 """Post-build steps: generic commands run after each successful
-attribute build (cachix/niks3 uploads and operator-defined steps).
+attribute build (cachix/niks3 uploads and operator-defined steps), and
+build-finished steps, run once per build with all its attributes.
 
 Ported from PostBuildStep.to_buildstep: instead of buildbot's
 Interpolate, the service substitutes the placeholder forms actually used
-by the NixOS modules — `%(prop:NAME)s` (see `build_props` for the
-available properties) and `%(secret:NAME)s` (files under
-$CREDENTIALS_DIRECTORY). `warn_only` steps log failures without
-failing the attribute.
+by the NixOS modules: `%(prop:NAME)s` (see `build_props` and
+`build_finished_props` for the available properties) and
+`%(secret:NAME)s` (files under $CREDENTIALS_DIRECTORY). `warn_only`
+steps log failures without failing the attribute.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from nixbot_effects.proc import ProcessGroup
 
+from .config import PostBuildStep
 from .gcroots import safe_attr_filename
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-    from .config import Interpolate, PostBuildStep
+    from .config import BuildFinishedStep, Interpolate
     from .events import ChangeEvent
     from .models import NixEvalJobSuccess
 
@@ -58,6 +61,21 @@ def build_props(event: ChangeEvent, job: NixEvalJobSuccess) -> dict[str, str]:
         "revision": event.commit_sha,
         "pr_number": str(event.pr_number or ""),
         "default_branch": event.repo.default_branch,
+    }
+
+
+def build_finished_props(
+    event: ChangeEvent, status: str, build_url: str
+) -> dict[str, str]:
+    """Properties available to %(prop:...)s in build-finished steps."""
+    return {
+        "project": event.repo.name,
+        "branch": event.branch,
+        "revision": event.commit_sha,
+        "pr_number": str(event.pr_number or ""),
+        "default_branch": event.repo.default_branch,
+        "status": status,
+        "build_url": build_url,
     }
 
 
@@ -109,6 +127,7 @@ async def run_post_build_step(
     props: Mapping[str, str],
     cwd: Path,
     step_timeout: float = POST_BUILD_STEP_TIMEOUT,
+    stdin: bytes | None = None,
 ) -> PostBuildStepResult:
     try:
         command = [interpolate(arg, props) for arg in step.command]
@@ -132,6 +151,7 @@ async def run_post_build_step(
             command,
             cwd=cwd,
             env=env,
+            stdin=None if stdin is None else asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
@@ -147,7 +167,7 @@ async def run_post_build_step(
 
     try:
         stdout, _ = await asyncio.wait_for(
-            group.proc.communicate(), timeout=step_timeout
+            group.proc.communicate(stdin), timeout=step_timeout
         )
     except TimeoutError:
         await group.reap()
@@ -185,5 +205,32 @@ async def run_post_build_steps(
     results = []
     for step in steps:
         result = await run_post_build_step(step, props, cwd)
+        results.append(result)
+    return results
+
+
+async def run_build_finished_steps(
+    steps: list[BuildFinishedStep],
+    props: Mapping[str, str],
+    attributes: list[dict[str, Any]],
+    cwd: Path,
+) -> list[PostBuildStepResult]:
+    """Run all steps in order, each fed the props and `attributes` as
+    one JSON object on stdin."""
+    payload = json.dumps({**props, "attributes": attributes}).encode()
+    results = []
+    for step in steps:
+        # The build has already settled, so a failure can only warn
+        result = await run_post_build_step(
+            PostBuildStep(
+                name=step.name,
+                environment=step.environment,
+                command=step.command,
+                warn_only=True,
+            ),
+            props,
+            cwd,
+            stdin=payload,
+        )
         results.append(result)
     return results

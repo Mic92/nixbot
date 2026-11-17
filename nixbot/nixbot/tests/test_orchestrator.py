@@ -22,7 +22,7 @@ from nixbot.build_scheduler import (
     AttributeStatus,
     BuildOutcome,
 )
-from nixbot.config import BuildStoreConfig, Config
+from nixbot.config import BuildFinishedStep, BuildStoreConfig, Config, Interpolate
 from nixbot.db import BuildStatus
 from nixbot.db_gen import builds as builds_q
 from nixbot.effects import EffectMeta, EffectsContext
@@ -2893,3 +2893,89 @@ async def test_reuse_with_missing_output_still_post_processes(
     assert await pool.fetchval(
         "SELECT count(*) FROM work_queue WHERE kind = 'refresh-schedules'"
     )
+
+
+async def test_build_finished_steps_get_every_attribute_once(
+    make_env: EnvFactory, tmp_path: Path, upstream: Path
+) -> None:
+    """Build-finished steps run once per build with the aggregate status
+    and every evaluated attribute, failed ones included."""
+    sha = add_commit(upstream, "finished-steps")
+    orchestrator, _, project = await make_env(
+        FakeEvalRunner([mk_job("b"), mk_job("a")]),
+        FakeExecutor(outcomes={"b": BuildOutcome.failure}),
+        name="finished-steps",
+    )
+    payload_file = tmp_path / "payload.json"
+    status_file = tmp_path / "status"
+    orchestrator.config.build_finished_steps = [
+        BuildFinishedStep(
+            name="capture",
+            environment={"STATUS": Interpolate("%(prop:status)s")},
+            command=[
+                "sh",
+                "-c",
+                f'cat > {payload_file}; echo "$STATUS" >> {status_file}',
+            ],
+        )
+    ]
+    build = await orchestrator.handle_change_event(
+        ChangeEvent(repo=project, branch="main", commit_sha=sha)
+    )
+    assert build is not None
+    assert status_file.read_text().splitlines() == [BuildStatus.FAILED]
+    payload = json.loads(payload_file.read_text())
+    assert payload["branch"] == "main"
+    assert payload["revision"] == sha
+    assert payload["status"] == BuildStatus.FAILED
+    assert payload["attributes"] == [
+        {
+            "attr": "a",
+            "system": "x86_64-linux",
+            "drv_path": "/nix/store/a.drv",
+            "outputs": {"out": "/nix/store/a-out"},
+            "status": "succeeded",
+        },
+        {
+            "attr": "b",
+            "system": "x86_64-linux",
+            "drv_path": "/nix/store/b.drv",
+            "outputs": {"out": "/nix/store/b-out"},
+            "status": "failed",
+        },
+    ]
+
+
+async def test_build_finished_steps_run_for_a_push_reusing_a_pr_build(
+    make_env: EnvFactory, tmp_path: Path, upstream: Path
+) -> None:
+    """A default-branch push that reuses a PR's build runs the steps with
+    its own branch and revision and the reused build's attributes."""
+    pr_sha = add_commit(upstream, "finished-reuse")
+    orchestrator, _, project = await make_env(
+        FakeEvalRunner([mk_job("a")]), FakeExecutor(), name="finished-reuse"
+    )
+    pr_build = await orchestrator.handle_change_event(
+        ChangeEvent(repo=project, branch="main", commit_sha=pr_sha, pr_number=9)
+    )
+    assert pr_build is not None
+
+    payload_file = tmp_path / "payload.json"
+    orchestrator.config.build_finished_steps = [
+        BuildFinishedStep(
+            name="capture",
+            environment={},
+            command=["sh", "-c", f"cat > {payload_file}"],
+        )
+    ]
+    git(upstream, "commit", "--allow-empty", "-m", "finished-reuse-merge")
+    main_sha = git(upstream, "rev-parse", "HEAD")
+    main_build = await orchestrator.handle_change_event(
+        ChangeEvent(repo=project, branch="main", commit_sha=main_sha)
+    )
+    assert main_build is not None
+    assert main_build.id_ == pr_build.id_
+    payload = json.loads(payload_file.read_text())
+    assert payload["revision"] == main_sha
+    assert payload["pr_number"] == ""
+    assert [a["attr"] for a in payload["attributes"]] == ["a"]
