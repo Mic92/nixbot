@@ -244,6 +244,7 @@ async def _settle_aborted(
         event, build, BuildResult(status, build.status_generation, [])
     )
     await o.finish_linked(
+        event,
         build,
         BuildResult(status, build.status_generation, []),
         eval_success=None if status == BuildStatus.CANCELLED else False,
@@ -610,6 +611,7 @@ async def build_attributes(  # noqa: PLR0913
         ),
     )
     await o.finish_linked(
+        event,
         build,
         BuildResult(status, generation, schedule_result.results),
         eval_success=True,

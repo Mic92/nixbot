@@ -2492,6 +2492,47 @@ async def test_restart_build_drops_queued_effect_items(
     assert await effect_statuses(pool, build.id_) == {}
 
 
+async def test_restart_reports_to_commits_that_reused_the_build(
+    pool: asyncpg.Pool,
+    make_env: EnvFactory,
+    upstream: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    add_commit(upstream, "restart-linked")
+    sha1 = git(upstream, "rev-parse", "HEAD")
+    executor = FakeExecutor(outcomes={"a": BuildOutcome.failure})
+    orchestrator, reporter, project = await make_env(
+        FakeEvalRunner([mk_job("a")]), executor, name="restart-linked"
+    )
+    finished: list[tuple[str, str]] = []
+
+    async def build_finished(
+        event: ChangeEvent, build: BuildRecord, result: BuildResult
+    ) -> None:
+        finished.append((event.commit_sha, result.status))
+
+    monkeypatch.setattr(reporter, "build_finished", build_finished)
+
+    build = await orchestrator.handle_change_event(
+        ChangeEvent(repo=project, branch="main", commit_sha=sha1, pr_number=7)
+    )
+    git(upstream, "commit", "--allow-empty", "-m", "rerun ci")
+    sha2 = git(upstream, "rev-parse", "HEAD")
+    reused = await orchestrator.handle_change_event(
+        ChangeEvent(repo=project, branch="main", commit_sha=sha2, pr_number=7)
+    )
+    assert build is not None
+    assert reused is not None
+    assert reused.id_ == build.id_
+
+    executor.outcomes.clear()
+    await orchestrator.reset_build_for_restart(build.id_, None)
+    build = await builds_q.get_build(pool, id_=build.id_)
+    assert build is not None
+    await orchestrator.rerun_pending_attributes(project, build, [mk_job("a")])
+    assert finished[-1] == (sha2, BuildStatus.SUCCEEDED)
+
+
 async def test_restart_effects_after_pr_attach_keeps_effects_ref(
     pool: asyncpg.Pool,
     make_env: EnvFactory,

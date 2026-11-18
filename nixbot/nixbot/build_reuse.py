@@ -9,7 +9,6 @@ keeps the module dependency graph acyclic.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import logging
 from typing import TYPE_CHECKING
@@ -20,7 +19,7 @@ from .db import BuildStatus
 from .db_gen import builds as builds_q
 from .db_gen import maintenance as q
 from .effects_run import post_effects_summary
-from .events import BuildResult, EvalReport
+from .events import BuildResult, ChangeEvent, EvalReport
 from .gcroots import GcrootRegistrationError
 from .gitrepo import GitError, run_git
 
@@ -28,11 +27,40 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from .db import BuildRecord
-    from .events import ChangeEvent
+    from .events import RepoInfo
     from .gitrepo import FetchCredentials
     from .orchestrator import Orchestrator
 
 logger = logging.getLogger(__name__)
+
+
+async def link_event(o: Orchestrator, event: ChangeEvent, build: BuildRecord) -> None:
+    """Link another context to this build, so finish_linked reports to it."""
+    await builds_q.insert_build_link(
+        o.pool,
+        build_id=build.id_,
+        branch=event.branch,
+        commit_sha=event.commit_sha,
+        pr_number=event.pr_number,
+        tag=event.tag,
+        actor=event.actor,
+    )
+
+
+async def linked_events(
+    o: Orchestrator, repo: RepoInfo, build: BuildRecord
+) -> list[ChangeEvent]:
+    return [
+        ChangeEvent(
+            repo=repo,
+            branch=row.branch,
+            commit_sha=row.commit_sha,
+            pr_number=row.pr_number,
+            actor=row.actor,
+            tag=row.tag,
+        )
+        for row in await builds_q.build_links(o.pool, build_id=build.id_)
+    ]
 
 
 async def attach_linked_event(
@@ -40,15 +68,13 @@ async def attach_linked_event(
 ) -> None:
     """In-flight (or recovering) build shared with another context:
     attach for the final status fan-out."""
-    o.linked_events.setdefault(build.id_, []).append(event)
+    await link_event(o, event, build)
     await o.reporter.build_started(event, build)
     # The build may have turned terminal between the record fetch
     # and the attach: the final fan-out already happened and would
     # never cover this event. Replay the final status instead.
     current = await builds_q.get_build(o.pool, id_=build.id_)
     if current is not None and current.status in BuildStatus.TERMINAL:
-        with contextlib.suppress(KeyError, ValueError):
-            o.linked_events[build.id_].remove(event)
         await replay_terminal_status(o, event, current)
         await o.deliver_tag(event, current, current.status)
         await deliver_branch_push(o, event, current)
@@ -93,6 +119,7 @@ async def replay_effect_statuses(
 
 async def finish_linked(
     o: Orchestrator,
+    event: ChangeEvent,
     build: BuildRecord,
     result: BuildResult,
     *,
@@ -100,7 +127,7 @@ async def finish_linked(
 ) -> None:
     """Final status fan-out for second contexts attached to this
     build. eval_success is None when no eval result exists."""
-    for linked in o.linked_events.pop(build.id_, []):
+    for linked in await linked_events(o, event.repo, build):
         if eval_success is not None:
             await o.reporter.eval_finished(
                 linked, build, EvalReport(success=eval_success)
@@ -173,6 +200,7 @@ async def reuse_terminal_build(  # noqa: PLR0913
         # newer build with this old result would cancel it.
         return
     o.canceller.complete(build.id_)
+    await link_event(o, event, build)
     if build.status == BuildStatus.SUCCEEDED:
         try:
             await _post_process_existing(o, event, build)

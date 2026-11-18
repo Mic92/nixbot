@@ -7,6 +7,7 @@ from __future__ import annotations
 
 __all__: collections.abc.Sequence[str] = (
     "AttributeStatusesRow",
+    "BuildLinksRow",
     "EffectDepStatusesRow",
     "EffectsSummaryRow",
     "EvalJobRowsRow",
@@ -17,6 +18,7 @@ __all__: collections.abc.Sequence[str] = (
     "attribute_status_list",
     "attribute_statuses",
     "backfill_pr_author",
+    "build_links",
     "bump_build_status",
     "claim_effect",
     "clear_effect_eval_error",
@@ -35,6 +37,7 @@ __all__: collections.abc.Sequence[str] = (
     "finish_effect",
     "get_build",
     "insert_build_effects",
+    "insert_build_link",
     "last_real_run_with_inputs",
     "lock_build_identity",
     "lock_build_row",
@@ -72,6 +75,15 @@ class EvalJobRowsRow:
     system: str | None
     drv_path: str | None
     outputs: str | None
+
+
+@dataclasses.dataclass()
+class BuildLinksRow:
+    branch: str
+    commit_sha: str
+    pr_number: int | None
+    tag: str | None
+    actor: str | None
 
 
 @dataclasses.dataclass()
@@ -236,6 +248,17 @@ WHERE build_id = $1
 
 GET_BUILD: typing.Final[str] = """-- name: GetBuild :one
 SELECT id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_author, status, status_generation, effects_started, error, created_at, started_at, finished_at, eval_warnings, eval_completed, effects_commit_sha, effects_branch, effects_pr_number, eval_duration_ms, actor, merged_pr_number FROM builds WHERE id = $1
+"""
+
+INSERT_BUILD_LINK: typing.Final[str] = """-- name: InsertBuildLink :exec
+INSERT INTO build_links (build_id, branch, commit_sha, pr_number, tag, actor)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT DO NOTHING
+"""
+
+BUILD_LINKS: typing.Final[str] = """-- name: BuildLinks :many
+SELECT branch, commit_sha, pr_number, tag, actor FROM build_links
+WHERE build_id = $1 ORDER BY id
 """
 
 RECORD_EFFECTS_REF: typing.Final[str] = """-- name: RecordEffectsRef :exec
@@ -738,6 +761,17 @@ async def get_build(conn: ConnectionLike, *, id_: int) -> models.Build | None:
         actor=row[21],
         merged_pr_number=row[22],
     )
+
+
+async def insert_build_link(conn: ConnectionLike, *, build_id: int, branch: str, commit_sha: str, pr_number: int | None, tag: str | None, actor: str | None) -> None:
+    await conn.execute(INSERT_BUILD_LINK, build_id, branch, commit_sha, pr_number, tag, actor)
+
+
+def build_links(conn: ConnectionLike, *, build_id: int) -> QueryResults[BuildLinksRow]:
+    def _decode_hook(row: asyncpg.Record) -> BuildLinksRow:
+        return BuildLinksRow(branch=row[0], commit_sha=row[1], pr_number=row[2], tag=row[3], actor=row[4])
+
+    return QueryResults(conn, BUILD_LINKS, _decode_hook, build_id)
 
 
 async def record_effects_ref(conn: ConnectionLike, *, commit_sha: str, branch: str, pr_number: int | None, id_: int, allowed: bool) -> None:

@@ -46,6 +46,7 @@ from .events import (
     NullStatusReporter,
     RepoInfo,
     StatusReporter,
+    event_for_build,
 )
 from .executor import (
     LogWriter,
@@ -161,8 +162,6 @@ class Orchestrator:
     log_registry: LogRegistry = field(default_factory=LogRegistry)
     # Per-run bearer tokens for the hercules state API.
     task_tokens: TaskTokens = field(default_factory=TaskTokens)
-    # Second contexts attached to an in-flight build, for status fan-out.
-    linked_events: dict[int, list[ChangeEvent]] = field(default_factory=dict)
     # Caps concurrent evaluations to bound memory use.
     eval_slots: asyncio.Semaphore = field(init=False)
     # Pulsed on every release_run().
@@ -418,7 +417,6 @@ class Orchestrator:
         finally:
             self.canceller.complete(build.id_)
             self.release_run(build.id_)
-            self.linked_events.pop(build.id_, None)
 
     async def run_build(
         self,
@@ -602,6 +600,7 @@ class Orchestrator:
 
     async def finish_linked(
         self,
+        event: ChangeEvent,
         build: BuildRecord,
         result: BuildResult,
         *,
@@ -609,7 +608,19 @@ class Orchestrator:
     ) -> None:
         """Final status fan-out for second contexts attached to this
         build. eval_success is None when no eval result exists."""
-        await build_reuse.finish_linked(self, build, result, eval_success=eval_success)
+        await build_reuse.finish_linked(
+            self, event, build, result, eval_success=eval_success
+        )
+
+    async def build_restarted(
+        self, info: RepoInfo, build: BuildRecord, attr: str | None
+    ) -> None:
+        """Mark the build and every context linked to it pending."""
+        for event in [
+            event_for_build(info, build),
+            *await build_reuse.linked_events(self, info, build),
+        ]:
+            await self.reporter.build_restarted(event, build, attr)
 
     async def post_process_skipped(
         self, event: ChangeEvent, skipped: list[tuple[str, str]]
