@@ -19,7 +19,6 @@ from .events import (
     ChangeEvent,
     EvalReport,
     effects_event_for_build,
-    event_for_build,
 )
 from .recovery import check_store_paths, find_unfinished_builds
 from .repos import repo_info
@@ -93,7 +92,7 @@ async def rerun(
         build = await builds_q.get_build(o.pool, id_=build_id)
         if build is None:
             return
-        await o.reporter.build_restarted(event_for_build(info, build), build, attr)
+        await o.build_restarted(info, build, attr)
     results = await find_unfinished_builds(s.pool, build_id=build_id)
     resumable = results[0] if results else None
     if resumable is None:
@@ -188,7 +187,7 @@ async def _report_interrupted(s: CIService, resumable: ResumableBuild) -> None:
     event = await change_event_for(s, resumable)
     if build is None or event is None:
         return
+    result = BuildResult(BuildStatus.FAILED, build.status_generation, [])
     await s.orchestrator.reporter.eval_finished(event, build, EvalReport(success=False))
-    await s.orchestrator.reporter.build_finished(
-        event, build, BuildResult(BuildStatus.FAILED, build.status_generation, [])
-    )
+    await s.orchestrator.reporter.build_finished(event, build, result)
+    await s.orchestrator.finish_linked(event, build, result, eval_success=False)
