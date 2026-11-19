@@ -18,6 +18,7 @@ Reads need no token on public instances.
 nbo build list --branch main
 nbo build view 412                           # status + failed attributes
 nbo build watch 412 [--attr treefmt]         # exit 1 on failure
+nbo build watch --pr 57 | --commit <sha>     # waits for the build to exist first
 nbo log 412                                  # failure summary with log tails
 nbo log 412 checks.x86_64-linux.foo --tail 200   # or --follow
 nbo log 412 --effect deploy [--follow]       # an effect's log; exit 1 if it failed
