@@ -317,11 +317,16 @@ class NixbotClient:
                 raise ApiError(response.status_code, response.text)
             yield from _iter_sse(response)
 
-    def events(self, *, build: int | None = None) -> Iterator[dict]:
-        """Change hints from /api/events, filtered to one build (by DB id).
-        Keepalive comments are yielded as {} so callers can refresh
-        periodically. Only returns when the server closes the stream."""
-        params = {"build": build} if build is not None else {}
+    def events(
+        self, *, build: int | None = None, project: int | None = None
+    ) -> Iterator[dict]:
+        """Change hints from /api/events, filtered to one build or one
+        project (by DB id). Keepalive comments are yielded as {} so callers
+        can refresh periodically. Only returns when the server closes the
+        stream."""
+        params = {
+            k: v for k, v in (("build", build), ("project", project)) if v is not None
+        }
         with self.http.stream(
             "GET", "/api/events", params=params, timeout=None
         ) as response:

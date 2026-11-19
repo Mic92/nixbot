@@ -903,3 +903,51 @@ def test_log_effect_without_log_says_why(
     )
     assert cli.cmd_log(_client(handler), args) == cli.EXIT_OK
     assert "skipped: `after` is not supported" in capsys.readouterr().err
+
+
+def test_build_watch_pr_waits_for_the_build_to_appear(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """--pr resolves the PR's newest build, and when nixbot has not created
+    one yet it waits on the project's events instead of failing, so a
+    script can watch a PR it just opened."""
+    builds: list[dict] = []
+    hint = 'data: {"build_id":12,"project_id":7,"status":"pending"}\n\n'
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/api/repos/github/acme/widget":
+            return httpx.Response(200, json={"id": 7})
+        if path.endswith("/builds"):
+            assert request.url.params["pr_number"] == "1275"
+            return httpx.Response(
+                200, json={"items": list(builds), "page": 1, "has_next": False}
+            )
+        if path == "/api/events":
+            assert request.url.params["project"] == "7"
+            # The PR's first build lands while we wait.
+            builds.append({"number": 733, "pr_number": 1275})
+            return httpx.Response(
+                200, content=hint, headers={"content-type": "text/event-stream"}
+            )
+        raise AssertionError(path)
+
+    client = NixbotClient(
+        http=httpx.Client(
+            base_url="http://test", transport=httpx.MockTransport(handler)
+        )
+    )
+    assert cli.wait_for_build(client, REPO, pr_number=1275) == 733
+    assert "waiting for a build of PR #1275" in capsys.readouterr().err
+
+
+def test_build_watch_pr_commit_and_number_are_exclusive() -> None:
+    parser = cli.build_parser()
+    for argv in (
+        ["build", "watch", "5", "--pr", "1"],
+        ["build", "watch", "--pr", "1", "--commit", "abc"],
+    ):
+        with pytest.raises(SystemExit):
+            parser.parse_args(argv)
+    args = parser.parse_args(["build", "watch", "--commit", "abc"])
+    assert (args.number, args.pr, args.commit) == (None, None, "abc")
