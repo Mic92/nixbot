@@ -91,6 +91,17 @@ token_command = "pass show ci.example.org/nixbot"
 # or: token_command = "rbw get nixbot-ci"
 ```
 
+Because the command runs only on demand, reads go out without the token, and
+private repositories look missing to them. If you read from private
+repositories, use `token_file` instead: a file holding the token, such as a
+secret that sops-nix or agenix decrypts. `nbo` reads it up front and sends it
+with every request:
+
+```toml
+["https://ci.example.org"]
+token_file = "/run/secrets/nixbot-api-token"
+```
+
 `nbo auth status` shows which server and token are in use and whether the server
 is reachable.
 

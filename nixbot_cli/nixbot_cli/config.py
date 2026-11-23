@@ -31,7 +31,9 @@ class Settings:
         """Server: NIXBOT_URL, the hosts.toml entry whose `remotes` cover
         `repo` (the -R argument), `git config nixbot.url`, the only entry,
         or the entry whose `remotes` match the origin URL.
-        NIXBOT_TOKEN overrides the token from hosts.toml."""
+        NIXBOT_TOKEN overrides the token from hosts.toml. A token or
+        token_file is sent with every request; a token_command runs only
+        when a request needs it."""
         url = os.environ.get("NIXBOT_URL")
         token = os.environ.get("NIXBOT_TOKEN")
         hosts: dict[str, dict] = {}
@@ -54,7 +56,8 @@ class Settings:
             (e for u, e in hosts.items() if u.rstrip("/") == url),
             {},
         )
-        return cls(url, token or entry.get("token"), entry.get("token_command"))
+        token = token or entry.get("token") or _read_token_file(entry.get("token_file"))
+        return cls(url, token, entry.get("token_command"))
 
     def resolve_token(self) -> str | None:
         return self.token or _run_token_command(self.token_command)
@@ -111,6 +114,21 @@ def _select_host(hosts: dict[str, dict]) -> str | None:
         ):
             return url
     return None
+
+
+def _read_token_file(path: str | None) -> str | None:
+    """The first line of the host's token_file, such as a secret that sops
+    or agenix decrypts. Reading it cannot prompt, so unlike token_command it
+    is read up front: a server answers a private repository's anonymous
+    reads as missing rather than with a 401 that would fetch a lazy token."""
+    if not path:
+        return None
+    try:
+        text = Path(path).expanduser().read_text()
+    except OSError as err:
+        msg = f"token_file {path!r} unreadable: {err}"
+        raise ValueError(msg) from err
+    return text.splitlines()[0].strip() if text.strip() else None
 
 
 def _run_token_command(command: str | None) -> str | None:
