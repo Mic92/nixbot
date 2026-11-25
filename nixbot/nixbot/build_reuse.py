@@ -1,6 +1,7 @@
 """Linked-build and dedup logic: attaching second contexts to an
 in-flight build, replaying terminal statuses, reusing terminal builds
-for identical content, and gcroots/outputs post-processing.
+for identical content, gcroots/outputs post-processing, and post-build
+steps for reused outputs.
 
 Calls back into other concerns only via Orchestrator methods, which
 keeps the module dependency graph acyclic.
@@ -12,6 +13,7 @@ import asyncio
 import contextlib
 import json
 import logging
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from .after_build import after_build
@@ -23,20 +25,23 @@ from .effects_run import post_effects_summary
 from .events import BuildResult, EvalReport
 from .gcroots import GcrootRegistrationError
 from .gitrepo import GitError, run_git
+from .post_build import build_props, run_post_build_steps
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from pathlib import Path
 
     from .db import BuildRecord
     from .events import ChangeEvent
     from .gitrepo import FetchCredentials
     from .orchestrator import Orchestrator
+    from .post_build import BuiltAttribute
 
 logger = logging.getLogger(__name__)
 
 
 async def attach_linked_event(
-    o: Orchestrator, event: ChangeEvent, build: BuildRecord
+    o: Orchestrator, event: ChangeEvent, build: BuildRecord, worktree_path: Path
 ) -> None:
     """In-flight (or recovering) build shared with another context:
     attach for the final status fan-out."""
@@ -52,6 +57,9 @@ async def attach_linked_event(
         await replay_terminal_status(o, event, current)
         await o.deliver_tag(event, current, current.status)
         await deliver_branch_push(o, event, current)
+        if current.status == BuildStatus.SUCCEEDED:
+            await _post_process_existing(o, event, current)
+        await run_reused_build_steps(o, event, current, worktree_path)
 
 
 async def replay_terminal_status(
@@ -96,6 +104,7 @@ async def finish_linked(
     build: BuildRecord,
     result: BuildResult,
     *,
+    worktree_path: Path,
     eval_success: bool | None = None,
 ) -> None:
     """Final status fan-out for second contexts attached to this
@@ -112,6 +121,9 @@ async def finish_linked(
         await o.reporter.build_finished(linked, build, result)
         await o.deliver_tag(linked, build, result.status)
         await deliver_branch_push(o, linked, build)
+        if result.status == BuildStatus.SUCCEEDED:
+            await _post_process_existing(o, linked, build)
+        await run_reused_build_steps(o, linked, build, worktree_path)
 
 
 async def deliver_branch_push(
@@ -174,12 +186,8 @@ async def reuse_terminal_build(  # noqa: PLR0913
         return
     o.canceller.complete(build.id_)
     if build.status == BuildStatus.SUCCEEDED:
-        try:
-            await _post_process_existing(o, event, build)
-        except Exception:
-            logger.exception(
-                "gcroots/outputs for reused build failed", extra={"build_id": build.id_}
-            )
+        await _post_process_existing(o, event, build)
+    await run_reused_build_steps(o, event, build, worktree_path)
     await after_build(
         o,
         event,
@@ -192,18 +200,104 @@ async def reuse_terminal_build(  # noqa: PLR0913
     await replay_terminal_status(o, event, build)
 
 
+@dataclass(frozen=True)
+class StoredAttribute:
+    attr: str
+    outputs: dict[str, str | None]
+    drv_path: str
+    system: str
+
+
+async def succeeded_attributes(o: Orchestrator, build_id: int) -> list[StoredAttribute]:
+    return [
+        StoredAttribute(
+            attr=row.attr,
+            outputs=json.loads(row.outputs) if row.outputs else {},
+            drv_path=row.drv_path or "",
+            system=row.system or "",
+        )
+        for row in await q.succeeded_attribute_outputs(o.pool, build_id=build_id)
+    ]
+
+
+async def run_reused_build_steps(
+    o: Orchestrator, event: ChangeEvent, build: BuildRecord, cwd: Path
+) -> None:
+    if not any(step.on_reuse for step in o.config.post_build_steps):
+        return
+    try:
+        await run_reuse_steps(
+            o,
+            event,
+            await succeeded_attributes(o, build.id_),
+            built_revision=build.commit_sha,
+            cwd=cwd,
+        )
+    except Exception:
+        logger.exception(
+            "post-build steps for reused outputs failed",
+            extra={"build_id": build.id_, "sha": event.commit_sha},
+        )
+
+
+async def run_reuse_steps(
+    o: Orchestrator,
+    event: ChangeEvent,
+    attributes: Sequence[BuiltAttribute],
+    *,
+    built_revision: str,
+    cwd: Path,
+) -> None:
+    steps = [step for step in o.config.post_build_steps if step.on_reuse]
+    if not steps:
+        return
+    for attribute in attributes:
+        paths = [p for p in attribute.outputs.values() if p]
+        uploads = await asyncio.gather(*(u.upload(paths) for u in o.uploaders))
+        for uploader, upload in zip(o.uploaders, uploads, strict=True):
+            if not upload.success:
+                logger.warning(
+                    "upload of reused outputs failed",
+                    extra={
+                        "uploader": uploader.name,
+                        "attr": attribute.attr,
+                        "output": upload.output[-2000:],
+                    },
+                )
+        props = build_props(event, attribute) | {
+            "out_link": "",
+            "built_revision": built_revision,
+        }
+        for result in await run_post_build_steps(steps, props, cwd):
+            extra = {
+                "step": result.name,
+                "attr": attribute.attr,
+                "sha": event.commit_sha,
+                "built_revision": built_revision,
+            }
+            if result.success:
+                logger.info("post-build step ran for reused outputs", extra=extra)
+            else:
+                logger.warning(
+                    "post-build step failed for reused outputs",
+                    extra={**extra, "output": result.output[-2000:]},
+                )
+
+
 async def _post_process_existing(
     o: Orchestrator, event: ChangeEvent, build: BuildRecord
 ) -> None:
-    """Gcroots/outputs updates for a context reusing an already
-    succeeded build (e.g. default-branch push reusing a PR build)."""
-    rows = await q.succeeded_attribute_outputs(o.pool, build_id=build.id_)
-    pairs = []
-    for row in rows:
-        out = (json.loads(row.outputs) if row.outputs else {}).get("out")
-        if out:
-            pairs.append((row.attr, out))
-    await post_process_skipped(o, event, pairs)
+    """Gcroots/outputs updates for a context reusing or linked to an
+    already succeeded build (e.g. default-branch push reusing a PR build)."""
+    try:
+        attributes = await succeeded_attributes(o, build.id_)
+        await post_process_skipped(
+            o, event, [(a.attr, a.outputs.get("out") or "") for a in attributes]
+        )
+    except Exception:
+        logger.exception(
+            "gcroots/outputs for reused build failed", extra={"build_id": build.id_}
+        )
 
 
 async def post_process_skipped(

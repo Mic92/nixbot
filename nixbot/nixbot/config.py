@@ -259,6 +259,7 @@ class PostBuildStep(BaseModel):
     environment: Mapping[str, str | Interpolate]
     command: list[str | Interpolate]
     warn_only: bool = False
+    on_reuse: bool = False
 
 
 class UploaderConfig(BaseModel):
