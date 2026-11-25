@@ -23,6 +23,8 @@ in
       pkgs.ruff
       pkgs.postgresql
       self.packages.${system}.nix-eval-jobs
+      # The nix the pytest check runs against, flake prefetch needs it
+      self.packages.${system}.nix-eval-jobs.nix
       # SQL codegen: `sqlc generate` regenerates nixbot/nixbot/db_gen
       # from sqlc.yaml.
       sqlc
