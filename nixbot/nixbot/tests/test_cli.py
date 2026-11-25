@@ -428,6 +428,30 @@ def test_settings_url_trailing_slash(
     assert Settings.load() == Settings("https://ci.example.org", "bnix_abc")
 
 
+def test_settings_token_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A token_file is read up front, so reads carry the token too: a server
+    shows private repositories to an anonymous read as missing, not as a 401
+    that would make nbo fetch a lazy token."""
+    monkeypatch.delenv("NIXBOT_TOKEN", raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    hosts = tmp_path / "nixbot" / "hosts.toml"
+    hosts.parent.mkdir(parents=True)
+    secret = tmp_path / "nixbot-api-token"
+    secret.write_text("bnix_from_file\n")
+    hosts.write_text(f'["https://ci.example.org"]\ntoken_file = "{secret}"\n')
+    assert Settings.load().token == "bnix_from_file"
+
+    monkeypatch.setenv("NIXBOT_TOKEN", "bnix_env")
+    assert Settings.load().token == "bnix_env"
+    monkeypatch.delenv("NIXBOT_TOKEN")
+
+    # A missing secret is an error, not an anonymous client that sees no
+    # private repositories.
+    secret.unlink()
+    with pytest.raises(ValueError, match="token_file"):
+        Settings.load()
+
+
 def test_settings_token_command(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
