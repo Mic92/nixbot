@@ -128,6 +128,15 @@ WHERE build_id = $1;
 -- name: GetBuild :one
 SELECT * FROM builds WHERE id = $1;
 
+-- name: InsertBuildLink :exec
+INSERT INTO build_links (build_id, branch, commit_sha, pr_number, tag, actor)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT DO NOTHING;
+
+-- name: BuildLinks :many
+SELECT branch, commit_sha, pr_number, tag, actor FROM build_links
+WHERE build_id = $1 ORDER BY id;
+
 -- name: RecordEffectsRef :exec
 -- The ref maybe_run_effects last decided for. Effect items (which only
 -- carry build_id) report on it, and restarts gate on it instead of the
