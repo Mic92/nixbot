@@ -977,3 +977,20 @@ async def test_failure_of_an_attribute_no_longer_built_is_resolved() -> None:
         "checks.gone": (StatusState.success, "not part of this build"),
     }
     assert await statuses.failed(1, "sha1") == {}
+
+
+async def test_rebuild_leaves_failures_without_an_attribute_alone() -> None:
+    """Only attribute contexts can be no longer built. A failed gate or
+    effect must not turn green while the rebuild still fails."""
+    reporter, poster, _ = make_reporter()
+    failed = BuildResult(
+        "failed",
+        1,
+        [attr_result("x", AttributeStatus.failed, "boom")],
+        attr_statuses={"x": "failed"},
+    )
+    await reporter.build_finished(EVENT, BUILD, failed)
+    await reporter.effect_finished(EVENT, BUILD, "deploy", success=False)
+    poster.posts.clear()
+    await reporter.build_finished(EVENT, replace(BUILD, id_=11), failed)
+    assert [p.state for p in poster.posts] == [StatusState.failure] * 2

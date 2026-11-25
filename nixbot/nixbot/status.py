@@ -789,6 +789,9 @@ class ForgeStatusReporter:
             # Failures of attributes this build of the commit no longer
             # has, e.g. after the PR's base dropped them.
             for context, dropped in previously_failed.items():
+                # The gate, the eval and the effects have no attribute.
+                if dropped is None:
+                    continue
                 await self._post(
                     event,
                     build,
