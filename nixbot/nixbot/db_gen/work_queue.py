@@ -72,7 +72,11 @@ WHERE id = (
         WHERE r.dedup_key = w.dedup_key
           AND (r.status = 'running'
                OR (r.status = 'pending'
-                   AND (r.created_at, r.id) < (w.created_at, w.id)))
+                   AND (r.created_at, r.id) < (w.created_at, w.id)
+                   AND NOT (r.kind = 'effect' AND w.kind = 'effect'
+                            AND r.payload->>'kind' = 'push'
+                            AND w.payload->>'kind' = 'push'
+                            AND r.payload->>'build_id' = w.payload->>'build_id')))
       )
       AND NOT (w.kind = 'effect' AND EXISTS (
         SELECT 1 FROM effect_runs e

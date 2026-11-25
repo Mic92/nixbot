@@ -34,6 +34,9 @@ DO NOTHING;
 -- a build's locked effects all finish before the next build's start.
 -- Effect items are additionally held back until every declared
 -- dependency settled; the runner then decides between run and skip.
+-- A build's own push effects on one lock are ordered by that alone, not
+-- by the queue: they are queued by name, so a dependency can sit behind
+-- the dependent that waits for it.
 -- A pull request based on a lower-numbered PR's head branch waits for
 -- that PR's queued or running change items, so a stack builds bottom-up.
 UPDATE work_queue SET status = 'running', claimed_at = now()
@@ -46,7 +49,11 @@ WHERE id = (
         WHERE r.dedup_key = w.dedup_key
           AND (r.status = 'running'
                OR (r.status = 'pending'
-                   AND (r.created_at, r.id) < (w.created_at, w.id)))
+                   AND (r.created_at, r.id) < (w.created_at, w.id)
+                   AND NOT (r.kind = 'effect' AND w.kind = 'effect'
+                            AND r.payload->>'kind' = 'push'
+                            AND w.payload->>'kind' = 'push'
+                            AND r.payload->>'build_id' = w.payload->>'build_id')))
       )
       AND NOT (w.kind = 'effect' AND EXISTS (
         SELECT 1 FROM effect_runs e
