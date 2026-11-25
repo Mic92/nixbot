@@ -35,6 +35,7 @@ from .config import (
     read_secret_file,
     resolve_credential_path,
 )
+from .events import NullStatusReporter, StatusReporter
 from .executor import BuildSettings, FairScheduler, NixBuildExecutor
 from .failed_builds import PostgresFailedBuildCache
 from .forge import (
@@ -63,11 +64,13 @@ from .status import (
     GitHubCheckRunPoster,
     GitlabStatusPoster,
 )
+from .tangled import TangledForge, TangledReporter
 from .upload import Uploader, start_uploaders
 from .visibility import AccessCache, BotRepoAccessFetcher, VisibilityService
 from .web.app import create_app
 from .web.auth_routes import create_auth_router
 from .web.control_routes import create_control_api_router, create_control_router
+from .web.tangled_routes import create_tangled_router
 from .web.token_routes import create_token_router
 from .webhooks import (
     ChangeRequest,
@@ -243,6 +246,31 @@ def _forge_clients(config: Config) -> _ForgeClients:
     return clients
 
 
+def _tangled(
+    config: Config, pool: asyncpg.Pool, forge_reporter: StatusReporter | None
+) -> tuple[TangledForge | None, StatusReporter | None]:
+    """Tangled events take their own way out, the rest still goes to
+    the forge reporter."""
+    if config.tangled is None:
+        return None, forge_reporter
+    forge = TangledForge(pool, config.tangled, config.url)
+    return forge, TangledReporter(forge, forge_reporter or NullStatusReporter())
+
+
+def _mount_tangled(app: FastAPI, service: CIService) -> None:
+    if service.tangled is None:
+        return
+    app.include_router(
+        create_tangled_router(
+            service.tangled,
+            service,
+            service.orchestrator.log_registry,
+            service.config.state_dir,
+        ),
+        include_in_schema=False,
+    )
+
+
 async def build_service(config: Config) -> tuple[CIService, FastAPI]:
     """Create the composed service and its ASGI app."""
     # Normalize SQLAlchemy/asyncpg-style URLs before *both* consumers;
@@ -260,15 +288,16 @@ async def build_service(config: Config) -> tuple[CIService, FastAPI]:
             _polled_repositories(config)
         )
 
-    reporter = None
+    forge_reporter = None
     if posters:
-        reporter = ForgeStatusReporter(
+        forge_reporter = ForgeStatusReporter(
             posters,
             CommitStatusStore(pool),
             config.url,
             config.failed_build_report_limit,
             context_prefix=config.status_context_prefix,
         )
+    tangled, reporter = _tangled(config, pool, forge_reporter)
 
     identity_issuer = None
     if config.workload_identity.enable:
@@ -316,7 +345,8 @@ async def build_service(config: Config) -> tuple[CIService, FastAPI]:
         gitea=gitea,
         gitlab=gitlab,
         credentials_providers=credentials_providers,
-        gate_poster=reporter if github is not None else None,
+        tangled=tangled,
+        gate_poster=forge_reporter if github is not None else None,
         # DB clock, not app clock: the crash sweep compares it against
         # started_at columns set by now() in SQL.
         _started_at=await pool.fetchval("SELECT now()"),
@@ -401,6 +431,7 @@ async def build_service(config: Config) -> tuple[CIService, FastAPI]:
         ),
         include_in_schema=False,
     )
+    _mount_tangled(app, service)
     return service, app
 
 
@@ -517,6 +548,8 @@ async def run_service(config: Config) -> None:
         asyncio.create_task(service.scheduled_effects_loop()),
         asyncio.create_task(service.work_loop()),
     ]
+    if service.tangled is not None:
+        tasks.append(asyncio.create_task(service.tangled.delivery_loop()))
 
     poller: PollingService | None = None
     if config.pull_based is not None:

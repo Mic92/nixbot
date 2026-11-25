@@ -2,7 +2,8 @@
 -- visibility.py, web/control_routes.py).
 
 -- name: CountDiscoveredProjects :one
-SELECT count(*) AS count FROM projects WHERE forge <> 'pull_based';
+SELECT count(*) AS count FROM projects
+WHERE forge NOT IN ('pull_based', 'tangled');
 
 -- name: UpsertDiscoveredProjects :exec
 -- Batch upsert of one discovery cycle; arrays are zipped
@@ -40,13 +41,13 @@ WHERE (projects.owner, projects.name,
 -- name: CountEnabledProjects :one
 SELECT count(*) AS count FROM projects WHERE enabled;
 
--- name: UpsertPullBasedProjects :exec
--- Batch upsert of the statically configured pull-based repos; arrays
--- are zipped positionally by unnest.
+-- name: UpsertConfiguredProjects :exec
+-- Batch upsert of the repos one forge lists in the static config
+-- (pull_based, tangled); arrays are zipped positionally by unnest.
 INSERT INTO projects
     (forge, forge_repo_id, owner, name, default_branch,
      url, private, enabled)
-SELECT 'pull_based', u.forge_repo_id, u.owner, u.name, u.default_branch,
+SELECT sqlc.arg(forge)::text, u.forge_repo_id, u.owner, u.name, u.default_branch,
        u.url, FALSE, TRUE
 FROM (SELECT unnest(sqlc.arg(forge_repo_ids)::text[]) AS forge_repo_id,
              unnest(sqlc.arg(owners)::text[]) AS owner,
@@ -54,14 +55,16 @@ FROM (SELECT unnest(sqlc.arg(forge_repo_ids)::text[]) AS forge_repo_id,
              unnest(sqlc.arg(default_branches)::text[]) AS default_branch,
              unnest(sqlc.arg(urls)::text[]) AS url) u
 ON CONFLICT (forge, forge_repo_id) DO UPDATE SET
+    owner = EXCLUDED.owner,
+    name = EXCLUDED.name,
     default_branch = EXCLUDED.default_branch,
     url = EXCLUDED.url,
     updated_at = now()
 -- Same no-op skip as UpsertDiscoveredProject: this runs on every
 -- reconcile tick for every configured repo.
-WHERE (projects.default_branch, projects.url)
+WHERE (projects.owner, projects.name, projects.default_branch, projects.url)
       IS DISTINCT FROM
-      (EXCLUDED.default_branch, EXCLUDED.url);
+      (EXCLUDED.owner, EXCLUDED.name, EXCLUDED.default_branch, EXCLUDED.url);
 
 -- name: SetProjectEnabled :exec
 UPDATE projects SET enabled = $2, updated_at = now() WHERE id = $1;

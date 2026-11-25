@@ -9,6 +9,7 @@ import logging
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
+from . import tangled
 from .forge import filter_repos
 from .gitea_hooks import register_repo_hook
 from .gitlab_hooks import register_repo_hook as register_gitlab_repo_hook
@@ -85,6 +86,21 @@ async def discover_once(s: CIService) -> None:
         await s.repo_store.prune_missing_disabled(
             "pull_based", list(s.config.pull_based.repositories)
         )
+    if s.config.tangled is not None:
+        repositories = s.config.tangled.repositories
+        await s.repo_store.sync_configured(
+            tangled.FORGE,
+            [
+                (
+                    slug,
+                    *tangled.owner_and_name(slug, repo.url),
+                    repo.url,
+                    repo.default_branch,
+                )
+                for slug, repo in repositories.items()
+            ],
+        )
+        await s.repo_store.prune_missing_disabled(tangled.FORGE, list(repositories))
     # None marks a failed forge: its rows are neither synced nor pruned.
     by_forge: dict[str, list[DiscoveredRepo] | None] = {}
     # The topic is only a legacy import aid (one-shot enablement in

@@ -26,6 +26,7 @@ let
         "GITHUB.md"
         "GITEA.md"
         "GITLAB.md"
+        "TANGLED.md"
       ];
     }
     {

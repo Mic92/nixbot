@@ -11,6 +11,7 @@ __all__: collections.abc.Sequence[str] = (
     "EffectRun",
     "Project",
     "ScheduledEffect",
+    "TangledBuild",
 )
 
 import dataclasses
@@ -129,3 +130,24 @@ class ScheduledEffect:
     effect: str
     when_spec: str
     last_run: datetime.datetime | None
+
+
+@dataclasses.dataclass()
+class TangledBuild:
+    id_: uuid.UUID
+    number: int
+    project_id: int
+    commit_sha: str
+    branch: str
+    base_branch: str | None
+    tag: str | None
+    pr_number: int | None
+    message: str
+    meta_data: str
+    state: str
+    notified_state: str
+    error: str | None
+    build_id: int | None
+    created_at: datetime.datetime
+    started_at: datetime.datetime | None
+    finished_at: datetime.datetime | None
