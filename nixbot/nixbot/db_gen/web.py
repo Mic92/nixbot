@@ -194,6 +194,7 @@ class EffectRunDetailRow:
     skip_reason: str | None
     started_at: datetime.datetime
     finished_at: datetime.datetime | None
+    reused_from: int | None
     build_number: int | None
 
 
@@ -534,7 +535,7 @@ ORDER BY a.finished_at, a.id
 
 EFFECT_RUN_DETAIL: typing.Final[str] = """-- name: EffectRunDetail :one
 SELECT r.id, r.kind, r.build_id, r.schedule_name, r.name AS effect, r.status,
-       r.error, r.skip_reason, r.started_at, r.finished_at,
+       r.error, r.skip_reason, r.started_at, r.finished_at, r.reused_from,
        b.number AS build_number
 FROM effect_runs r LEFT JOIN builds b ON b.id = r.build_id
 WHERE r.id = $1 AND r.project_id = $2
@@ -994,7 +995,7 @@ async def effect_run_detail(conn: ConnectionLike, *, id_: int, project_id: int) 
     row = await conn.fetchrow(EFFECT_RUN_DETAIL, id_, project_id)
     if row is None:
         return None
-    return EffectRunDetailRow(id_=row[0], kind=row[1], build_id=row[2], schedule_name=row[3], effect=row[4], status=row[5], error=row[6], skip_reason=row[7], started_at=row[8], finished_at=row[9], build_number=row[10])
+    return EffectRunDetailRow(id_=row[0], kind=row[1], build_id=row[2], schedule_name=row[3], effect=row[4], status=row[5], error=row[6], skip_reason=row[7], started_at=row[8], finished_at=row[9], reused_from=row[10], build_number=row[11])
 
 
 async def effect_run_id(conn: ConnectionLike, *, build_id: int | None, name: str) -> int | None:

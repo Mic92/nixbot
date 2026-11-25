@@ -123,6 +123,7 @@ class Effect(BaseModel):
     error: str | None
     started_at: datetime | None
     finished_at: datetime | None
+    reused_from: int | None = None
 
 
 class EffectRun(Effect):

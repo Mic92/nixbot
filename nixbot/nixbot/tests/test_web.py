@@ -1215,6 +1215,55 @@ def test_api_projects_and_builds(client: WebHarness) -> None:
     assert [b["number"] for b in queue] == [3]
 
 
+def test_api_effects_expose_reused_from(client: WebHarness) -> None:
+    # An effect settled by when.changed without running points at the run
+    # it reused, so API clients can tell it apart from one that ran.
+    ctx = client.ctx
+
+    async def setup() -> tuple[int, int]:
+        build_ids = {
+            row["number"]: row["id"]
+            for row in await ctx.pool.fetch(
+                "SELECT b.id, b.number FROM builds b JOIN projects p"
+                " ON p.id = b.project_id WHERE p.name = 'widget'"
+            )
+        }
+        source = await _insert_effect_run(
+            ctx.pool,
+            build_ids[1],
+            "reusefx",
+            "succeeded",
+            finished_at=datetime.now(UTC),
+        )
+        reused = await _insert_effect_run(ctx.pool, build_ids[2], "reusefx", "pending")
+        await ctx.pool.execute(
+            "UPDATE effect_runs SET status = 'succeeded', reused_from = $1,"
+            " started_at = now(), finished_at = now() WHERE id = $2",
+            source,
+            reused,
+        )
+        return source, reused
+
+    source, reused = client.run(setup())
+    try:
+        ran = client.get("/api/repos/github/acme/widget/builds/1").json()
+        settled = client.get("/api/repos/github/acme/widget/builds/2").json()
+        run = client.get(f"/api/repos/github/acme/widget/effects/runs/{reused}").json()
+    finally:
+        client.run(
+            ctx.pool.execute(
+                "DELETE FROM effect_runs WHERE id = ANY($1::bigint[])",
+                [reused, source],
+            )
+        )
+    by_name = {e["name"]: e for e in ran["effects"]}
+    assert by_name["reusefx"]["reused_from"] is None
+    by_name = {e["name"]: e for e in settled["effects"]}
+    assert by_name["reusefx"]["status"] == "succeeded"
+    assert by_name["reusefx"]["reused_from"] == source
+    assert run["reused_from"] == source
+
+
 def test_build_rows_link_refs(client: WebHarness) -> None:
     # Branch builds link to the branch, PR builds to the pull request.
     page = client.get("/repos/github/acme/widget").text
