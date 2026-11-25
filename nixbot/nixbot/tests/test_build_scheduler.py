@@ -6,6 +6,8 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime
 
+import pytest
+
 from nixbot.build_scheduler import (
     AttributeResult,
     AttributeStatus,
@@ -194,6 +196,29 @@ async def test_cached_failure_propagates_to_dependents() -> None:
     statuses = by_attr(result)
     assert statuses["base"] == AttributeStatus.cached_failure
     assert statuses["top"] == AttributeStatus.dependency_failed
+    assert executor.built == []
+
+
+async def test_cached_failure_settles_other_attributes_of_its_drv() -> None:
+    # Both attributes are ready in the same dispatch pass: the first one's
+    # cached failure settles the second, which must not be dispatched.
+    main = mk_job("main")
+    alias = main.model_copy(update={"attr": "alias", "attr_path": ["alias"]})
+    cache = FakeCache(
+        {
+            main.drv_path: CachedFailure(
+                drv_path=main.drv_path, time=datetime(2026, 1, 1, tzinfo=UTC), url="u"
+            )
+        }
+    )
+    executor = FakeExecutor()
+    result = await run_scheduler(
+        JobScheduler(executor, [SYSTEM], failed_build_cache=cache), [main, alias]
+    )
+    statuses = by_attr(result)
+    assert statuses["main"] == AttributeStatus.cached_failure
+    assert statuses["alias"] == AttributeStatus.dependency_failed
+    assert sorted(r.attr for r in result.results) == ["alias", "main"]
     assert executor.built == []
 
 
@@ -508,6 +533,60 @@ async def test_streaming_pending_dependent_fails_when_late_dep_arrives_failed() 
         assert "top" not in executor.built
 
     await main()
+
+
+@pytest.mark.parametrize(
+    ("outcome", "expected"),
+    [
+        (BuildOutcome.failure, AttributeStatus.dependency_failed),
+        (BuildOutcome.cancelled, AttributeStatus.cancelled),
+    ],
+)
+async def test_failed_job_settles_pending_jobs_of_its_drv(
+    outcome: BuildOutcome, expected: AttributeStatus
+) -> None:
+    # "main" arrives before its dependency, so it runs while two other
+    # attributes of the same drv wait for that dependency. When "main"
+    # fails, they must settle with it: dropped without a result, their
+    # rows stay pending and the build never finishes.
+    main_building = asyncio.Event()
+    dep_building = asyncio.Event()
+    main_settled = asyncio.Event()
+
+    async def on_result(result: AttributeResult) -> None:
+        if result.attr == "main":
+            main_settled.set()
+
+    class GatedExecutor(FakeExecutor):
+        async def build(self, job: NixEvalJobSuccess) -> BuildOutcome:
+            if job.attr == "main":
+                main_building.set()
+                await asyncio.wait_for(dep_building.wait(), timeout=5)
+            if job.attr == "dep":
+                dep_building.set()
+                await asyncio.wait_for(main_settled.wait(), timeout=5)
+            return await super().build(job)
+
+    main = mk_job("main", deps=["dep"])
+    aliases = [
+        main.model_copy(update={"attr": attr, "attr_path": [attr]})
+        for attr in ("alias1", "alias2")
+    ]
+    executor = GatedExecutor({"main": outcome})
+    scheduler = JobScheduler(executor, [SYSTEM], on_result=on_result)
+    queue: asyncio.Queue[list[NixEvalJob] | None] = asyncio.Queue()
+    await queue.put([main])
+    run_task = asyncio.create_task(scheduler.run_incremental(queue))
+    await asyncio.wait_for(main_building.wait(), timeout=5)
+    # "main" finishes only once "dep" runs, i.e. with the aliases pending
+    # on "dep". "dep" finishes only once "main" has settled.
+    await queue.put([mk_job("dep"), *aliases])
+    await queue.put(None)
+    result = await asyncio.wait_for(run_task, timeout=5)
+    statuses = by_attr(result)
+    assert statuses.get("alias1") == expected
+    assert statuses.get("alias2") == expected
+    assert sorted(executor.built) == ["dep", "main"]
 
 
 async def test_local_store_skip_wins_over_failure_cache() -> None:

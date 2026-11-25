@@ -193,7 +193,8 @@ def get_failed_dependents(
     jobs: list[NixEvalJobSuccess],
     job_closures: dict[str, set[str]],
 ) -> list[NixEvalJobSuccess]:
-    """Transitive dependents of a failed job among `jobs`.
+    """Jobs among `jobs` that fail with a failed job: other attributes
+    evaluating to the same drv, and its transitive dependents.
 
     MUST be called before the failed job is pruned from job_closures —
     the closure sets are how the dependency edges are found. The BFS
@@ -204,8 +205,8 @@ def get_failed_dependents(
     by_drv: dict[str, list[NixEvalJobSuccess]] = {}
     for build in jobs:
         by_drv.setdefault(build.drv_path, []).append(build)
-    removed: list[NixEvalJobSuccess] = []
-    seen: set[str] = set()
+    removed: list[NixEvalJobSuccess] = list(by_drv.get(job.drv_path, ()))
+    seen: set[str] = {job.drv_path}
     stack = [job.drv_path]
     while stack:
         drv = stack.pop()
@@ -418,6 +419,9 @@ class JobScheduler:
                 return any_ready
             any_ready = True
             for job in ready:
+                if job.drv_path in state.failed_drvs:
+                    # Settled with a cached failure of its drv in this pass.
+                    continue
                 state.pending.remove(job)
                 action = await self._classify(job, state.result)
                 if action == "run":
