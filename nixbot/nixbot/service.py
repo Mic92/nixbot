@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from fnmatch import fnmatch
 from typing import TYPE_CHECKING, Any
 
-from . import approval, db, discovery, restart_dispatch, schedule_runner
+from . import approval, db, discovery, restart_dispatch, schedule_runner, tangled
 from .config import ScheduleWhen
 from .db import BuildStatus
 from .db_gen import approvals as approvals_q
@@ -24,6 +24,7 @@ from .db_gen import builds as builds_q
 from .db_gen import events as ev_q
 from .db_gen import maintenance as q
 from .db_gen import statuses as statuses_q
+from .db_gen import tangled as tangled_q
 from .deliver import Delivery, EventListingCache, deliver
 from .event_effects import restart_event_effect
 from .events import (
@@ -82,6 +83,7 @@ if TYPE_CHECKING:
     from .orchestrator import Orchestrator
     from .polling import PolledRepository
     from .repos import RepoStore
+    from .tangled import TangledForge
 
 logger = logging.getLogger(__name__)
 
@@ -201,6 +203,7 @@ class CIService:
     github: GitHubAppClient | None = None
     gitea: GiteaClient | None = None
     gitlab: GitlabClient | None = None
+    tangled: TangledForge | None = None
     credentials_providers: dict[str, CredentialsProvider] = field(default_factory=dict)
     gate_poster: GatePoster | None = None
     # Strong references to fire-and-forget tasks: the event loop only
@@ -457,6 +460,8 @@ class CIService:
         elif change.pr_number is None and not (
             change.branch == project.default_branch
             or is_merge_queue_branch(change.branch)
+            # The workflow's `when:` already selected this branch.
+            or change.forge == tangled.FORGE
         ):
             # `build_branches` in the default branch's nixbot.toml
             # decides which extra branches build. Without it the
@@ -636,6 +641,13 @@ class CIService:
         while (item := await queue.claim_next()) is not None:
             await self._execute_work(queue, item)
 
+    async def _change_settled(self, item: WorkItem, error: str | None) -> None:
+        if self.tangled is None or item.kind != "change":
+            return
+        change = ChangeRequest(**item.payload)
+        if change.forge == tangled.FORGE:
+            await self.tangled.settle_unbuilt(change, error)
+
     async def _execute_work(self, queue: WorkQueue, item: WorkItem) -> None:
         try:
             await self._dispatch_work(item)
@@ -661,11 +673,14 @@ class CIService:
                     extra={"work_id": item.id, "kind": item.kind, "error": str(e)},
                 )
                 await queue.finish(item.id, error=str(e))
+                await self._change_settled(item, str(e))
         except Exception as e:
             logger.exception("work item failed", extra={"work_id": item.id})
             await queue.finish(item.id, error=str(e) or type(e).__name__)
+            await self._change_settled(item, str(e) or type(e).__name__)
         else:
             await queue.finish(item.id)
+            await self._change_settled(item, None)
         finally:
             # A deferred same-key item may be claimable now.
             self._work_event.set()
@@ -923,6 +938,9 @@ class CIService:
                 )
                 await cleanup_orphan_log_dirs(self.pool, self.config.state_dir)
                 await WorkQueue(self.pool).cleanup(self.config.retention_days)
+                await tangled_q.cleanup_tangled_builds(
+                    self.pool, days=self.config.retention_days
+                )
                 await self.orchestrator.repos.cleanup()
                 await self.orchestrator.repos.gc()
             except Exception:

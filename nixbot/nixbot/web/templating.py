@@ -121,7 +121,8 @@ def build_path(project: dict[str, Any], number: int) -> str:
 
 def pr_url(project: dict[str, Any], pr_number: int) -> str:
     base = _forge_base(project)
-    if base is None:
+    # Tangled pull numbers are allocated by nixbot, see tangled.py.
+    if base is None or project["forge"] == "tangled":
         return ""
     if project["forge"] == "github":
         return f"{base}/pull/{pr_number}"
@@ -134,7 +135,7 @@ def branch_url(project: dict[str, Any], branch: str) -> str:
     base = _forge_base(project)
     if base is None:
         return ""
-    if project["forge"] == "github":
+    if project["forge"] in ("github", "tangled"):
         return f"{base}/tree/{quote(branch)}"
     if project["forge"] == "gitlab":
         return f"{base}/-/tree/{quote(branch)}"

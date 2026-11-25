@@ -123,6 +123,14 @@ Token-based integration with per-repository webhooks and commit status updates.
 
 See the [GitLab documentation](./docs/GITLAB.md) for setup instructions.
 
+##### Tangled Integration
+
+Builds [Tangled](https://tangled.org) repositories through a
+[tack](https://github.com/mitchellh/tack) spindle, with per-attribute steps and
+logs in the Tangled UI.
+
+See the [Tangled documentation](./docs/TANGLED.md) for setup instructions.
+
 ##### Generic OIDC Authentication
 
 Nixbot supports generic OpenID Connect (OIDC) authentication, allowing you to

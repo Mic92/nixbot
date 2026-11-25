@@ -23,8 +23,8 @@ __all__: collections.abc.Sequence[str] = (
     "rotate_webhook_secret",
     "set_project_enabled",
     "toggle_project_enabled",
+    "upsert_configured_projects",
     "upsert_discovered_projects",
-    "upsert_pull_based_projects",
     "webhook_secret",
     "webhook_secret_by_forge_repo",
 )
@@ -65,7 +65,8 @@ class ProjectForgeIdsRow:
 
 COUNT_DISCOVERED_PROJECTS: typing.Final[str] = """-- name: CountDiscoveredProjects :one
 
-SELECT count(*) AS count FROM projects WHERE forge <> 'pull_based'
+SELECT count(*) AS count FROM projects
+WHERE forge NOT IN ('pull_based', 'tangled')
 """
 
 UPSERT_DISCOVERED_PROJECTS: typing.Final[str] = """-- name: UpsertDiscoveredProjects :exec
@@ -102,24 +103,26 @@ COUNT_ENABLED_PROJECTS: typing.Final[str] = """-- name: CountEnabledProjects :on
 SELECT count(*) AS count FROM projects WHERE enabled
 """
 
-UPSERT_PULL_BASED_PROJECTS: typing.Final[str] = """-- name: UpsertPullBasedProjects :exec
+UPSERT_CONFIGURED_PROJECTS: typing.Final[str] = """-- name: UpsertConfiguredProjects :exec
 INSERT INTO projects
     (forge, forge_repo_id, owner, name, default_branch,
      url, private, enabled)
-SELECT 'pull_based', u.forge_repo_id, u.owner, u.name, u.default_branch,
+SELECT $1::text, u.forge_repo_id, u.owner, u.name, u.default_branch,
        u.url, FALSE, TRUE
-FROM (SELECT unnest($1::text[]) AS forge_repo_id,
-             unnest($2::text[]) AS owner,
-             unnest($3::text[]) AS name,
-             unnest($4::text[]) AS default_branch,
-             unnest($5::text[]) AS url) u
+FROM (SELECT unnest($2::text[]) AS forge_repo_id,
+             unnest($3::text[]) AS owner,
+             unnest($4::text[]) AS name,
+             unnest($5::text[]) AS default_branch,
+             unnest($6::text[]) AS url) u
 ON CONFLICT (forge, forge_repo_id) DO UPDATE SET
+    owner = EXCLUDED.owner,
+    name = EXCLUDED.name,
     default_branch = EXCLUDED.default_branch,
     url = EXCLUDED.url,
     updated_at = now()
-WHERE (projects.default_branch, projects.url)
+WHERE (projects.owner, projects.name, projects.default_branch, projects.url)
       IS DISTINCT FROM
-      (EXCLUDED.default_branch, EXCLUDED.url)
+      (EXCLUDED.owner, EXCLUDED.name, EXCLUDED.default_branch, EXCLUDED.url)
 """
 
 SET_PROJECT_ENABLED: typing.Final[str] = """-- name: SetProjectEnabled :exec
@@ -262,8 +265,8 @@ async def count_enabled_projects(conn: ConnectionLike) -> int | None:
     return row[0]
 
 
-async def upsert_pull_based_projects(conn: ConnectionLike, *, forge_repo_ids: collections.abc.Sequence[str], owners: collections.abc.Sequence[str], names: collections.abc.Sequence[str], default_branches: collections.abc.Sequence[str], urls: collections.abc.Sequence[str]) -> None:
-    await conn.execute(UPSERT_PULL_BASED_PROJECTS, forge_repo_ids, owners, names, default_branches, urls)
+async def upsert_configured_projects(conn: ConnectionLike, *, forge: str, forge_repo_ids: collections.abc.Sequence[str], owners: collections.abc.Sequence[str], names: collections.abc.Sequence[str], default_branches: collections.abc.Sequence[str], urls: collections.abc.Sequence[str]) -> None:
+    await conn.execute(UPSERT_CONFIGURED_PROJECTS, forge, forge_repo_ids, owners, names, default_branches, urls)
 
 
 async def set_project_enabled(conn: ConnectionLike, *, id_: int, enabled: bool) -> None:

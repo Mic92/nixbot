@@ -45,7 +45,8 @@ class RepoStore:
         self.pool = pool
 
     async def is_empty(self) -> bool:
-        """No forge-discovered projects yet. Pull-based rows are ignored:
+        """No forge-discovered projects yet. Statically configured rows
+        (pull_based, tangled) are ignored:
         they come from static config and may be synced before discovery
         runs, which must not suppress the one-shot legacy import."""
         return await q.count_discovered_projects(self.pool) == 0
@@ -88,23 +89,37 @@ class RepoStore:
             )
 
     async def sync_pull_based(self, repos: list[tuple[str, str, str]]) -> None:
-        """Upsert pull-based repositories as (name, url, default_branch).
+        """Upsert pull-based repositories as (name, url, default_branch)."""
+        split = [(name, name.rpartition("/"), url, db) for name, url, db in repos]
+        await self.sync_configured(
+            "pull_based",
+            [
+                (name, parts[0] or "pull_based", parts[2], url, db)
+                for name, parts, url, db in split
+            ],
+        )
+
+    async def sync_configured(
+        self, forge: str, repos: list[tuple[str, str, str, str, str]]
+    ) -> None:
+        """Upsert the repositories a forge lists in the static config as
+        (forge_repo_id, owner, name, url, default_branch).
 
         Listing a repository in the static config is the enablement
         decision, so new rows start enabled. The admin toggle is
         preserved on conflict."""
         if not repos:
             return
-        # Same in-batch dedup as sync_discovered (forge_repo_id = name).
-        repos = list({name: (name, url, db) for name, url, db in repos}.values())
-        split = [(name.rpartition("/"), name, url, db) for name, url, db in repos]
-        await q.upsert_pull_based_projects(
+        # Same in-batch dedup as sync_discovered.
+        repos = list({repo[0]: repo for repo in repos}.values())
+        await q.upsert_configured_projects(
             self.pool,
-            forge_repo_ids=[name for _, name, _, _ in split],
-            owners=[parts[0] or "pull_based" for parts, _, _, _ in split],
-            names=[parts[2] for parts, _, _, _ in split],
-            default_branches=[db for _, _, _, db in split],
-            urls=[url for _, _, url, _ in split],
+            forge=forge,
+            forge_repo_ids=[r[0] for r in repos],
+            owners=[r[1] for r in repos],
+            names=[r[2] for r in repos],
+            urls=[r[3] for r in repos],
+            default_branches=[r[4] for r in repos],
         )
 
     async def prune_missing_disabled(

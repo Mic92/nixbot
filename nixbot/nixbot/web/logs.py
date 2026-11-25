@@ -49,6 +49,8 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Iterable
     from pathlib import Path
 
+    import asyncpg
+
     from ..executor import LogWriter, StructuredCapture  # noqa: TID252
     from .app import WebContext
 
@@ -386,13 +388,44 @@ async def _log_text(
     return data.decode(errors="replace")
 
 
+async def attribute_log_text(
+    pool: asyncpg.Pool,
+    registry: LogRegistry,
+    build_id: int,
+    attr: str,
+    path: Path | None,
+) -> str | None:
+    """The attribute's log text, falling back to the stored eval error
+    (e.g. failed_eval) so every failure status has readable output."""
+    text = await _log_text(registry, {"id": build_id}, attr, path)
+    if text is None:
+        text = await gen.attribute_error(pool, build_id=build_id, attr=attr)
+    return text
+
+
+async def effect_run_text(
+    registry: LogRegistry, state_dir: Path, run_id: int
+) -> str | None:
+    """Decoded log of an effect run: live writer snapshot while it
+    runs, otherwise the on-disk file. None when no log exists."""
+    writer = registry.get_effect(run_id)
+    if writer is not None:
+        data = await writer.snapshot()
+    else:
+        path = effect_run_log_path(state_dir, run_id)
+        if not await asyncio.to_thread(path.exists):
+            return None
+        data = await asyncio.to_thread(read_log, path)
+    return data.decode(errors="replace")
+
+
 def _strip_tail(text: str, tail: int) -> str:
     """ANSI-stripped last `tail` lines; CPU-bound on multi-MB logs, so
     callers run it via asyncio.to_thread."""
     return "\n".join(strip_ansi(text).splitlines()[-tail:])
 
 
-def _plain(text: str, tail: int | None, *, ansi: bool) -> str:
+def plain_log_text(text: str, tail: int | None, *, ansi: bool) -> str:
     """Tail/ANSI post-processing for the plain-text API responses.
     CPU-bound on multi-MB logs, so callers run it via asyncio.to_thread."""
     if not ansi:
@@ -533,7 +566,7 @@ class _LogRoutes:
         if text is None:
             raise HTTPException(status_code=404)
         return PlainTextResponse(
-            await asyncio.to_thread(_plain, text, tail, ansi=False)
+            await asyncio.to_thread(plain_log_text, text, tail, ansi=False)
         )
 
     async def log_raw_text_legacy(  # noqa: PLR0913
@@ -562,17 +595,7 @@ class _LogRoutes:
         return effect_run_log_path(self.ctx.state_dir, run_id)
 
     async def _effect_run_text(self, run_id: int) -> str | None:
-        """Decoded log of an effect run: live writer snapshot while it
-        runs, otherwise the on-disk file. None when no log exists."""
-        writer = self.registry.get_effect(run_id)
-        if writer is not None:
-            data = await writer.snapshot()
-        else:
-            path = self._effect_log_path(run_id)
-            if not await asyncio.to_thread(path.exists):
-                return None
-            data = await asyncio.to_thread(read_log, path)
-        return data.decode(errors="replace")
+        return await effect_run_text(self.registry, self.ctx.state_dir, run_id)
 
     async def _run_or_404(
         self, request: Request, forge: str, owner: str, name: str, run_id: int
@@ -600,7 +623,7 @@ class _LogRoutes:
         if text is None:
             raise HTTPException(status_code=404)
         return PlainTextResponse(
-            await asyncio.to_thread(_plain, text, tail, ansi=False)
+            await asyncio.to_thread(plain_log_text, text, tail, ansi=False)
         )
 
     async def api_effect_run(
@@ -626,7 +649,9 @@ class _LogRoutes:
         text = await self._effect_run_text(run_id)
         if text is None:
             raise HTTPException(status_code=404)
-        return PlainTextResponse(await asyncio.to_thread(_plain, text, tail, ansi=ansi))
+        return PlainTextResponse(
+            await asyncio.to_thread(plain_log_text, text, tail, ansi=ansi)
+        )
 
     async def api_effect_run_stream(  # noqa: PLR0913
         self,
@@ -772,12 +797,9 @@ class _LogRoutes:
     async def _attr_text(self, build: dict, attr: str, path: Path | None) -> str | None:
         """The attribute's log text, falling back to the stored eval error
         (e.g. failed_eval) so every failure status has readable output."""
-        text = await _log_text(self.registry, build, attr, path)
-        if text is None:
-            text = await gen.attribute_error(
-                self.ctx.pool, build_id=build["id"], attr=attr
-            )
-        return text
+        return await attribute_log_text(
+            self.ctx.pool, self.registry, build["id"], attr, path
+        )
 
     async def api_log_toc(  # noqa: PLR0913
         self,
@@ -862,7 +884,9 @@ class _LogRoutes:
             text = await self._attr_text(build, attr, path)
             if text is None:
                 raise HTTPException(status_code=404)
-        return PlainTextResponse(await asyncio.to_thread(_plain, text, tail, ansi=ansi))
+        return PlainTextResponse(
+            await asyncio.to_thread(plain_log_text, text, tail, ansi=ansi)
+        )
 
     async def api_log_stream(  # noqa: PLR0913
         self,

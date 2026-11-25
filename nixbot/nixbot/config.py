@@ -145,6 +145,45 @@ class PullBasedConfig(BaseModel):
     poll_spread: int | None = None
 
 
+class TangledRepository(BaseModel):
+    # Fetchable by git and, for links, a web page: the tangled.org URL
+    # of the repository is both.
+    url: str
+    default_branch: str = "main"
+
+
+class TangledConfig(BaseModel):
+    """Tangled repositories, built on request of a tack spindle that
+    treats nixbot as its Buildkite (docs/TANGLED.md)."""
+
+    # Organization slug tack addresses (TACK_BUILDKITE_ORG).
+    organization: str = "nixbot"
+    # Tack's TACK_BUILDKITE_TOKEN.
+    api_token_file: Path
+    # Tack's /webhooks/buildkite endpoint.
+    webhook_url: str
+    # Tack's TACK_BUILDKITE_WEBHOOK_SECRET (signature mode).
+    webhook_secret_file: Path
+    # Keyed by the pipeline slug the Tangled workflow names.
+    repositories: dict[str, TangledRepository] = {}
+
+    @model_validator(mode="after")
+    def _slugs_are_path_segments(self) -> TangledConfig:
+        for slug in self.repositories:
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", slug):
+                msg = f"tangled repository key {slug!r} is not a valid pipeline slug"
+                raise ValueError(msg)
+        return self
+
+    @property
+    def api_token(self) -> str:
+        return read_secret_file(self.api_token_file)
+
+    @property
+    def webhook_secret(self) -> str:
+        return read_secret_file(self.webhook_secret_file)
+
+
 class GitHubConfig(BaseModel):
     """GitHub App configuration (App auth only. Token mode was dropped)."""
 
@@ -397,6 +436,7 @@ class Config(BaseModel):
     gitlab: GitlabConfig | None = None
     github: GitHubConfig | None = None
     pull_based: PullBasedConfig | None = None
+    tangled: TangledConfig | None = None
     oidc: OIDCConfig | None = None
     workload_identity: WorkloadIdentityConfig = Field(
         default_factory=WorkloadIdentityConfig

@@ -129,6 +129,22 @@ let
             );
             poll_spread = cfg.pullBased.pollSpread;
           };
+      tangled =
+        if !cfg.tangled.enable then
+          null
+        else
+          {
+            organization = cfg.tangled.organization;
+            api_token_file = "tangled-api-token";
+            webhook_url = cfg.tangled.webhookUrl;
+            webhook_secret_file = "tangled-webhook-secret";
+            repositories = lib.flip lib.mapAttrs cfg.tangled.repositories (
+              _: repo: {
+                inherit (repo) url;
+                default_branch = repo.defaultBranch;
+              }
+            );
+          };
       oidc =
         if !cfg.oidc.enable then
           null
@@ -864,6 +880,54 @@ in
       };
     };
 
+    tangled = {
+      enable = lib.mkEnableOption "building Tangled repositories through a tack spindle, see docs/TANGLED.md";
+
+      organization = lib.mkOption {
+        type = lib.types.str;
+        default = "nixbot";
+        description = "Buildkite organization slug tack is configured with (TACK_BUILDKITE_ORG).";
+      };
+
+      apiTokenFile = lib.mkOption {
+        type = lib.types.path;
+        description = "File with the API token tack authenticates with (TACK_BUILDKITE_TOKEN).";
+      };
+
+      webhookUrl = lib.mkOption {
+        type = lib.types.str;
+        example = "https://tack.example.org/webhooks/buildkite";
+        description = "Tack's Buildkite webhook endpoint.";
+      };
+
+      webhookSecretFile = lib.mkOption {
+        type = lib.types.path;
+        description = "File with the secret webhooks are signed with (TACK_BUILDKITE_WEBHOOK_SECRET, with TACK_BUILDKITE_WEBHOOK_MODE=signature).";
+      };
+
+      repositories = lib.mkOption {
+        default = { };
+        description = "Repositories to build, keyed by the pipeline slug their workflows name.";
+        type = lib.types.attrsOf (
+          lib.types.submodule {
+            options = {
+              url = lib.mkOption {
+                type = lib.types.str;
+                example = "https://knot.example.org/did:plc:abc/widget";
+                description = "The repository's clone URL on its knot.";
+              };
+
+              defaultBranch = lib.mkOption {
+                type = lib.types.str;
+                default = "main";
+                description = "The repository's default branch.";
+              };
+            };
+          }
+        );
+      };
+    };
+
     postBuildSteps = lib.mkOption {
       default = [ ];
       description = "Steps to execute after every successful build.";
@@ -1230,6 +1294,10 @@ in
             cfg.gitea.enable && cfg.gitea.sshPrivateKeyFile != null
           ) "gitea-ssh-key:${cfg.gitea.sshPrivateKeyFile}"
           ++ lib.optional cfg.gitlab.enable "gitlab-token:${cfg.gitlab.tokenFile}"
+          ++ lib.optionals cfg.tangled.enable [
+            "tangled-api-token:${cfg.tangled.apiTokenFile}"
+            "tangled-webhook-secret:${cfg.tangled.webhookSecretFile}"
+          ]
           ++ lib.optional (
             cfg.gitlab.enable && cfg.gitlab.oauthSecretFile != null
           ) "gitlab-oauth-secret:${cfg.gitlab.oauthSecretFile}"
