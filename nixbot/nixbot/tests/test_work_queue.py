@@ -138,6 +138,36 @@ async def test_claim_builds_stacked_prs_bottom_up(pool: asyncpg.Pool) -> None:
     assert list(await _claim_prs(queue)) == [3]
 
 
+async def test_claim_holds_a_pr_on_a_higher_numbered_base(pool: asyncpg.Pool) -> None:
+    """A PR retargeted onto a newer PR's branch waits for it all the
+    same: which is below is the base branch, not the number."""
+    await insert_project(pool, forge_repo_id="stack")
+    queue = WorkQueue(pool)
+    await _enqueue_pr(queue, 9, "b10", "b9", "c9")
+    await _enqueue_pr(queue, 10, "main", "b10", "c10")
+
+    bottom = await _claim_prs(queue)
+    assert list(bottom) == [10]
+    await queue.finish(bottom[10])
+    assert list(await _claim_prs(queue)) == [9]
+
+
+async def test_claim_never_holds_every_pr_of_a_cycle(pool: asyncpg.Pool) -> None:
+    """Three PRs based on each other round a cycle, a higher-numbered
+    base among them: those whose base is below them in the cycle go;
+    only the one the lowest number holds waits."""
+    await insert_project(pool, forge_repo_id="stack")
+    queue = WorkQueue(pool)
+    await _enqueue_pr(queue, 21, "b22", "b21", "c21")
+    await _enqueue_pr(queue, 22, "b23", "b22", "c22")
+    await _enqueue_pr(queue, 23, "b21", "b23", "c23")
+
+    claimed = await _claim_prs(queue)
+    assert list(claimed) == [21, 22]
+    await queue.finish(claimed[21])
+    assert list(await _claim_prs(queue)) == [23]
+
+
 async def test_claim_holds_only_on_open_pr_branches(pool: asyncpg.Pool) -> None:
     """No hold on a fork's head, on the default branch (a main to
     release PR), or on a base PR closed meanwhile. In a cycle the lower
