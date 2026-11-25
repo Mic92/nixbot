@@ -19,6 +19,9 @@ Tangled UI  ◀──status──── tack ◀──webhook──────�
   documentation.
 - tack must support `TACK_BUILDKITE_API_URL`.
 - The repositories must be fetchable by nixbot without credentials.
+- The repositories must use SHA-1 object names. Nix cannot open SHA-256
+  repositories, which new knots create by default; set
+  `git.object_format = "sha1"` on a self-hosted knot.
 
 ## Step 1: Configure nixbot
 
