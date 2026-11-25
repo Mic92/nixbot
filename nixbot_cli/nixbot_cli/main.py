@@ -157,6 +157,31 @@ def resolve_build(client: NixbotClient, repo: RepoRef, number: int | None) -> in
     return int(build["number"])
 
 
+def wait_for_build(
+    client: NixbotClient,
+    repo: RepoRef,
+    *,
+    pr_number: int | None = None,
+    commit: str | None = None,
+) -> int:
+    """Newest build of a PR or commit. nixbot creates it only once the
+    forge's webhook arrives, so until then wait on the project's events
+    rather than fail: a script can watch a PR it has just opened."""
+    what = f"PR #{pr_number}" if pr_number is not None else f"commit {commit}"
+    events: Iterator[dict] | None = None
+    while True:
+        builds = client.builds(repo, pr_number=pr_number, commit=commit)["items"]
+        if builds:
+            return int(builds[0]["number"])
+        if events is None:
+            print(f"nbo: waiting for a build of {what} in {repo}", file=sys.stderr)
+            events = client.events(project=client.repo(repo)["id"])
+        # Every build insert notifies; keepalives refresh too. A closed
+        # stream reconnects on the next round.
+        if next(events, None) is None:
+            events = None
+
+
 # --- commands ----------------------------------------------------------
 
 
@@ -276,7 +301,10 @@ def print_failures(
 
 def cmd_build_watch(client: NixbotClient, args: argparse.Namespace) -> int:
     repo = resolve_repo(client, args.repo)
-    number = resolve_build(client, repo, args.number)
+    if args.pr is not None or args.commit is not None:
+        number = wait_for_build(client, repo, pr_number=args.pr, commit=args.commit)
+    else:
+        number = resolve_build(client, repo, args.number)
     if args.attr:
         return watch_attrs(client, repo, number, args.attr)
     if sys.stdout.isatty():
@@ -730,11 +758,20 @@ def build_parser() -> argparse.ArgumentParser:
   nbo build watch 412               build #412 of the repo in the CWD
   nbo build watch 412 -R github/Mic92/dotfiles   without a local checkout
   nbo build watch 412 --attr treefmt --attr nixos-eve   wait only for these, exit 1 if any fails
+  nbo build watch --pr 1275         PR #1275's newest build, waiting until there is one
+  nbo build watch --commit c0ffee   that commit's build, waiting until there is one
 
 On a terminal this shows finished attributes above a live view of the
 running ones. Piped or in CI it prints one line per finished attribute.""",
     )
-    b_watch.add_argument("number", type=int, nargs="?")
+    which = b_watch.add_mutually_exclusive_group()
+    which.add_argument("number", type=int, nargs="?")
+    which.add_argument(
+        "--pr", type=int, help="the PR's newest build; waits for one to appear"
+    )
+    which.add_argument(
+        "--commit", help="the commit's build (SHA prefix); waits for one to appear"
+    )
     b_watch.add_argument(
         "--attr",
         action="append",
