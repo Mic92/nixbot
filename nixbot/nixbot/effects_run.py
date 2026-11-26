@@ -84,10 +84,13 @@ async def maybe_run_effects(  # noqa: PLR0913
         pr_number=event.pr_number,
         allowed=allowed,
     )
-    if allowed and not await _claim_effects(o, build, only):
+    if allowed and build.effects_started:
         # Deploys are not idempotent, so a claimed build never re-runs.
         logger.info("effects not run: already claimed for this build", extra=ctx)
         return
+    if allowed and only is None:
+        # Rows a gated pass left (skipped effects, its checks) go.
+        await o.drop_effects(build.id_, None)
     effects = await discover_effects(o, event, build, worktree_path)
     if only is None:
         # Dependencies of onEvent effects and of onPush effects that do
@@ -104,26 +107,13 @@ async def maybe_run_effects(  # noqa: PLR0913
         "effects discovered" if allowed else "effects discovered but gated",
         extra={**ctx, "effects": sorted(effects)},
     )
-    # Also drops rows a rerun selected that the flake no longer has.
-    await q.drop_removed_effects(o.pool, build_id=build.id_, names=list(effects))
+    discovered = list(effects)
     if only is not None:
         effects = {n: m for n, m in effects.items() if n in only}
-    await _record_effects(
-        o, event, build, effects, allowed=allowed, force_run=force_run
-    )
-
-
-async def _claim_effects(
-    o: Orchestrator, build: BuildRecord, only: list[str] | None
-) -> bool:
-    """Set the started-flag once per build: deploys are not idempotent,
-    crash recovery must not re-run them."""
-    if build.effects_started:
-        return False
-    if only is None:
-        # Rows a gated pass left (skipped effects, its checks) go.
-        await o.drop_effects(build.id_, None)
-    return await builds_q.mark_effects_started(o.pool, id_=build.id_) is not None
+    if not await _record_effects(
+        o, event, build, effects, discovered, allowed=allowed, force_run=force_run
+    ):
+        logger.info("effects not run: already claimed for this build", extra=ctx)
 
 
 async def _record_effects(  # noqa: PLR0913
@@ -131,35 +121,48 @@ async def _record_effects(  # noqa: PLR0913
     event: ChangeEvent,
     build: BuildRecord,
     effects: dict[str, EffectMeta],
+    discovered: list[str],
     *,
     allowed: bool,
     force_run: bool = False,
-) -> None:
-    """Pending rows plus queue items, or skipped rows on a gated ref so
-    the page lists what a merge would run."""
-    if not effects:
-        return
+) -> bool:
+    """Claim the build's effects and queue them, or record skipped rows
+    on a gated ref so the page lists what a merge would run. False when
+    another pass claimed the build first.
+
+    The started-flag, the pending rows and their queue items commit
+    together: deploys are not idempotent, so crash recovery never
+    re-runs a claimed build, and a flag without queued rows would lose
+    its effects for good."""
     names = list(effects)
-    await builds_q.insert_build_effects(
-        o.pool,
-        build_id=build.id_,
-        kind="push",
-        status="pending" if allowed else "skipped",
-        names=names,
-        deps=[json.dumps(list(effects[n].after)) for n in names],
-        changed=[_changed_json(effects[n]) for n in names],
-        force_run=force_run,
-    )
-    if not allowed:
-        return
-    await o.reporter.effects_started(event, build, len(names))
-    await wq.enqueue_effect_items(
-        o.pool,
-        build_id=build.id_,
-        kind="push",
-        names=names,
-        dedup_keys=[_dedup_key(build, n, effects[n]) for n in names],
-    )
+    async with o.pool.acquire() as conn, conn.transaction():
+        if allowed and await builds_q.mark_effects_started(conn, id_=build.id_) is None:
+            return False
+        # Also drops rows a rerun selected that the flake no longer has.
+        await q.drop_removed_effects(conn, build_id=build.id_, names=discovered)
+        if not names:
+            return True
+        await builds_q.insert_build_effects(
+            conn,
+            build_id=build.id_,
+            kind="push",
+            status="pending" if allowed else "skipped",
+            names=names,
+            deps=[json.dumps(list(effects[n].after)) for n in names],
+            changed=[_changed_json(effects[n]) for n in names],
+            force_run=force_run,
+        )
+        if allowed:
+            await wq.enqueue_effect_items(
+                conn,
+                build_id=build.id_,
+                kind="push",
+                names=names,
+                dedup_keys=[_dedup_key(build, n, effects[n]) for n in names],
+            )
+    if allowed and names:
+        await o.reporter.effects_started(event, build, len(names))
+    return True
 
 
 def _changed_json(meta: EffectMeta) -> str:
