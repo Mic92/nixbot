@@ -139,6 +139,23 @@ UPDATE builds SET
 WHERE id = sqlc.arg(id)::bigint
   AND (effects_commit_sha IS NULL OR sqlc.arg(allowed)::boolean);
 
+-- name: EffectsSuperseded :one
+-- Whether another build's onPush effects started on this branch after
+-- this build's did. A commit that reuses the build (a revert to a tree
+-- that was deployed before) then has to run them again: the targets
+-- run the newer build's result.
+SELECT EXISTS (
+    SELECT 1 FROM effect_runs r JOIN builds o ON o.id = r.build_id
+    WHERE r.project_id = b.project_id AND r.kind = 'push'
+      AND r.build_id <> b.id AND r.status <> 'skipped'
+      AND o.effects_branch = sqlc.arg(branch)::text
+      AND o.effects_pr_number IS NULL
+      AND r.started_at > (
+          SELECT max(m.started_at) FROM effect_runs m
+          WHERE m.build_id = b.id AND m.kind = 'push' AND m.status <> 'skipped')
+) AS superseded
+FROM builds b WHERE b.id = sqlc.arg(id)::bigint;
+
 -- name: MarkEffectsStarted :one
 UPDATE builds SET effects_started = TRUE
 WHERE id = sqlc.arg(id)::bigint AND effects_started = FALSE RETURNING id;
