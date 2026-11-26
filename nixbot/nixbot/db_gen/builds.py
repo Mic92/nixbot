@@ -29,6 +29,7 @@ __all__: collections.abc.Sequence[str] = (
     "effect_eval_errors",
     "effects_for_build",
     "effects_summary",
+    "effects_superseded",
     "eval_job_rows",
     "find_completed_eval",
     "find_reusable_build",
@@ -245,6 +246,20 @@ UPDATE builds SET
     effects_pr_number = $3::bigint
 WHERE id = $4::bigint
   AND (effects_commit_sha IS NULL OR $5::boolean)
+"""
+
+EFFECTS_SUPERSEDED: typing.Final[str] = """-- name: EffectsSuperseded :one
+SELECT EXISTS (
+    SELECT 1 FROM effect_runs r JOIN builds o ON o.id = r.build_id
+    WHERE r.project_id = b.project_id AND r.kind = 'push'
+      AND r.build_id <> b.id AND r.status <> 'skipped'
+      AND o.effects_branch = $1::text
+      AND o.effects_pr_number IS NULL
+      AND r.started_at > (
+          SELECT max(m.started_at) FROM effect_runs m
+          WHERE m.build_id = b.id AND m.kind = 'push' AND m.status <> 'skipped')
+) AS superseded
+FROM builds b WHERE b.id = $2::bigint
 """
 
 MARK_EFFECTS_STARTED: typing.Final[str] = """-- name: MarkEffectsStarted :one
@@ -742,6 +757,13 @@ async def get_build(conn: ConnectionLike, *, id_: int) -> models.Build | None:
 
 async def record_effects_ref(conn: ConnectionLike, *, commit_sha: str, branch: str, pr_number: int | None, id_: int, allowed: bool) -> None:
     await conn.execute(RECORD_EFFECTS_REF, commit_sha, branch, pr_number, id_, allowed)
+
+
+async def effects_superseded(conn: ConnectionLike, *, branch: str, id_: int) -> bool | None:
+    row = await conn.fetchrow(EFFECTS_SUPERSEDED, branch, id_)
+    if row is None:
+        return None
+    return row[0]
 
 
 async def mark_effects_started(conn: ConnectionLike, *, id_: int) -> int | None:

@@ -5,6 +5,7 @@ still run."""
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING
 
@@ -66,6 +67,8 @@ async def _effects(  # noqa: PLR0913
     reused: bool,
 ) -> None:
     if reused and build.effects_started:
+        if await _redeploy(o, event, build, worktree_path, credentials):
+            return
         # Effects already ran for this tree; only copy their statuses
         # onto the commit that reused the build.
         from .build_reuse import replay_effect_statuses  # noqa: PLC0415
@@ -77,6 +80,37 @@ async def _effects(  # noqa: PLR0913
         await replay_effect_statuses(o, event, build)
         return
     await o.maybe_run_effects(event, build, worktree_path, credentials)
+
+
+async def _redeploy(
+    o: Orchestrator,
+    event: ChangeEvent,
+    build: BuildRecord,
+    worktree_path: Path,
+    credentials: FetchCredentials | None,
+) -> bool:
+    """Run a reused build's effects again when a later build's effects
+    ran on this branch since: a revert back to a deployed tree must
+    deploy it again, the targets run the newer build. Replaces the old
+    runs like an effects restart, now reported on the reusing commit."""
+    if event.pr_number is not None or not await q.effects_superseded(
+        o.pool, id_=build.id_, branch=event.branch
+    ):
+        return False
+    if build.id_ in o.cancel_events:
+        # A run of this build is in flight and deploys this tree anyway.
+        return False
+    logger.info(
+        "reused build superseded on its branch: running effects again",
+        extra={"build_id": build.id_, "sha": event.commit_sha},
+    )
+    o.cancel_events[build.id_] = asyncio.Event()
+    try:
+        await o.drop_effects(build.id_, None)
+        await o.maybe_run_effects(event, build, worktree_path, credentials)
+    finally:
+        o.release_run(build.id_)
+    return True
 
 
 async def _deliveries(

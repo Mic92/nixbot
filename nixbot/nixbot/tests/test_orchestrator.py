@@ -2893,3 +2893,104 @@ async def test_reuse_with_missing_output_still_post_processes(
     assert await pool.fetchval(
         "SELECT count(*) FROM work_queue WHERE kind = 'refresh-schedules'"
     )
+
+
+async def test_revert_to_deployed_tree_redeploys(
+    pool: asyncpg.Pool,
+    make_env: EnvFactory,
+    upstream: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """main: A (deployed), B (deployed), revert B (tree == A). The revert
+    reuses build A by tree hash, but the hosts run B: A's effects must run
+    again for the revert, reported on the revert's SHA."""
+    runs: list[str] = []
+
+    async def record(ctx: object, name: str, log_write: object = None) -> bool:
+        runs.append(name)
+        return True
+
+    patch_effects(monkeypatch, run_effect=record)
+    add_commit(upstream, "rv-a")
+    orchestrator, reporter, project = await make_env(
+        FakeEvalRunner([mk_job("a")]), FakeExecutor(), name="rv-a"
+    )
+
+    async def push() -> BuildRecord:
+        build = await orchestrator.handle_change_event(
+            ChangeEvent(
+                repo=project,
+                branch="main",
+                commit_sha=git(upstream, "rev-parse", "HEAD"),
+            )
+        )
+        assert build is not None
+        await drain_effect_items(orchestrator, project, pool)
+        return build
+
+    build_a = await push()
+    add_commit(upstream, "rv-b")
+    build_b = await push()
+    assert build_b.id_ != build_a.id_
+    assert runs == ["deploy", "deploy"]
+
+    git(upstream, "revert", "--no-edit", "HEAD")
+    revert_sha = git(upstream, "rev-parse", "HEAD")
+    reporter.events.clear()
+    reverted = await push()
+    assert reverted.id_ == build_a.id_
+    assert runs == ["deploy", "deploy", "deploy"]
+    assert ("effect-started", build_a.id_, "deploy", revert_sha) in reporter.events
+    assert await effect_statuses(pool, build_a.id_) == {"deploy": "succeeded"}
+
+    # Nothing deployed since: a further commit with the same tree only
+    # gets the statuses replayed, as before.
+    git(upstream, "commit", "--allow-empty", "-m", "rv-empty")
+    again = await push()
+    assert again.id_ == build_a.id_
+    assert runs == ["deploy", "deploy", "deploy"]
+
+
+async def test_reuse_from_pr_does_not_redeploy_superseded_build(
+    pool: asyncpg.Pool,
+    make_env: EnvFactory,
+    upstream: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only a push to the branch that deployed may redeploy a superseded
+    build: a pull request whose merge result matches an old tree is
+    gated and must leave its deploy history alone."""
+    runs: list[str] = []
+
+    async def record(ctx: object, name: str, log_write: object = None) -> bool:
+        runs.append(name)
+        return True
+
+    patch_effects(monkeypatch, run_effect=record)
+    add_commit(upstream, "rvpr-a")
+    sha_a = git(upstream, "rev-parse", "HEAD")
+    orchestrator, _, project = await make_env(
+        FakeEvalRunner([mk_job("a")]), FakeExecutor(), name="rvpr-a"
+    )
+    build_a = await orchestrator.handle_change_event(
+        ChangeEvent(repo=project, branch="main", commit_sha=sha_a)
+    )
+    assert build_a is not None
+    await drain_effect_items(orchestrator, project, pool)
+    add_commit(upstream, "rvpr-b")
+    await orchestrator.handle_change_event(
+        ChangeEvent(
+            repo=project, branch="main", commit_sha=git(upstream, "rev-parse", "HEAD")
+        )
+    )
+    await drain_effect_items(orchestrator, project, pool)
+    assert runs == ["deploy", "deploy"]
+
+    reused = await orchestrator.handle_change_event(
+        ChangeEvent(repo=project, branch="feature", commit_sha=sha_a, pr_number=7)
+    )
+    assert reused is not None
+    assert reused.id_ == build_a.id_
+    await drain_effect_items(orchestrator, project, pool)
+    assert runs == ["deploy", "deploy"]
+    assert await effect_statuses(pool, build_a.id_) == {"deploy": "succeeded"}
