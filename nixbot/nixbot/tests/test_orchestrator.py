@@ -2893,3 +2893,73 @@ async def test_reuse_with_missing_output_still_post_processes(
     assert await pool.fetchval(
         "SELECT count(*) FROM work_queue WHERE kind = 'refresh-schedules'"
     )
+
+
+class _Crash(BaseException):
+    """The process dying: no `except Exception` on the way catches it."""
+
+
+@pytest.mark.parametrize("crash_in", ["discovery", "effects_started_report"])
+async def test_crash_while_starting_effects_runs_them_after_restart(
+    pool: asyncpg.Pool,
+    make_env: EnvFactory,
+    upstream: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    crash_in: str,
+) -> None:
+    """A restart between claiming a build's effects and queueing them
+    must not lose the deploy: the requeued change item runs it, once."""
+    runs: list[str] = []
+
+    async def record(ctx: object, name: str, log_write: object = None) -> bool:
+        runs.append(name)
+        return True
+
+    fake = patch_effects(monkeypatch, run_effect=record)
+    add_commit(upstream, f"crash-{crash_in}")
+    orchestrator, reporter, project = await make_env(
+        FakeEvalRunner([mk_job("a")]), FakeExecutor(), name=f"crash-{crash_in}"
+    )
+    crashed = False
+
+    def crash_once() -> None:
+        nonlocal crashed
+        if not crashed:
+            crashed = True
+            raise _Crash
+
+    if crash_in == "discovery":
+        list_effects = fake.list_effects
+
+        async def crashing_list(ctx: object) -> dict[str, EffectMeta]:
+            crash_once()
+            return await list_effects(ctx)
+
+        monkeypatch.setattr(fake, "list_effects", crashing_list)
+    else:
+        effects_started = reporter.effects_started
+
+        async def crashing_report(
+            event: ChangeEvent, build: BuildRecord, total: int
+        ) -> None:
+            await effects_started(event, build, total)
+            crash_once()
+
+        monkeypatch.setattr(reporter, "effects_started", crashing_report)
+
+    event = ChangeEvent(
+        repo=project, branch="main", commit_sha=git(upstream, "rev-parse", "HEAD")
+    )
+    with pytest.raises(_Crash):
+        await orchestrator.handle_change_event(event)
+    assert crashed
+
+    # Restart: settle what the dead process held, then the requeued
+    # change item handles the same push again.
+    await fail_interrupted_effects(pool, datetime.now(UTC))
+    build = await orchestrator.handle_change_event(event)
+    assert build is not None
+    await drain_effect_items(orchestrator, project, pool)
+    await drain_effect_items(orchestrator, project, pool)
+    assert runs == ["deploy"]
+    assert await effect_statuses(pool, build.id_) == {"deploy": "succeeded"}
